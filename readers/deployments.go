@@ -31,7 +31,7 @@ FROM deployments AS d FINAL
 WHERE d.org_id = {org_id:String} AND concat(toString(d.repo_id), ':', d.deployment_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("coalesce(d.started_at, d.deployed_at)"), DefaultRowLimit)
 
 	var rows []DeploymentStatusRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadDeploymentStatus", statement, orgID, ids, func(row RowScanner) error {
 		var r DeploymentStatusRow
 		if err := row.Scan(&r.DeploymentID, &r.Status, &r.Environment, &r.RepoID); err != nil {
 			return err
@@ -82,7 +82,7 @@ FROM (
 WHERE rn = 1`, DefaultRowLimit)
 
 	var rows []DeployMetricsDailyRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadDeployMetricsDaily", statement, orgID, ids, func(row RowScanner) error {
 		var repoID, day string
 		var deploymentsCount, failedDeploymentsCount int64
 		var hasDeployTime, hasLeadTime uint8

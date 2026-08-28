@@ -39,33 +39,67 @@ type QueryClient interface {
 // ErrQueryClientRequired is returned by QueryOrgScoped when client is nil.
 var ErrQueryClientRequired = errors.New("readers: clickhouse query client is required")
 
-// QueryOrgScoped runs statement scoped to orgID and ids (bound as the
+// QueryOrgScoped runs statement scoped to orgID and ids, exactly like
+// QueryOrgScopedNamed, but reports through instrumentation with a generic
+// "unattributed" reader label instead of a specific one.
+//
+// This signature predates this package's instrumentation hook and is kept
+// unchanged (codex review: an exported function's signature is a public
+// contract package consumers pin tagged versions against -- Go has no
+// overload or default parameter, so widening it in place would break any
+// external caller on upgrade). Every reader in this package itself now
+// calls QueryOrgScopedNamed directly instead, since each already knows its
+// own name; QueryOrgScoped remains for a caller (in or out of this module)
+// that has no natural reader name to attribute a call to.
+func QueryOrgScoped(ctx context.Context, client QueryClient, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) error {
+	return QueryOrgScopedNamed(ctx, client, "unattributed", statement, orgID, ids, scan, extra...)
+}
+
+// QueryOrgScopedNamed runs statement scoped to orgID and ids (bound as the
 // {org_id:String} and {ids:Array(String)} parameters every reader in this
 // package expects its statement to reference), invoking scan once per
 // returned row. extra carries any additional bound parameters a specific
 // reader's statement needs (e.g. a TimeBound's Bindings()). It never adds
 // its own timeout; ctx is propagated straight through to client.
 //
+// reader identifies the calling domain reader -- by convention, its
+// exported Go function name (e.g. "ReadRunStatus") -- for instrumentation
+// attribution; it has no effect on the query itself.
+//
+// Every call is instrumented (span, query counter, error counter, latency
+// histogram) through the Instrumentation wired into ctx via
+// ContextWithInstrumentation, or a no-op if none was wired in -- see
+// instrumentation.go. This is the single choke point where that
+// instrumentation is applied; individual readers do not instrument
+// themselves.
+//
 // Mirrors acr devhealthfacts's clickhouseFacts.query exactly, minus the
 // Fact-specific pieces (readFailure classification stays with the caller).
-func QueryOrgScoped(ctx context.Context, client QueryClient, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) error {
+func QueryOrgScopedNamed(ctx context.Context, client QueryClient, reader, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) (err error) {
+	ctx, finish := instrumentationFromContext(ctx).StartQuery(ctx, reader, true)
+	defer func() { finish(err) }()
+
 	if client == nil {
-		return ErrQueryClientRequired
+		err = ErrQueryClientRequired
+		return err
 	}
 	bindings := make([]Binding, 0, 2+len(extra))
 	bindings = append(bindings, Binding{Name: "org_id", Value: orgID}, Binding{Name: "ids", Value: ids})
 	bindings = append(bindings, extra...)
-	rows, err := client.Query(ctx, statement, bindings)
-	if err != nil {
+	rows, qErr := client.Query(ctx, statement, bindings)
+	if qErr != nil {
+		err = qErr
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		if err := scan(rows); err != nil {
+		if sErr := scan(rows); sErr != nil {
+			err = sErr
 			return err
 		}
 	}
-	return rows.Err()
+	err = rows.Err()
+	return err
 }
 
 // DefaultRowLimit is the anti-fanout row bound most readers in this

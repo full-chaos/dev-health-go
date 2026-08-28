@@ -47,7 +47,7 @@ FROM git_pull_requests AS p FINAL
 WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}`+timeBound.ExistencePredicate("p.created_at"), DefaultRowLimit)
 
 	var rows []PullRequestStateRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadPullRequestState", statement, orgID, ids, func(row RowScanner) error {
 		var r PullRequestStateRow
 		if scanErr := row.Scan(&r.RepoID, &r.Number, &r.State); scanErr != nil {
 			return scanErr
@@ -80,7 +80,7 @@ FROM git_pull_request_reviews AS r FINAL
 WHERE r.org_id = {org_id:String} AND concat(toString(r.repo_id), ':', r.review_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("r.submitted_at"), DefaultRowLimit)
 
 	var rows []PullRequestReviewRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadPullRequestReviews", statement, orgID, ids, func(row RowScanner) error {
 		var r PullRequestReviewRow
 		if scanErr := row.Scan(&r.ReviewID, &r.State, &r.RepoID); scanErr != nil {
 			return scanErr

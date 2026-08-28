@@ -48,7 +48,7 @@ FROM (
 )
 WHERE rn = 1`, DefaultRowLimit)
 	var rows []InvestmentDailyRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadTeamInvestment", statement, orgID, ids, func(row RowScanner) error {
 		var r InvestmentDailyRow
 		if err := row.Scan(&r.TeamID, &r.InvestmentArea, &r.ProjectStream, &r.Day, &r.DeliveryUnits, &r.WorkItemsCompleted, &r.PRsMerged, &r.ChurnLOC, &r.CycleP50Hours); err != nil {
 			return err
@@ -108,7 +108,7 @@ INNER JOIN (
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
 ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`, DefaultRowLimit)
 	var rows []InvestmentProjectRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadProjectInvestment", statement, orgID, ids, func(row RowScanner) error {
 		var r InvestmentProjectRow
 		if err := row.Scan(&r.ProjectSubjectKey, &r.TeamID, &r.TeamName, &r.InvestmentArea, &r.ProjectStream, &r.Day, &r.DeliveryUnits, &r.WorkItemsCompleted, &r.PRsMerged, &r.ChurnLOC, &r.CycleP50Hours); err != nil {
 			return err

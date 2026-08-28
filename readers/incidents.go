@@ -51,7 +51,7 @@ FROM operational_incidents AS i FINAL
 WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_deleted = 0`+timeBound.ExistencePredicate("i.started_at"), DefaultRowLimit)
 
 	var rows []IncidentRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadIncidents", statement, orgID, ids, func(row RowScanner) error {
 		var r IncidentRow
 		if scanErr := row.Scan(&r.ID, &r.Status, &r.Severity); scanErr != nil {
 			return scanErr
