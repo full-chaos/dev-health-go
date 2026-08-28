@@ -423,11 +423,37 @@ var ProductionColumns = map[string][]Column{
 		{Name: "url", Type: "String"},
 		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
 	},
+	// work_unit_investments (CHAOS-4398) is the canonical WorkUnit
+	// theme/subcategory distribution source ReadTeamThemeMix reads --
+	// never investment_metrics_daily, the deprecated legacy rule set
+	// (cohort-answer-plan.md §0). Read from dev-health-clickhouse-1
+	// (database `default`) on 2026-08-28. Unread production columns
+	// (repo_id/4, provider/5, effort_metric/6, evidence_quality/11,
+	// evidence_quality_band/12, categorization_status/13,
+	// categorization_errors_json/14, categorization_model_version/15,
+	// categorization_input_hash/16, categorization_run_id/17,
+	// work_unit_type/19, work_unit_name/20) omitted, matching this
+	// package's own documented scope rule.
+	"work_unit_investments": {
+		{Name: "work_unit_id", Type: "String"},
+		{Name: "from_ts", Type: "DateTime64(3, 'UTC')"},
+		{Name: "to_ts", Type: "DateTime64(3, 'UTC')"},
+		{Name: "effort_value", Type: "Float64"},
+		{Name: "theme_distribution_json", Type: "Map(String, Float64)"},
+		{Name: "subcategory_distribution_json", Type: "Map(String, Float64)"},
+		{Name: "structural_evidence_json", Type: "String"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "org_id", Type: "String"},
+	},
 	"work_item_team_attributions": {
 		{Name: "org_id", Type: "String"},
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
 		{Name: "team_id", Type: "Nullable(String)"},
+		// CHAOS-4398: team_name is production position 6, between team_id
+		// (5) and source (7). Read by readers.ReadTeamThemeMix's
+		// majority-vote label.
+		{Name: "team_name", Type: "Nullable(String)"},
 		{Name: "source", Type: "Enum8('native_team' = 1, 'linked_issue' = 2, 'project_ownership' = 3, 'repo_ownership' = 4, 'assignee_membership' = 5, 'unassigned' = 6, 'issue_project' = 7, 'manual_fallback' = 8)"},
 		{Name: "is_primary", Type: "UInt8"},
 		{Name: "confidence", Type: "Enum8('high' = 1, 'medium' = 2, 'low' = 3, 'manual' = 4, 'none' = 5)"},
@@ -584,6 +610,9 @@ var EngineFull = map[string]string{
 	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
 	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",
 	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
+	// CHAOS-4398: read from dev-health-clickhouse-1 on 2026-08-28, matching
+	// ProductionColumns["work_unit_investments"]'s own freshness date.
+	"work_unit_investments": "ReplacingMergeTree(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192",
 }
 
 // DDL renders CREATE TABLE statements for the named tables, in a
