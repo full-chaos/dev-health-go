@@ -288,6 +288,33 @@ var ProductionColumns = map[string][]Column{
 		{Name: "sample_author_count", Type: "UInt32"},
 		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
 	},
+	// CHAOS-4365 item 3 (4347-C): team_complexity_daily is a NEW table (ops
+	// migration 082_team_complexity_daily.sql) -- not yet live anywhere to
+	// read types off of, so declared straight from that migration's DDL,
+	// same as team_cognitive_load_daily above. team_id is OWNERSHIP-resolved
+	// only (team_repo_ownership merged over teams.repo_patterns) -- CHAOS-4321
+	// hard rule. Columns mirror repo_complexity_daily
+	// (007_complexity_investment_issues.sql, org_id sorting key added by
+	// migration 027) plus team_id/contributing_repo_count: loc_total,
+	// cyclomatic_total, high_complexity_functions and
+	// very_high_complexity_functions are SUMMED across every repo the team
+	// owns; cyclomatic_per_kloc is recomputed from those summed totals
+	// (sum(cyclomatic_total) / (sum(loc_total) / 1000)) rather than averaged
+	// directly across repos -- a ratio is not additive, the same rule
+	// team_cognitive_load_daily's after_hours_commit_ratio/weekend_commit_ratio
+	// follow.
+	"team_complexity_daily": {
+		{Name: "org_id", Type: "String"},
+		{Name: "team_id", Type: "String"},
+		{Name: "day", Type: "Date"},
+		{Name: "loc_total", Type: "UInt64"},
+		{Name: "cyclomatic_total", Type: "UInt64"},
+		{Name: "cyclomatic_per_kloc", Type: "Float64"},
+		{Name: "high_complexity_functions", Type: "UInt64"},
+		{Name: "very_high_complexity_functions", Type: "UInt64"},
+		{Name: "contributing_repo_count", Type: "UInt32"},
+		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
+	},
 	// CHAOS-4347: team_metrics_daily/cicd_metrics_daily/deploy_metrics_daily
 	// read live from the kiac trial ClickHouse (system.columns, 2026-08-26)
 	// via `kubectl exec` into the trial-clickhouse pod (ns acr-trial-data),
@@ -601,6 +628,7 @@ var EngineFull = map[string]string{
 	// two attributions differing only in team are DISTINCT rows in
 	// production, and a fixture that dropped the term would collapse them.
 	"team_cognitive_load_daily":            "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
+	"team_complexity_daily":                "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
 	"team_metrics_daily":                   "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
 	"team_project_ownership":               "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"team_repo_ownership":                  "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192",
