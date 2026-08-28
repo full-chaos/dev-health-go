@@ -39,7 +39,23 @@ type QueryClient interface {
 // ErrQueryClientRequired is returned by QueryOrgScoped when client is nil.
 var ErrQueryClientRequired = errors.New("readers: clickhouse query client is required")
 
-// QueryOrgScoped runs statement scoped to orgID and ids (bound as the
+// QueryOrgScoped runs statement scoped to orgID and ids, exactly like
+// QueryOrgScopedNamed, but reports through instrumentation with a generic
+// "unattributed" reader label instead of a specific one.
+//
+// This signature predates this package's instrumentation hook and is kept
+// unchanged (codex review: an exported function's signature is a public
+// contract package consumers pin tagged versions against -- Go has no
+// overload or default parameter, so widening it in place would break any
+// external caller on upgrade). Every reader in this package itself now
+// calls QueryOrgScopedNamed directly instead, since each already knows its
+// own name; QueryOrgScoped remains for a caller (in or out of this module)
+// that has no natural reader name to attribute a call to.
+func QueryOrgScoped(ctx context.Context, client QueryClient, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) error {
+	return QueryOrgScopedNamed(ctx, client, "unattributed", statement, orgID, ids, scan, extra...)
+}
+
+// QueryOrgScopedNamed runs statement scoped to orgID and ids (bound as the
 // {org_id:String} and {ids:Array(String)} parameters every reader in this
 // package expects its statement to reference), invoking scan once per
 // returned row. extra carries any additional bound parameters a specific
@@ -59,7 +75,7 @@ var ErrQueryClientRequired = errors.New("readers: clickhouse query client is req
 //
 // Mirrors acr devhealthfacts's clickhouseFacts.query exactly, minus the
 // Fact-specific pieces (readFailure classification stays with the caller).
-func QueryOrgScoped(ctx context.Context, client QueryClient, reader, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) (err error) {
+func QueryOrgScopedNamed(ctx context.Context, client QueryClient, reader, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) (err error) {
 	ctx, finish := instrumentationFromContext(ctx).StartQuery(ctx, reader, true)
 	defer func() { finish(err) }()
 

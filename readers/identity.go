@@ -18,7 +18,7 @@ FROM repos AS r FINAL
 WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`, DefaultRowLimit)
 
 	var rows []RepositoryIdentityRow
-	err := QueryOrgScoped(ctx, client, "ReadRepositoryIdentity", statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadRepositoryIdentity", statement, orgID, ids, func(row RowScanner) error {
 		var r RepositoryIdentityRow
 		if scanErr := row.Scan(&r.ID, &r.Slug, &r.Provider); scanErr != nil {
 			return scanErr
@@ -48,7 +48,7 @@ FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
 
 	var rows []WorkItemIdentityRow
-	err := QueryOrgScoped(ctx, client, "ReadWorkItemIdentity", statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemIdentity", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkItemIdentityRow
 		if scanErr := row.Scan(&r.ID, &r.Title, &r.RepoID); scanErr != nil {
 			return scanErr
@@ -78,7 +78,7 @@ FROM repos AS r FINAL
 WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`, DefaultRowLimit)
 
 	var rows []RepositoryIDRow
-	err := QueryOrgScoped(ctx, client, "ReadRepositoryIDs", statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadRepositoryIDs", statement, orgID, ids, func(row RowScanner) error {
 		var r RepositoryIDRow
 		if scanErr := row.Scan(&r.ID); scanErr != nil {
 			return scanErr
@@ -112,7 +112,7 @@ FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
 
 	var rows []WorkItemRepositoryRow
-	err := QueryOrgScoped(ctx, client, "ReadWorkItemRepository", statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemRepository", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkItemRepositoryRow
 		if scanErr := row.Scan(&r.ID, &r.RepoID, &r.RepoSlug); scanErr != nil {
 			return scanErr

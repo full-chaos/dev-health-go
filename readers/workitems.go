@@ -23,7 +23,7 @@ FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
 
 	var rows []WorkItemStatusRow
-	err := QueryOrgScoped(ctx, client, "ReadWorkItemStatus", statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemStatus", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkItemStatusRow
 		if scanErr := row.Scan(&r.ID, &r.Status, &r.RepoID); scanErr != nil {
 			return scanErr
@@ -54,7 +54,7 @@ FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
 
 	var rows []WorkItemTitleRow
-	err := QueryOrgScoped(ctx, client, "ReadWorkItemTitle", statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemTitle", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkItemTitleRow
 		if scanErr := row.Scan(&r.ID, &r.Title, &r.RepoID); scanErr != nil {
 			return scanErr
@@ -106,7 +106,7 @@ FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("w.created_at"), DefaultRowLimit)
 
 	var rows []WorkItemCompletionRow
-	err := QueryOrgScoped(ctx, client, "ReadWorkItemCompletion", statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemCompletion", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkItemCompletionRow
 		if scanErr := row.Scan(&r.ID, &r.IsCompleted, &r.CompletedAt, &r.RepoID); scanErr != nil {
 			return scanErr
