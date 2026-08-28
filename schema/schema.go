@@ -610,6 +610,9 @@ var EngineFull = map[string]string{
 	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
 	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",
 	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
+	// CHAOS-4398: read from dev-health-clickhouse-1 on 2026-08-28, matching
+	// ProductionColumns["work_unit_investments"]'s own freshness date.
+	"work_unit_investments": "ReplacingMergeTree(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192",
 }
 
 // DDL renders CREATE TABLE statements for the named tables, in a
