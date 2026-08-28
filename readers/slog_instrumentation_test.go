@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -62,8 +63,8 @@ func TestSlogInstrumentation_EmitsOneRecordPerQuery(t *testing.T) {
 	if got := attrs["org_scoped"].Bool(); !got {
 		t.Errorf("org_scoped attr = %v, want true", got)
 	}
-	if _, ok := attrs["error"]; ok {
-		t.Errorf("success record must not carry an error attr, got %v", attrs["error"])
+	if _, ok := attrs["error_class"]; ok {
+		t.Errorf("success record must not carry an error_class attr, got %v", attrs["error_class"])
 	}
 	_ = ctx
 }
@@ -73,19 +74,41 @@ func TestSlogInstrumentation_EmitsErrorRecordOnFailure(t *testing.T) {
 	instr := NewSlogInstrumentation(slog.New(handler), slog.LevelInfo)
 
 	_, finish := instr.StartQuery(context.Background(), "ReadPullRequestFacts", false)
-	finish(errors.New("boom"))
+	// A raw error message ("boom", or worse, something carrying a DSN or a
+	// raw scanned value from a domain reader's own scan closure) must never
+	// reach the record -- only a bounded, closed-vocabulary class.
+	finish(errors.New("boom: postgres://user:hunter2@internal-host/db"))
 
 	records := handler.snapshot()
 	if len(records) != 1 {
 		t.Fatalf("expected exactly 1 record for a failed query, got %d", len(records))
 	}
 	attrs := attrsOf(records[0])
-	if got := attrs["error"].String(); got != "boom" {
-		t.Errorf("error attr = %q, want boom", got)
+	if got := attrs["error_class"].String(); got != "query_error" {
+		t.Errorf("error_class attr = %q, want query_error", got)
+	}
+	// The raw error text (and anything it might carry, like the fake DSN
+	// above) must never appear anywhere in the record -- not the message,
+	// not any attribute value.
+	if records[0].Message == "boom: postgres://user:hunter2@internal-host/db" {
+		t.Fatal("record message must not be the raw error text")
+	}
+	for key, value := range attrs {
+		if s := value.String(); s == "boom: postgres://user:hunter2@internal-host/db" ||
+			(key != "error_class" && containsSecret(s)) {
+			t.Fatalf("attribute %q leaked raw error text: %q", key, s)
+		}
 	}
 	if got := attrs["org_scoped"].Bool(); got {
 		t.Errorf("org_scoped attr = %v, want false", got)
 	}
+}
+
+// containsSecret reports whether s contains the fake credential planted in
+// the test error above, as a belt-and-suspenders check independent of which
+// attribute key it might have leaked under.
+func containsSecret(s string) bool {
+	return strings.Contains(s, "hunter2")
 }
 
 func TestSlogInstrumentation_NilLoggerFallsBackToDefault(t *testing.T) {

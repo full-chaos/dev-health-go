@@ -40,7 +40,12 @@ func (s *SlogInstrumentation) StartQuery(ctx context.Context, reader string, org
 			slog.Int64("duration_ms", durationMS),
 		}
 		if err != nil {
-			attrs = append(attrs, slog.String("error", err.Error()))
+			// Deliberately not err.Error(): err may originate from a domain
+			// reader's own row-scan closure, outside this package's
+			// control, and its message text is not guaranteed safe to log
+			// (see safeErrorClass's doc comment). Only a bounded,
+			// closed-vocabulary class is recorded.
+			attrs = append(attrs, slog.String("error_class", safeErrorClass(err)))
 			s.logger.LogAttrs(ctx, s.level, "readers.query_org_scoped", slogAttrs(attrs)...)
 			return
 		}

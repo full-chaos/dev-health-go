@@ -1,6 +1,9 @@
 package readers
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // Instrumentation is the store-level telemetry hook QueryOrgScoped -- the
 // single funnel every reader in this package queries through -- calls on
@@ -65,4 +68,34 @@ func instrumentationFromContext(ctx context.Context) Instrumentation {
 		return instr
 	}
 	return NoopInstrumentation{}
+}
+
+// safeErrorClass returns a bounded, closed-vocabulary string safe to export
+// to a trace/log sink for err, or "" if err is nil. It deliberately never
+// returns err.Error() itself: err may be an unclassified error surfaced by a
+// domain reader's own row-scan closure (defined per-file, outside this
+// package's control), and a raw driver/scan error's text can carry a DSN, a
+// server hostname, or a literal (if malformed) column value -- exactly the
+// "no raw transport errors leaked" rule this codebase's conventions require
+// (codex adversarial review: telemetry adapters were exporting err.Error()
+// unclassified). Every known sentinel this package itself defines/wraps is
+// named explicitly; anything else buckets into "query_error" rather than
+// surfacing its message. This bounds what the two ready-made Instrumentation
+// adapters (OTelInstrumentation, SlogInstrumentation) ever put in a span
+// attribute or a log record; it does not change what QueryOrgScoped returns
+// to its real caller, which keeps the original, fully-detailed error
+// unchanged.
+func safeErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrQueryClientRequired):
+		return "client_required"
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context_deadline_exceeded"
+	default:
+		return "query_error"
+	}
 }

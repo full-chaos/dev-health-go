@@ -81,8 +81,14 @@ func (o *OTelInstrumentation) StartQuery(ctx context.Context, reader string, org
 		o.latency.Record(spanCtx, float64(time.Since(start))/float64(time.Millisecond), metric.WithAttributeSet(attrs))
 		if err != nil {
 			o.errorCounter.Add(spanCtx, 1, metric.WithAttributeSet(attrs))
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			// Deliberately not span.RecordError(err) / err.Error(): err may
+			// originate from a domain reader's own row-scan closure, outside
+			// this package's control, and its message text is not guaranteed
+			// safe to export (see safeErrorClass's doc comment). Only a
+			// bounded, closed-vocabulary class is recorded.
+			class := safeErrorClass(err)
+			span.SetAttributes(attribute.String("error_class", class))
+			span.SetStatus(codes.Error, class)
 		}
 		span.End()
 	}
