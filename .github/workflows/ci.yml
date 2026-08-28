@@ -1,0 +1,35 @@
+---
+name: ci
+
+"on":
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - name: Verify Go formatting
+        run: make fmt-check
+      - name: Vet Go packages
+        run: make vet
+      - name: Test
+        run: make test
+      - name: Check known Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+      - name: Build
+        run: go build ./...
