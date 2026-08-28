@@ -264,6 +264,27 @@ var ProductionColumns = map[string][]Column{
 		{Name: "pr_review_time_p50_hours", Type: "Nullable(Float64)"},
 		{Name: "pr_pickup_time_p50_hours", Type: "Nullable(Float64)"},
 	},
+	// CHAOS-4365 item 2 (4347-C): team_cognitive_load_daily is a NEW table
+	// (ops migration 081_team_cognitive_load_daily.sql) -- not yet live
+	// anywhere to read types off of, so declared straight from that
+	// migration's DDL instead of this package's usual production-read
+	// convention. team_id is OWNERSHIP-resolved only (team_repo_ownership
+	// merged over teams.repo_patterns) -- CHAOS-4321 hard rule -- never the
+	// person->membership-fallback-tainted team_id column
+	// user_metrics_daily/team_metrics_daily carry (CHAOS-4396).
+	"team_cognitive_load_daily": {
+		{Name: "org_id", Type: "String"},
+		{Name: "team_id", Type: "String"},
+		{Name: "day", Type: "Date"},
+		{Name: "pr_interruption_load", Type: "Float64"},
+		{Name: "context_spread_count", Type: "Float64"},
+		{Name: "review_request_load", Type: "Float64"},
+		{Name: "after_hours_commit_ratio", Type: "Nullable(Float64)"},
+		{Name: "weekend_commit_ratio", Type: "Nullable(Float64)"},
+		{Name: "contributing_repo_count", Type: "UInt32"},
+		{Name: "sample_author_count", Type: "UInt32"},
+		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
+	},
 	// CHAOS-4347: team_metrics_daily/cicd_metrics_daily/deploy_metrics_daily
 	// read live from the kiac trial ClickHouse (system.columns, 2026-08-26)
 	// via `kubectl exec` into the trial-clickhouse pod (ns acr-trial-data),
@@ -550,6 +571,7 @@ var EngineFull = map[string]string{
 	// work_item_team_attributions keys on ifNull(team_id, ''), not team_id:
 	// two attributions differing only in team are DISTINCT rows in
 	// production, and a fixture that dropped the term would collapse them.
+	"team_cognitive_load_daily":            "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
 	"team_metrics_daily":                   "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
 	"team_project_ownership":               "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"team_repo_ownership":                  "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192",
