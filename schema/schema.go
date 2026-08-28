@@ -19,10 +19,10 @@
 // while git_pull_requests.created_at is DateTime64(3, 'UTC'), and the
 // operational_* tables use precision 6 where most use 3. A guessed type
 // yields a test that passes against a schema production does not have,
-// which is worse than a failing one. The one exception is a table not yet
-// live anywhere to read from (team_cognitive_load_daily, CHAOS-4365 item
-// 2), declared straight from its ops migration DDL instead -- see that
-// entry's comment.
+// which is worse than a failing one. The exceptions are tables not yet
+// live anywhere to read from (team_cognitive_load_daily, CHAOS-4365 item 2;
+// team_complexity_daily, CHAOS-4365 item 3), each declared straight from
+// its own ops migration DDL instead -- see those entries' comments.
 //
 // SCOPE: only the columns the readers actually SELECT. Drift in a column
 // nobody reads cannot break anything, and declaring all 279 columns of

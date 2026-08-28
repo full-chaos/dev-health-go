@@ -1,6 +1,9 @@
 package schema
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // teamComplexityDailyDDL is the ops migration this table is declared from,
 // copied verbatim (CHAOS-4365 item 3 / 4347-C,
@@ -75,13 +78,24 @@ func TestTeamComplexityDailyMatchesOpsMigrationDDL(t *testing.T) {
 // TestTeamComplexityDailyOrderByColumnsExist mirrors
 // TestTeamCognitiveLoadDailyOrderByColumnsExist: catches the class of drift
 // a straight string comparison can miss silently if someone "fixes" the
-// engine string without updating the columns (or vice versa).
+// engine string without updating the columns (or vice versa). Unlike that
+// sibling test (which hard-codes its 3-column literal), the expected
+// column list here is derived from teamComplexityDailyDDL's own ORDER BY
+// clause via the shared orderByRE regexp, so a future ORDER BY edit that
+// adds/renames a key is caught even if this test body is never touched.
 func TestTeamComplexityDailyOrderByColumnsExist(t *testing.T) {
+	om := orderByRE.FindStringSubmatch(teamComplexityDailyDDL)
+	if om == nil {
+		t.Fatal("could not locate ORDER BY clause in teamComplexityDailyDDL")
+	}
+	orderByCols := strings.Split(strings.Trim(om[1], "()"), ",")
+
 	declared := map[string]bool{}
 	for _, c := range ProductionColumns["team_complexity_daily"] {
 		declared[c.Name] = true
 	}
-	for _, name := range []string{"org_id", "team_id", "day"} {
+	for _, raw := range orderByCols {
+		name := strings.TrimSpace(raw)
 		if !declared[name] {
 			t.Errorf("ORDER BY column %q is not in ProductionColumns[\"team_complexity_daily\"]", name)
 		}
