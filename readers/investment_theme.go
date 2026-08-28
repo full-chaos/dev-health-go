@@ -162,12 +162,12 @@ attributed AS (
     JOIN windowed ON windowed.work_unit_id = votes.work_unit_id
     WHERE votes.team_id != '' AND votes.team_id IN {ids:Array(String)}
 )
-SELECT team_id, team_name, 'theme' AS kind, theme_kv.1 AS key, sum(theme_kv.2 * effort_value) AS weighted_effort
+SELECT team_id, max(team_name) AS team_name, 'theme' AS kind, theme_kv.1 AS key, sum(theme_kv.2 * effort_value) AS weighted_effort
 FROM attributed
 ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float64))) AS theme_kv
-GROUP BY team_id, team_name, key
+GROUP BY team_id, key
 UNION ALL
-SELECT team_id, any(team_name) AS team_name, 'subcategory' AS kind, {bugfix_key:String} AS key, sum(bugfix_share * effort_value) AS weighted_effort
+SELECT team_id, max(team_name) AS team_name, 'subcategory' AS kind, {bugfix_key:String} AS key, sum(bugfix_share * effort_value) AS weighted_effort
 FROM attributed
 GROUP BY team_id
 )`, DefaultRowLimit)
