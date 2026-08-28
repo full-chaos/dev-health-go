@@ -50,7 +50,7 @@ FROM (
 )
 WHERE rn = 1`, DefaultRowLimit)
 	var rows []WorkloadForecastRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadTeamWorkload", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkloadForecastRow
 		if err := row.Scan(&r.TeamID, &r.WorkScopeID, &r.ThroughputMean, &r.ThroughputStddev, &r.HasP50Days, &r.P50Days, &r.InsufficientHistory, &r.HighVariance, &r.BacklogSize, &r.ComputedAt); err != nil {
 			return err
@@ -107,7 +107,7 @@ INNER JOIN (
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
 ORDER BY p.id, tpo.team_id, cf.work_scope_id`, DefaultRowLimit)
 	var rows []WorkloadProjectRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadProjectWorkload", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkloadProjectRow
 		if err := row.Scan(&r.ProjectSubjectKey, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.ThroughputMean, &r.ThroughputStddev, &r.HasP50Days, &r.P50Days, &r.InsufficientHistory, &r.HighVariance, &r.BacklogSize, &r.ComputedAt); err != nil {
 			return err

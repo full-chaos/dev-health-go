@@ -54,7 +54,7 @@ FROM (
 WHERE rn = 1`, DefaultRowLimit)
 
 	var rows []SourceHealthRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadSourceHealth", statement, orgID, ids, func(row RowScanner) error {
 		var r SourceHealthRow
 		if scanErr := row.Scan(&r.Provider, &r.Status, &r.ItemsSynced, &r.DurationMS, &r.ErrorMessage, &r.CreatedAt); scanErr != nil {
 			return scanErr

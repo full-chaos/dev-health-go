@@ -32,7 +32,7 @@ FROM ci_pipeline_runs AS c FINAL
 WHERE c.org_id = {org_id:String} AND concat(toString(c.repo_id), ':', c.run_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("c.started_at"), DefaultRowLimit)
 
 	var rows []CIPipelineRunStatusRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadRunStatus", statement, orgID, ids, func(row RowScanner) error {
 		var r CIPipelineRunStatusRow
 		if err := row.Scan(&r.RunID, &r.Status, &r.RepoID); err != nil {
 			return err
@@ -94,7 +94,7 @@ FROM (
 WHERE rn = 1`, DefaultRowLimit)
 
 	var rows []CICDMetricsDailyRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadCICDMetricsDaily", statement, orgID, ids, func(row RowScanner) error {
 		var repoID, day string
 		var pipelinesCount int64
 		var successRate float64

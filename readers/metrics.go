@@ -56,7 +56,7 @@ FROM (
 )
 WHERE rn = 1`, DefaultRowLimit)
 	var rows []RepositoryMetricsRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, repoIDs, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadRepositoryMetrics", statement, orgID, repoIDs, func(row RowScanner) error {
 		var r RepositoryMetricsRow
 		var hasMTTR uint8
 		if err := row.Scan(&r.RepoID, &r.Day, &r.CommitsCount, &r.PRsMerged, &r.MedianPRCycleHours, &r.ChangeFailureRate, &hasMTTR, &r.MTTRHours, &r.BusFactor, &r.CodeOwnershipGini); err != nil {
@@ -96,7 +96,7 @@ FROM (
 )
 WHERE rn = 1`, DefaultRowLimit)
 	var rows []TeamMetricsRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, teamIDs, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadTeamMetrics", statement, orgID, teamIDs, func(row RowScanner) error {
 		var r TeamMetricsRow
 		if err := row.Scan(&r.TeamID, &r.Day, &r.CommitsCount, &r.AfterHoursCommitsCount, &r.WeekendCommitsCount, &r.AfterHoursCommitRatio, &r.WeekendCommitRatio); err != nil {
 			return err
@@ -139,7 +139,7 @@ INNER JOIN (
 ) AS tm ON tm.team_id = tpo.team_id AND tm.rn = 1
 ORDER BY p.id, tm.team_id`, DefaultRowLimit)
 	var rows []ProjectTeamMetricsRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, projectKeys, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadProjectMetricsBreakdown", statement, orgID, projectKeys, func(row RowScanner) error {
 		var r ProjectTeamMetricsRow
 		if err := row.Scan(&r.ProjectKey, &r.TeamID, &r.TeamName, &r.Day, &r.CommitsCount, &r.AfterHoursCommitsCount, &r.WeekendCommitsCount, &r.AfterHoursCommitRatio, &r.WeekendCommitRatio); err != nil {
 			return err

@@ -53,7 +53,7 @@ FROM (
 )
 WHERE rn = 1`, DefaultRowLimit)
 	var rows []ReadinessCoverageRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadTeamReadiness", statement, orgID, ids, func(row RowScanner) error {
 		var r ReadinessCoverageRow
 		if err := row.Scan(&r.TeamID, &r.WorkScopeID, &r.Provider, &r.Day, &r.EstimatedCount, &r.UnestimatedCount, &r.BacklogSize, &r.HasRatio, &r.Ratio); err != nil {
 			return err
@@ -112,7 +112,7 @@ INNER JOIN (
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
 ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`, DefaultRowLimit)
 	var rows []ReadinessProjectRow
-	err := QueryOrgScoped(ctx, client, statement, orgID, ids, func(row RowScanner) error {
+	err := QueryOrgScoped(ctx, client, "ReadProjectReadiness", statement, orgID, ids, func(row RowScanner) error {
 		var r ReadinessProjectRow
 		if err := row.Scan(&r.ProjectSubjectKey, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.Provider, &r.Day, &r.EstimatedCount, &r.UnestimatedCount, &r.BacklogSize, &r.HasRatio, &r.Ratio); err != nil {
 			return err
