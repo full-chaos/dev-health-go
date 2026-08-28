@@ -68,6 +68,14 @@ func QueryOrgScoped(ctx context.Context, client QueryClient, statement, orgID st
 	return rows.Err()
 }
 
+// DefaultRowLimit is the anti-fanout row bound most readers in this
+// package apply via WithRowLimit: a single query is generously bounded so
+// one pathological subject (e.g. a work item with thousands of dependency
+// rows) cannot return unbounded rows before a caller-side truncation check
+// runs. Mirrors acr devhealthfacts's maxFactRowsPerQuery. A specific reader
+// may pass a different limit to WithRowLimit if its own shape warrants it.
+const DefaultRowLimit = 200
+
 // WithRowLimit appends a LIMIT clause bounding statement to limit rows.
 // limit must be an internal caller-controlled constant, never a value
 // derived from a request -- mirroring acr devhealthfacts's withRowLimit,
