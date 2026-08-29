@@ -93,3 +93,87 @@ func RepresentableInt64(value uint64) (int64, bool) {
 	}
 	return int64(value), true
 }
+
+// ProjectWorkScopeJoinSQL resolves each requested project subject to the
+// work-scope ids its OWN rows carry, with NO team-ownership hop
+// (CHAOS-4521b).
+//
+// WHY a second project join exists beside ProjectOwnershipJoinSQL, rather
+// than replacing it: the two answer different questions, and only some
+// source tables can answer the first.
+//
+//   - A work-scope-keyed table (estimate_coverage_metrics_daily,
+//     capacity_forecasts, work_item_metrics_daily) carries the project's
+//     OWN rows: `work_scope_id` is work_items.project_id, verified against
+//     live data and asserted by dev-health-ops' own oracle
+//     (github_work_item_derived_surfaces_oracle_test.go: "same
+//     work_scope_id (project_id)"). A project fact reads from those rows
+//     directly.
+//   - A team-scoped-by-construction table (investment_metrics_daily keyed
+//     by repo_id/team_id, compounding_risk_daily keyed by
+//     scope='repo'/'team') has no project dimension at all. Reaching a
+//     project there REQUIRES the ownership hop, and
+//     ProjectOwnershipJoinSQL stays the only way.
+//
+// The ownership hop was wrong for the first group in two independent ways,
+// both observed on live data (org 70d529e0, 2026-08-29):
+//
+//  1. It could not reach a real project AT ALL. It joins
+//     projects.project_key to team_project_ownership.project_key, and every
+//     real Linear project carries project_key NULL -- the only non-empty
+//     Linear key is the `{org}:linear:<teamKey>` pseudo-project a team-key
+//     fallback writes. So the join matched the team pseudo-row and nothing
+//     else, and each project rollup returned zero rows (CHAOS-4530).
+//  2. When it DID resolve, it returned the wrong rows. The readers joined
+//     the daily table on team_id alone and never constrained
+//     work_scope_id, so a "project" fact was built from every work scope
+//     its owning team touched -- other projects' rows included.
+//
+// Matching: `work_scope_id` equals either the project's canonical id (the
+// Linear shape: a project UUID) or its project_key (the GitLab shape:
+// `full.chaos/dev-health-ops`, while projects.id is
+// `{org}:gitlab:<numeric>`). Resolving both from `projects` once, here,
+// is what keeps this provider-agnostic without a per-provider branch.
+//
+// The project_key arm keeps ProjectOwnershipJoinSQL's
+// key_resolution_count = 1 guard: an ambiguous key must not attribute one
+// project's rows to another. The id arm needs no such guard -- projects.id
+// is unique by construction.
+//
+// `provider` is deliberately NOT part of the match. Cross-provider equal
+// ids are ONE project by design in this data model (Linear imports GitHub),
+// so requiring provider equality would DROP legitimate rows rather than
+// prevent a leak. Org scoping is unaffected: every subquery here and in
+// every caller filters on {org_id:String}.
+//
+// Selects p.provider and p.id so a caller can rebuild the
+// "<provider>:<id>" project subject key, exactly as ProjectOwnershipJoinSQL
+// does, and p.project_key / p.key_resolution_count so the caller's own ON
+// clause can express the match through ProjectWorkScopeMatchSQL.
+func ProjectWorkScopeJoinSQL() string {
+	return `(
+	SELECT id, provider, project_key, key_resolution_count
+	FROM (
+		SELECT id, provider, ifNull(project_key, '') AS project_key,
+			count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
+		FROM projects FINAL
+		WHERE org_id = {org_id:String}
+	)
+	WHERE concat(provider, ':', id) IN {ids:Array(String)}
+) AS p`
+}
+
+// ProjectWorkScopeMatchSQL returns the ON predicate pairing a work-scope
+// column with the project subject ProjectWorkScopeJoinSQL resolved.
+//
+// alias and column are internal Go string literals at every call site,
+// never caller-supplied text, so they carry no injection surface -- the
+// same discipline WithRowLimit's own limit literal follows.
+//
+// The empty-key test is what stops a project whose project_key is NULL
+// (every real Linear project) from matching a daily row whose
+// work_scope_id happens to be the empty string.
+func ProjectWorkScopeMatchSQL(alias, column string) string {
+	qualified := alias + "." + column
+	return "(" + qualified + " = p.id OR (p.project_key != '' AND p.key_resolution_count = 1 AND " + qualified + " = p.project_key))"
+}

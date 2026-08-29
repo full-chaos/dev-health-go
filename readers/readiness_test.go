@@ -79,9 +79,9 @@ func TestReadTeamReadiness(t *testing.T) {
 
 func TestReadProjectReadiness(t *testing.T) {
 	t.Parallel()
-	t.Run("happy path returns one row per contributing team scope", func(t *testing.T) {
+	t.Run("happy path returns one row per work scope the project owns", func(t *testing.T) {
 		t.Parallel()
-		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+		client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{
 			{"linear:proj-1", "team-1", "Team One", "scope-a", "linear", "2026-02-22", int64(18), int64(2), int64(20), uint8(1), float64(0.9)},
 			{"linear:proj-1", "team-2", "Team Two", "scope-b", "gitlab", "2026-02-22", int64(5), int64(15), int64(20), uint8(1), float64(0.25)},
 		}}}}
@@ -102,7 +102,7 @@ func TestReadProjectReadiness(t *testing.T) {
 
 	t.Run("empty ids short-circuits without querying", func(t *testing.T) {
 		t.Parallel()
-		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{{"linear:proj-1", "team-1", "Team One", "scope-a", "linear", "2026-02-22", int64(1), int64(1), int64(1), uint8(1), float64(1)}}}}}
+		client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{{"linear:proj-1", "team-1", "Team One", "scope-a", "linear", "2026-02-22", int64(1), int64(1), int64(1), uint8(1), float64(1)}}}}}
 		rows, err := readers.ReadProjectReadiness(context.Background(), client, "org-1", nil, readers.TimeBound{})
 		if err != nil || rows != nil {
 			t.Fatalf("rows = %#v, err = %v, want (nil, nil)", rows, err)
@@ -114,7 +114,7 @@ func TestReadProjectReadiness(t *testing.T) {
 
 	t.Run("query error propagates unwrapped", func(t *testing.T) {
 		t.Parallel()
-		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", err: errors.New("boom")}}}
+		client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", err: errors.New("boom")}}}
 		rows, err := readers.ReadProjectReadiness(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 		if err == nil || err.Error() != "boom" || rows != nil {
 			t.Fatalf("rows = %#v, err = %v, want (nil, boom)", rows, err)

@@ -100,17 +100,25 @@ func ReadProjectReadiness(ctx context.Context, client QueryClient, orgID string,
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	ownershipPredicate := OwnershipValidityPredicate(timeBound)
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
-FROM `+ProjectOwnershipJoinSQL(ownershipPredicate)+`
+	// CHAOS-4521b: the project's OWN estimate_coverage_metrics_daily rows,
+	// matched on work_scope_id, with no team-ownership hop. The team is
+	// still reported -- from the ROW's own team_id, which is the team that
+	// produced that coverage row, not "some team that owns this project".
+	//
+	// The rn partition drops team_id: the question is now "the latest row
+	// per (work scope, provider)", and partitioning by team as well would
+	// return one latest row PER TEAM for the same work scope whenever two
+	// teams both wrote coverage for it.
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), ec.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
+FROM `+ProjectWorkScopeJoinSQL()+`
 INNER JOIN (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
-		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
+		row_number() OVER (PARTITION BY work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
 	FROM estimate_coverage_metrics_daily FINAL
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
-) AS ec ON ec.team_id = tpo.team_id AND ec.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
-ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`, DefaultRowLimit)
+) AS ec ON `+ProjectWorkScopeMatchSQL("ec", "work_scope_id")+` AND ec.rn = 1
+LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ec.team_id
+ORDER BY p.id, ec.work_scope_id, ec.provider`, DefaultRowLimit)
 	var rows []ReadinessProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectReadiness", statement, orgID, ids, func(row RowScanner) error {
 		var r ReadinessProjectRow
