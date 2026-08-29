@@ -117,8 +117,8 @@ func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 
 		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
 		FROM ` + projects + `
-		INNER JOIN ` + ownershipByKey + ` ON o.provider = p.provider AND o.project_key = p.project_key
-		WHERE p.project_key != '' AND p.key_resolution_count = 1
+		INNER JOIN ` + ownershipByKey + ` ON o.provider = p.provider AND o.project_key = p.scope
+		WHERE p.scope_kind = 'key'
 	)
 	GROUP BY provider, id, team_id
 ) AS p`
@@ -255,18 +255,18 @@ func projectIdentityExpansionSQL(rows string) string {
 	// A project-level number that reads like a per-match one is a footgun,
 	// so it is removed rather than documented.
 	return `(
-	SELECT provider, id, project_key, key_resolution_count, scope
+	SELECT provider, id, project_key, key_resolution_count, scope, scope_kind
 	FROM (
-		SELECT provider, id, project_key, toUInt64(1) AS key_resolution_count, id AS scope
+		SELECT provider, id, project_key, toUInt64(1) AS key_resolution_count, id AS scope, 'id' AS scope_kind
 		FROM (` + rows + `)
 
 		UNION ALL
 
-		SELECT provider, id, project_key, key_resolution_count, project_key AS scope
+		SELECT provider, id, project_key, key_resolution_count, project_key AS scope, 'key' AS scope_kind
 		FROM (` + rows + `)
 		WHERE project_key != '' AND key_resolution_count = 1
 	)
-	GROUP BY provider, id, project_key, key_resolution_count, scope
+	GROUP BY provider, id, project_key, key_resolution_count, scope, scope_kind
 ) AS p`
 }
 

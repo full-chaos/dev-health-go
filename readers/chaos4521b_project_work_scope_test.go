@@ -194,7 +194,21 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// project_key='PROJ1'): the pre-4521b key-to-key join matched 1 row,
 	// v0.5.0's two-armed join matched 0, and the three-armed join matches 1
 	// again. That 1 -> 0 -> 1 is the regression and its repair.
-	if !strings.Contains(statement, "o.project_key = p.project_key") {
+	//
+	// CHAOS-4542 defect 6 RESPELLED this arm without removing it. It used to
+	// read `o.project_key = p.project_key`, guarded by
+	// `p.key_resolution_count = 1`. Both halves were wrong together:
+	// p.project_key is carried by EVERY scope row, and after v0.5.4 an id
+	// row's count is 1 by construction, so an id row satisfied a guard
+	// written to mean "this key names exactly one project" and two projects
+	// sharing a key both matched an ownership row that named neither.
+	//
+	// The arm now matches the KEY SCOPE ROW itself. An ambiguous key has no
+	// such row -- the filter moved inside the expansion -- so the arm cannot
+	// resolve one, and no consumer has to remember a guard. This assertion
+	// still exists for its original purpose (the arm has been dropped three
+	// separate times), only against the spelling that is now load-bearing.
+	if !strings.Contains(statement, "o.project_key = p.scope") || !strings.Contains(statement, "p.scope_kind = 'key'") {
 		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
 	}
 	// codex P1: the grain must stay one row per (provider, project_id,
