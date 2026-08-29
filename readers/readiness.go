@@ -110,13 +110,13 @@ func ReadProjectReadiness(ctx context.Context, client QueryClient, orgID string,
 	// return one latest row PER TEAM for the same work scope whenever two
 	// teams both wrote coverage for it.
 	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), ec.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
-FROM `+ProjectWorkScopeJoinSQL()+`
+FROM `+ProjectIdentityJoinSQL()+`
 INNER JOIN (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
 		row_number() OVER (PARTITION BY work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
 	FROM estimate_coverage_metrics_daily FINAL
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
-) AS ec ON `+ProjectWorkScopeMatchSQL("ec", "work_scope_id")+` AND ec.rn = 1
+) AS ec ON `+ProjectIdentityMatchSQL("ec", "work_scope_id")+` AND ec.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ec.team_id
 ORDER BY p.id, ec.work_scope_id, ec.provider`, DefaultRowLimit)
 	var rows []ReadinessProjectRow

@@ -101,17 +101,17 @@ func ReadProjectWorkload(ctx context.Context, client QueryClient, orgID string, 
 	// and the reported team coming from the forecast row itself.
 	//
 	// capacity_forecasts has no `provider` column at all, which is the
-	// second reason ProjectWorkScopeMatchSQL does not match on provider:
+	// second reason ProjectIdentityMatchSQL does not match on provider:
 	// a predicate this table cannot express must not be one the shared
 	// helper requires.
 	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), cf.team_id, ifNull(t.name, ''), ifNull(cf.work_scope_id, ''), cf.throughput_mean, cf.throughput_stddev, toUInt8(isNotNull(cf.p50_days)), toInt64(ifNull(cf.p50_days, 0)), cf.insufficient_history, cf.high_variance, toInt64(cf.backlog_size), toString(cf.computed_at)
-FROM `+ProjectWorkScopeJoinSQL()+`
+FROM `+ProjectIdentityJoinSQL()+`
 INNER JOIN (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
 		row_number() OVER (PARTITION BY work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
 	FROM capacity_forecasts FINAL
 	WHERE org_id = {org_id:String}`+timeBound.TimestampPredicate("computed_at")+`
-) AS cf ON `+ProjectWorkScopeMatchSQL("cf", "work_scope_id")+` AND cf.rn = 1
+) AS cf ON `+ProjectIdentityMatchSQL("cf", "work_scope_id")+` AND cf.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = cf.team_id
 ORDER BY p.id, cf.work_scope_id`, DefaultRowLimit)
 	var rows []WorkloadProjectRow

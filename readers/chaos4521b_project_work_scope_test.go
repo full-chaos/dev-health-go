@@ -109,3 +109,81 @@ func TestChaos4521b_TeamScopedProjectRollupsKeepTheOwnershipHop(t *testing.T) {
 		t.Errorf("investment_metrics_daily is keyed by repo_id/team_id and has no project dimension; its project rollup must keep the ownership hop")
 	}
 }
+
+// CHAOS-4521b addendum. The ownership join itself had to move off
+// project_key, because it could not survive EITHER direction of the
+// CHAOS-4530 producer rework:
+//
+//   - today it reaches no real Linear project (their project_key is NULL,
+//     and `project_key != ”` dropped them before the ownership predicate
+//     ran);
+//   - after 4530 lands -- UUID-keyed ownership rows, the team-key
+//     pseudo-project gone, project_key nulled on those rows -- a
+//     project_key join would match NOTHING, taking health, investment and
+//     landscape to zero on deploy.
+//
+// So the ownership edge is matched by the same two-armed project identity
+// the work-scope readers use, through one named column constant.
+func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
+	if _, err := readers.ReadProjectInvestment(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
+		t.Fatalf("ReadProjectInvestment: %v", err)
+	}
+	statement := client.queries[0].statement
+
+	// The ownership edge is still joined -- investment_metrics_daily has no
+	// project dimension, so removing the hop would be a capability loss.
+	if !strings.Contains(statement, "team_project_ownership") {
+		t.Fatalf("the team-scoped rollup must keep the ownership hop\n%s", statement)
+	}
+	// ...but it is keyed on the project identity column, not project_key.
+	//
+	// The column is spelled as a LITERAL here, not via
+	// readers.ProjectOwnershipJoinColumn, so this test still COMPILES at
+	// the parent commit and fails there on the assertion rather than on a
+	// missing symbol -- a build error is not a behavioural red. The
+	// constant is coupled to the SQL by its own test below.
+	if !strings.Contains(statement, "tpo.project_id = p.id") {
+		t.Errorf("ownership join does not key on tpo.project_id = p.id\n%s", statement)
+	}
+	if strings.Contains(statement, "tpo.project_key = p.project_key") {
+		t.Errorf("ownership join still keys on project_key, which reaches no real Linear project today and matches nothing after CHAOS-4530\n%s", statement)
+	}
+	// The GitLab arm survives: those ownership rows carry the project KEY
+	// in the identity column while projects.id is `{org}:gitlab:<numeric>`.
+	// Dropping this arm would take GitLab to zero the other way.
+	if !strings.Contains(statement, "tpo.project_id = p.project_key") {
+		t.Errorf("ownership join dropped the project_key arm; GitLab ownership rows key on it today\n%s", statement)
+	}
+	// A project whose project_key is NULL (every real Linear project) must
+	// no longer be filtered out before the join is even evaluated.
+	if strings.Contains(statement, "WHERE project_key != '' AND key_resolution_count = 1 AND concat(provider") {
+		t.Errorf("subject resolution still drops projects with a NULL project_key\n%s", statement)
+	}
+}
+
+// ProjectOwnershipJoinColumn exists so that CHAOS-4530 renaming or moving
+// team_project_ownership's project column is a ONE-line change here. That
+// promise is only true while the constant is actually what the SQL emits,
+// which is what this couples -- the literals in the test above are there to
+// keep that test compiling at the parent commit, and would otherwise be a
+// second, drifting copy of the same fact.
+func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
+	if _, err := readers.ReadProjectInvestment(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
+		t.Fatalf("ReadProjectInvestment: %v", err)
+	}
+	statement := client.queries[0].statement
+	for _, fragment := range []string{
+		"SELECT " + readers.ProjectOwnershipJoinColumn + ", team_id",
+		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
+		"GROUP BY " + readers.ProjectOwnershipJoinColumn + ", team_id",
+		"tpo." + readers.ProjectOwnershipJoinColumn + " = p.id",
+	} {
+		if !strings.Contains(statement, fragment) {
+			t.Errorf("statement does not use ProjectOwnershipJoinColumn at %q; the one-line-change promise is broken\n%s", fragment, statement)
+		}
+	}
+}
