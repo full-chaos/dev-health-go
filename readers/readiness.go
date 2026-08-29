@@ -78,16 +78,26 @@ WHERE rn = 1`, DefaultRowLimit)
 // construction is the caller's job.
 type ReadinessProjectRow struct {
 	ProjectSubjectKey string
-	TeamID            string
-	TeamName          string
-	WorkScopeID       string
-	Provider          string
-	Day               string
-	EstimatedCount    int64
-	UnestimatedCount  int64
-	BacklogSize       int64
-	HasRatio          uint8
-	Ratio             float64
+	// HasTeam distinguishes an UNATTRIBUTED row from one attributed to a
+	// team (CHAOS-4521b). estimate_coverage_metrics_daily.team_id is
+	// Nullable, and before the project reads keyed on work_scope_id the
+	// team always came from the ownership join, where it could not be
+	// null -- so the case was unreachable and TeamID alone was enough.
+	// Reading the daily row directly makes it reachable, and a coalesce to
+	// "" would report an unattributed row as a team with an empty id:
+	// counted in team_count, cited as `acr:v1:team:`. Missing is not the
+	// same as a team whose name happens to be blank.
+	HasTeam          uint8
+	TeamID           string
+	TeamName         string
+	WorkScopeID      string
+	Provider         string
+	Day              string
+	EstimatedCount   int64
+	UnestimatedCount int64
+	BacklogSize      int64
+	HasRatio         uint8
+	Ratio            float64
 }
 
 // ReadProjectReadiness rolls estimate_coverage_metrics_daily up for a
@@ -114,20 +124,38 @@ func ReadProjectReadiness(ctx context.Context, client QueryClient, orgID string,
 	// that contributed to the same work scope. The org this was measured
 	// against has a single team, which is exactly why the defect was
 	// invisible there and would have shipped.
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), ec.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
+	// The team is reported from the ROW's own team_id. That column is
+	// Nullable, so has_team travels beside it (CHAOS-4521b): a coalesce
+	// alone would report an UNATTRIBUTED row as a team with an empty id.
+	//
+	// The coalesced value is aliased team_key, NOT team_id, and that is
+	// load-bearing. ClickHouse resolves aliases within the same SELECT, so
+	// `toUInt8(isNotNull(team_id)) AS has_team, ifNull(team_id, '') AS
+	// team_id` binds the isNotNull to the ALIAS -- which is never null --
+	// and has_team comes back 1 for every row, including the unattributed
+	// ones. Measured on ClickHouse 24.8: both rows reported has_team = 1
+	// until the alias was renamed. No fake-client test can see this; only
+	// running the statement does.
+	//
+	// team_id is back in the ORDER BY as well. Several teams can contribute
+	// rows for one work scope, the caller preserves this order and caps the
+	// first rows, so without it identical reads can reorder the public
+	// table or truncate DIFFERENT teams. (scope, provider, team) is unique
+	// per project after rn = 1, so the ordering is total.
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), ec.has_team, ec.team_key, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
 FROM `+ProjectIdentityJoinSQL()+`
 INNER JOIN (
-	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
+	SELECT toUInt8(isNotNull(team_id)) AS has_team, ifNull(team_id, '') AS team_key, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
 		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
 	FROM estimate_coverage_metrics_daily FINAL
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
 ) AS ec ON `+ProjectIdentityMatchSQL("ec", "work_scope_id")+` AND ec.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ec.team_id
-ORDER BY p.id, ec.work_scope_id, ec.provider`, DefaultRowLimit)
+LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ec.team_key
+ORDER BY p.id, ec.work_scope_id, ec.provider, ec.team_key`, DefaultRowLimit)
 	var rows []ReadinessProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectReadiness", statement, orgID, ids, func(row RowScanner) error {
 		var r ReadinessProjectRow
-		if err := row.Scan(&r.ProjectSubjectKey, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.Provider, &r.Day, &r.EstimatedCount, &r.UnestimatedCount, &r.BacklogSize, &r.HasRatio, &r.Ratio); err != nil {
+		if err := row.Scan(&r.ProjectSubjectKey, &r.HasTeam, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.Provider, &r.Day, &r.EstimatedCount, &r.UnestimatedCount, &r.BacklogSize, &r.HasRatio, &r.Ratio); err != nil {
 			return err
 		}
 		rows = append(rows, r)

@@ -67,8 +67,8 @@ func TestReadProjectWorkload(t *testing.T) {
 	t.Run("happy path returns one row per work scope the project owns", func(t *testing.T) {
 		t.Parallel()
 		client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{
-			{"linear:proj-1", "team-1", "Team One", "scope-a", float64(3.2), float64(0.8), uint8(0), int64(0), uint8(0), uint8(1), int64(120), "2026-07-27 04:00:00"},
-			{"linear:proj-1", "team-2", "Team Two", "scope-b", float64(9.0), float64(2.1), uint8(0), int64(0), uint8(0), uint8(0), int64(40), "2026-07-27 04:00:00"},
+			{"linear:proj-1", uint8(1), "team-1", "Team One", "scope-a", float64(3.2), float64(0.8), uint8(0), int64(0), uint8(0), uint8(1), int64(120), "2026-07-27 04:00:00"},
+			{"linear:proj-1", uint8(1), "team-2", "Team Two", "scope-b", float64(9.0), float64(2.1), uint8(0), int64(0), uint8(0), uint8(0), int64(40), "2026-07-27 04:00:00"},
 		}}}}
 		rows, err := readers.ReadProjectWorkload(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 		if err != nil {
@@ -87,7 +87,7 @@ func TestReadProjectWorkload(t *testing.T) {
 
 	t.Run("empty ids short-circuits without querying", func(t *testing.T) {
 		t.Parallel()
-		client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{{"linear:proj-1", "team-1", "Team One", "scope-a", float64(1), float64(1), uint8(0), int64(0), uint8(0), uint8(0), int64(1), "2026-07-27 04:00:00"}}}}}
+		client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{{"linear:proj-1", uint8(1), "team-1", "Team One", "scope-a", float64(1), float64(1), uint8(0), int64(0), uint8(0), uint8(0), int64(1), "2026-07-27 04:00:00"}}}}}
 		rows, err := readers.ReadProjectWorkload(context.Background(), client, "org-1", nil, readers.TimeBound{})
 		if err != nil || rows != nil {
 			t.Fatalf("rows = %#v, err = %v, want (nil, nil)", rows, err)

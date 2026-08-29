@@ -72,7 +72,11 @@ WHERE rn = 1`, DefaultRowLimit)
 // number), so every owning team's own latest per-scope forecast survives
 // verbatim. Grouping/breakdown-table construction is the caller's job.
 type WorkloadProjectRow struct {
-	ProjectSubjectKey   string
+	ProjectSubjectKey string
+	// HasTeam distinguishes an UNATTRIBUTED row from an attributed one --
+	// see ReadinessProjectRow.HasTeam for why the case became reachable.
+	// capacity_forecasts.team_id is Nullable too.
+	HasTeam             uint8
 	TeamID              string
 	TeamName            string
 	WorkScopeID         string
@@ -107,20 +111,24 @@ func ReadProjectWorkload(ctx context.Context, client QueryClient, orgID string, 
 	// second reason ProjectIdentityMatchSQL does not match on provider:
 	// a predicate this table cannot express must not be one the shared
 	// helper requires.
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), cf.team_id, ifNull(t.name, ''), ifNull(cf.work_scope_id, ''), cf.throughput_mean, cf.throughput_stddev, toUInt8(isNotNull(cf.p50_days)), toInt64(ifNull(cf.p50_days, 0)), cf.insufficient_history, cf.high_variance, toInt64(cf.backlog_size), toString(cf.computed_at)
+	// has_team beside team_id, and team_id back in the ORDER BY -- same
+	// reasoning as ReadProjectReadiness. (scope, team) is unique per
+	// project after rn = 1, so the ordering is total; capacity_forecasts
+	// has no provider column to add.
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), cf.has_team, cf.team_key, ifNull(t.name, ''), ifNull(cf.work_scope_id, ''), cf.throughput_mean, cf.throughput_stddev, toUInt8(isNotNull(cf.p50_days)), toInt64(ifNull(cf.p50_days, 0)), cf.insufficient_history, cf.high_variance, toInt64(cf.backlog_size), toString(cf.computed_at)
 FROM `+ProjectIdentityJoinSQL()+`
 INNER JOIN (
-	SELECT ifNull(team_id, '') AS team_id, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
+	SELECT toUInt8(isNotNull(team_id)) AS has_team, ifNull(team_id, '') AS team_key, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
 		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
 	FROM capacity_forecasts FINAL
 	WHERE org_id = {org_id:String}`+timeBound.TimestampPredicate("computed_at")+`
 ) AS cf ON `+ProjectIdentityMatchSQL("cf", "work_scope_id")+` AND cf.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = cf.team_id
-ORDER BY p.id, cf.work_scope_id`, DefaultRowLimit)
+LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = cf.team_key
+ORDER BY p.id, cf.work_scope_id, cf.team_key`, DefaultRowLimit)
 	var rows []WorkloadProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectWorkload", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkloadProjectRow
-		if err := row.Scan(&r.ProjectSubjectKey, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.ThroughputMean, &r.ThroughputStddev, &r.HasP50Days, &r.P50Days, &r.InsufficientHistory, &r.HighVariance, &r.BacklogSize, &r.ComputedAt); err != nil {
+		if err := row.Scan(&r.ProjectSubjectKey, &r.HasTeam, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.ThroughputMean, &r.ThroughputStddev, &r.HasP50Days, &r.P50Days, &r.InsufficientHistory, &r.HighVariance, &r.BacklogSize, &r.ComputedAt); err != nil {
 			return err
 		}
 		rows = append(rows, r)
