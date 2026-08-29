@@ -174,8 +174,18 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// project_key='PROJ1'): the pre-4521b key-to-key join matched 1 row,
 	// v0.5.0's two-armed join matched 0, and the three-armed join matches 1
 	// again. That 1 -> 0 -> 1 is the regression and its repair.
-	if !strings.Contains(statement, "tpo.project_key = p.project_key") {
+	if !strings.Contains(statement, "has(tpo.project_keys, p.project_key)") {
 		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
+	}
+	// codex P1: the grain must stay one row per (provider, project_id,
+	// team). team_project_ownership's sorting key carries `source` and
+	// `valid_from`, so FINAL keeps several rows per (project_id, team) and
+	// project_key -- which is NOT in that key -- can differ between them.
+	// Grouping by project_key would split a group that previously
+	// collapsed, duplicating the team and burning DefaultRowLimit before
+	// the caller's dedup runs.
+	if strings.Contains(statement, "GROUP BY provider, project_id, project_key") {
+		t.Errorf("project_key is back in the GROUP BY; multi-source ownership rows would duplicate the team\n%s", statement)
 	}
 	// codex P1: the ownership edge keeps its provider equality. "Equal ids
 	// are one project" is a statement about project identity, not a licence
@@ -211,9 +221,9 @@ func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T)
 	}
 	statement := client.queries[0].statement
 	for _, fragment := range []string{
-		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", ifNull(project_key, '') AS project_key, team_id",
+		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id, groupUniqArray(ifNull(project_key, '')) AS project_keys",
 		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
-		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", project_key, team_id",
+		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
 		"tpo." + readers.ProjectOwnershipJoinColumn + " = p.id",
 	} {
 		if !strings.Contains(statement, fragment) {

@@ -90,13 +90,36 @@ func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 	//
 	// Keeping arm 3 makes this change strictly ADDITIVE: nothing that
 	// resolved before stops resolving, and the UUID rows newly do.
-	legacyKeyArm := "(tpo.project_key != '' AND p.project_key != '' AND p.key_resolution_count = 1 AND tpo.project_key = p.project_key)"
+	// Arm 3 is a SEMI-join over the group's keys, not a column comparison
+	// (codex P1). team_project_ownership's sorting key is
+	// (org_id, provider, project_id, team_id, source, valid_from), so
+	// `source` and `valid_from` are part of it and FINAL legitimately keeps
+	// SEVERAL rows for one (project_id, team) -- a native and a manual
+	// assertion, say. project_key is NOT in that key, so those rows can
+	// carry DIFFERENT project_key values, which is exactly the shape the
+	// CHAOS-4530 transition produces (one row keyed, one nulled).
+	//
+	// Adding project_key to the GROUP BY would therefore SPLIT a group that
+	// previously collapsed, and both halves match arm 1 -- duplicating the
+	// team's contribution and, worse, consuming DefaultRowLimit before the
+	// caller's MarkSeen dedup ever runs, silently truncating other teams
+	// out of the answer. That is the precise hazard acr's
+	// chaos4347_metrics_widening_integration_test.go was written to catch
+	// ("collapse to ONE contribution (SQL-level GROUP BY, not just the
+	// Go-side dedup)").
+	//
+	// So the grain stays one row per (provider, project_id, team), and the
+	// keys are aggregated into an array the predicate tests membership in.
+	// Equality against ANY of the group's keys is what arm 3 means, and
+	// has() says that exactly -- where max() would have picked one
+	// arbitrarily.
+	legacyKeyArm := "(p.project_key != '' AND p.key_resolution_count = 1 AND has(tpo.project_keys, p.project_key))"
 	return ProjectIdentityJoinSQL() + `
 INNER JOIN (
-	SELECT provider, ` + ProjectOwnershipJoinColumn + `, ifNull(project_key, '') AS project_key, team_id
+	SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id, groupUniqArray(ifNull(project_key, '')) AS project_keys
 	FROM team_project_ownership FINAL
 	WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
-	GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, project_key, team_id
+	GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
 ) AS tpo ON tpo.provider = p.provider AND (` + ProjectIdentityMatchSQL("tpo", ProjectOwnershipJoinColumn) + ` OR ` + legacyKeyArm + `)`
 }
 
