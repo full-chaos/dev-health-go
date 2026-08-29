@@ -70,47 +70,89 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 // team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
 // which IS projects.project_key for that row).
 func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
-	// Arm 3 is a SEMI-join over the group's keys, not a column comparison
-	// (codex R1). team_project_ownership's sorting key is
-	// (org_id, provider, project_id, team_id, source, valid_from), so
-	// `source` and `valid_from` are part of it and FINAL legitimately keeps
-	// SEVERAL rows for one (project_id, team). project_key is NOT in that
-	// key, so those rows can carry DIFFERENT project_key values -- exactly
-	// the shape the CHAOS-4530 transition produces, one row keyed and one
-	// nulled. Grouping by project_key would split a group that previously
-	// collapsed; has() over the group's keys is what arm 3 MEANS, where
-	// max() would have picked one arbitrarily.
-	legacyKeyArm := "(p.project_key != '' AND p.key_resolution_count = 1 AND has(o.project_keys, p.project_key))"
-	// And the WHOLE join is collapsed to the RESOLVED grain (codex R2).
+	// THREE equality-joined arms, UNION ALL'd, then collapsed to the
+	// resolved grain. Every JOIN ON here is a plain column equality: no
+	// OR, no function call, no expression.
 	//
-	// Deduplicating inside the ownership subquery cannot be enough, because
-	// the duplication happens ACROSS project_id values that resolve to the
-	// SAME project: during the 4530 transition a team can hold both a
-	// legacy row (mismatched project_id, matching project_key -> arm 3) and
-	// a UUID-keyed row (-> arm 1) for one project. Those are different
-	// groups by construction, and both match.
+	// WHY that constraint (CHAOS-4521b, executed): a single ON clause
+	// carrying the three arms as an OR -- which is how this was first
+	// written, and what v0.5.0 shipped -- is rejected outright by
+	// ClickHouse's OLD analyzer:
 	//
-	// The consequence is not merely a repeated row: duplicates consume
-	// DefaultRowLimit before the caller's MarkSeen dedup ever runs, which
-	// silently truncates OTHER teams out of the answer. So the grain that
-	// matters is the one the caller actually consumes -- (provider,
-	// resolved project id, team) -- and the GROUP BY is applied after every
-	// arm has been given its chance to match.
+	//   Code: 403. DB::Exception: Unsupported JOIN ON conditions.
+	//   Unexpected '(((project_id = id) OR ...) OR (... has(project_keys,
+	//   project_key)))'
 	//
-	// This is why the fragment now exposes ONE alias, `p`, carrying
-	// team_id: there is no longer a separate `tpo` row to reference, and a
-	// caller that could still say `tpo.team_id` would be reading the
-	// pre-dedup grain.
-	return `(
-	SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
-	FROM ` + ProjectIdentityJoinSQL() + `
-	INNER JOIN (
-		SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id, groupUniqArray(ifNull(project_key, '')) AS project_keys
+	// acr's ClickHouse fixtures pin clickhouse-server:24.8 deliberately
+	// (cmd/acr-api/hosted_clickhouse_fixture_test.go asserts the server
+	// version has prefix "24.8."), and 24.8 defaults
+	// allow_experimental_analyzer OFF. Prod runs 26.7 with it ON, so the
+	// OR form is valid THERE and passed every local proof -- which is
+	// precisely why this was missed until CI ran the pinned fixtures. The
+	// equality-only form is portable: it needs no analyzer setting and
+	// holds on both engines.
+	//
+	// The arms, and what each is for:
+	//
+	//  1. o.project_id = p.id             -- CHAOS-4530's UUID-keyed rows.
+	//  2. o.project_id = p.project_key    -- today's GitLab rows, whose
+	//     project_id holds the project KEY while projects.id is
+	//     "{org}:gitlab:<numeric>".
+	//  3. o.project_key = p.project_key   -- the ORIGINAL join. An
+	//     ownership row may carry a project_id correlating with nothing
+	//     while its project_key is the only column tying it to a project;
+	//     dropping this arm reported a false "no owning teams" for exactly
+	//     the shape acr's chaos4347 fixture seeds on purpose.
+	//
+	// The non-empty and key_resolution_count guards move to WHERE, where
+	// they are ordinary predicates rather than JOIN conditions -- the same
+	// semantics, expressible on both analyzers.
+	//
+	// The outer GROUP BY is what makes the arms safe to union. A team can
+	// legitimately match through more than one arm at once (during the
+	// 4530 transition it holds both a legacy and a UUID-keyed row), and it
+	// can hold several ownership rows per project because `source` and
+	// `valid_from` are in team_project_ownership's sorting key. Both would
+	// otherwise duplicate the team -- and a duplicate consumes
+	// DefaultRowLimit before the caller's MarkSeen dedup runs, silently
+	// truncating OTHER teams out of the answer. Collapsing at the grain the
+	// caller consumes, (provider, resolved project id, team), removes both
+	// at once.
+	projects := ProjectIdentityJoinSQL()
+	ownershipByID := `(
+		SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id
 		FROM team_project_ownership FINAL
 		WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
 		GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
-	) AS o ON o.provider = p.provider AND (` + ProjectIdentityMatchSQL("o", ProjectOwnershipJoinColumn) + ` OR ` + legacyKeyArm + `)
-	GROUP BY p.provider, p.id, o.team_id
+	) AS o`
+	ownershipByKey := `(
+		SELECT provider, ifNull(project_key, '') AS project_key, team_id
+		FROM team_project_ownership FINAL
+		WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
+		GROUP BY provider, project_key, team_id
+	) AS o`
+	keyGuard := `
+	WHERE p.project_key != '' AND p.key_resolution_count = 1`
+	return `(
+	SELECT provider, id, team_id
+	FROM (
+		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
+		FROM ` + projects + `
+		INNER JOIN ` + ownershipByID + ` ON o.provider = p.provider AND o.` + ProjectOwnershipJoinColumn + ` = p.id
+
+		UNION ALL
+
+		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
+		FROM ` + projects + `
+		INNER JOIN ` + ownershipByID + ` ON o.provider = p.provider AND o.` + ProjectOwnershipJoinColumn + ` = p.project_key` + keyGuard + `
+
+		UNION ALL
+
+		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
+		FROM ` + projects + `
+		INNER JOIN ` + ownershipByKey + ` ON o.provider = p.provider AND o.project_key = p.project_key` + keyGuard + `
+	)
+	GROUP BY provider, id, team_id
 ) AS p`
 }
 

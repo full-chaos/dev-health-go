@@ -161,6 +161,21 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	if !strings.Contains(statement, "o.project_id = p.id") {
 		t.Errorf("ownership join does not key on o.project_id = p.id\n%s", statement)
 	}
+	// CHAOS-4521b: every JOIN ON must be a plain column equality. A single
+	// ON carrying the arms as an OR -- what v0.5.0 shipped -- is rejected
+	// by ClickHouse's OLD analyzer with "Code: 403 Unsupported JOIN ON
+	// conditions", and acr's fixtures pin 24.8, where that analyzer is the
+	// default. Prod runs 26.7 with the new one, so the OR form passed every
+	// local proof and only CI caught it.
+	for _, onClause := range strings.Split(statement, "ON ")[1:] {
+		condition := strings.SplitN(onClause, "\n", 2)[0]
+		if strings.Contains(condition, " OR ") || strings.Contains(condition, "has(") {
+			t.Errorf("a JOIN ON condition is not a plain equality (%q); the old analyzer rejects it\n%s", condition, statement)
+		}
+	}
+	if !strings.Contains(statement, "UNION ALL") {
+		t.Errorf("the arms are not expressed as unioned equality joins\n%s", statement)
+	}
 	// The key-to-key arm STAYS (codex P1 on acr #331). Removing it looked
 	// like the point of this change and was not: an ownership row can carry
 	// a project_id correlating with nothing while its project_key is the
@@ -174,7 +189,7 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// project_key='PROJ1'): the pre-4521b key-to-key join matched 1 row,
 	// v0.5.0's two-armed join matched 0, and the three-armed join matches 1
 	// again. That 1 -> 0 -> 1 is the regression and its repair.
-	if !strings.Contains(statement, "has(o.project_keys, p.project_key)") {
+	if !strings.Contains(statement, "o.project_key = p.project_key") {
 		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
 	}
 	// codex P1: the grain must stay one row per (provider, project_id,
@@ -184,7 +199,7 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// Grouping by project_key would split a group that previously
 	// collapsed, duplicating the team and burning DefaultRowLimit before
 	// the caller's dedup runs.
-	if strings.Contains(statement, "GROUP BY provider, project_id, project_key") {
+	if strings.Contains(statement, "GROUP BY provider, project_id, project_key, team_id") {
 		t.Errorf("project_key is back in the GROUP BY; multi-source ownership rows would duplicate the team\n%s", statement)
 	}
 	// codex R2: the whole join collapses to the RESOLVED grain. Deduping
@@ -194,7 +209,7 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// construction and both match. Duplicates then consume DefaultRowLimit
 	// before the caller's MarkSeen dedup runs, truncating OTHER teams out
 	// of the answer.
-	if !strings.Contains(statement, "GROUP BY p.provider, p.id, o.team_id") {
+	if !strings.Contains(statement, "GROUP BY provider, id, team_id") {
 		t.Errorf("ownership join is not collapsed to the resolved (provider, project id, team) grain\n%s", statement)
 	}
 	// codex P1: the ownership edge keeps its provider equality. "Equal ids
@@ -231,7 +246,7 @@ func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T)
 	}
 	statement := client.queries[0].statement
 	for _, fragment := range []string{
-		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id, groupUniqArray(ifNull(project_key, '')) AS project_keys",
+		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
 		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
 		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
 		"o." + readers.ProjectOwnershipJoinColumn + " = p.id",
