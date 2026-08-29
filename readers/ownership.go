@@ -64,7 +64,7 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 //     projects' project_key still nil -- a project_key join would match
 //     NOTHING, taking health/investment/landscape to zero on deploy.
 //
-// The two-armed identity match survives both: the id arm picks up the
+// The two-armed identity match survives both: the SCOPE arm picks up the
 // UUID-keyed rows the moment they land, and the project_key arm keeps
 // matching the key-shaped GitLab rows that exist today (their
 // team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
@@ -74,10 +74,18 @@ func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 	// grain. Every JOIN ON here is a plain column equality -- see
 	// ProjectIdentityJoinSQL for why ClickHouse 24.8 makes that mandatory.
 	//
-	//  A. o.project_id = p.scope        -- covers BOTH id spaces at once,
-	//     because p.scope already carries the canonical id AND the project
-	//     key as separate rows: CHAOS-4530's UUID-keyed rows match the id
-	//     row, today's GitLab rows match the key row.
+	//  A. o.project_id = p.scope        -- the SCOPE arm. It matches scope
+	//     rows of BOTH kinds deliberately, and must NOT be given a
+	//     scope_kind restriction: project_id is not an id column, it is
+	//     whichever id space that row happens to use, and today's GitLab
+	//     rows hold a project KEY there. Restricting this arm to
+	//     scope_kind = 'id' would drop them -- the same arm has already
+	//     been dropped three separate times.
+	//
+	//     Leaving it unrestricted is safe only because an ambiguous key has
+	//     no scope row at all (ProjectIdentityJoinSQL applies the ambiguity
+	//     filter INSIDE the expansion), so this arm cannot resolve one
+	//     either. Only the arm naming project_key needs scope_kind = 'key'.
 	//  B. o.project_key = p.project_key -- the ORIGINAL join, kept. An
 	//     ownership row may carry a project_id correlating with nothing
 	//     while its project_key is the only column tying it to a project;
@@ -117,8 +125,8 @@ func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 
 		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
 		FROM ` + projects + `
-		INNER JOIN ` + ownershipByKey + ` ON o.provider = p.provider AND o.project_key = p.project_key
-		WHERE p.project_key != '' AND p.key_resolution_count = 1
+		INNER JOIN ` + ownershipByKey + ` ON o.provider = p.provider AND o.project_key = p.scope
+		WHERE p.scope_kind = 'key'
 	)
 	GROUP BY provider, id, team_id
 ) AS p`
@@ -254,15 +262,30 @@ func projectIdentityExpansionSQL(rows string) string {
 	//
 	// A project-level number that reads like a per-match one is a footgun,
 	// so it is removed rather than documented.
+	// scope_kind is aggregated, NOT grouped by (codex R1 on this change).
+	// The GROUP BY below exists to collapse the two branches where they
+	// produce the same scope row -- a project whose id EQUALS its
+	// project_key emits one from each. Adding scope_kind to the grouping
+	// makes those rows differ, so they both survive, and the scope arm
+	// matches both: ReadProjectWorkload and ReadProjectReadiness have no
+	// outer GROUP BY of their own, so every matching source row comes back
+	// twice and burns DefaultRowLimit at double rate -- silently truncating
+	// OTHER projects out of the answer, which is the same failure mode the
+	// resolved-grain collapse in ProjectOwnershipJoinSQL exists to prevent.
+	//
+	// max() keeps the discriminator without splitting the identity: 'key'
+	// sorts above 'id', so a row reachable as BOTH is labelled 'key' and the
+	// key arm still matches it -- which is correct, since that key really
+	// does resolve to this project.
 	return `(
-	SELECT provider, id, project_key, key_resolution_count, scope
+	SELECT provider, id, project_key, key_resolution_count, scope, max(scope_kind) AS scope_kind
 	FROM (
-		SELECT provider, id, project_key, toUInt64(1) AS key_resolution_count, id AS scope
+		SELECT provider, id, project_key, toUInt64(1) AS key_resolution_count, id AS scope, 'id' AS scope_kind
 		FROM (` + rows + `)
 
 		UNION ALL
 
-		SELECT provider, id, project_key, key_resolution_count, project_key AS scope
+		SELECT provider, id, project_key, key_resolution_count, project_key AS scope, 'key' AS scope_kind
 		FROM (` + rows + `)
 		WHERE project_key != '' AND key_resolution_count = 1
 	)
@@ -297,6 +320,17 @@ const projectIdentityCatalogRowsSQL = `
 // ProjectIdentityMatchSQL returns the ON predicate pairing a column that
 // carries PROJECT IDENTITY -- a work_scope_id, or team_project_ownership's
 // own project column -- with the subject ProjectIdentityJoinSQL resolved.
+//
+// This is the SCOPE arm, and it matches scope rows of BOTH kinds on
+// purpose. The column it is given is not an id column: it is whichever id
+// space that row happens to use, and today's GitLab rows carry a project
+// KEY in project_id/work_scope_id. Never add a scope_kind restriction here
+// -- it would drop them, which is the same arm that has already been
+// dropped three separate times (CHAOS-4521b, CHAOS-4542).
+//
+// Leaving it unrestricted is safe only because an ambiguous key has no
+// scope row at all, so this arm cannot resolve one either. Only the arm
+// naming project_key carries scope_kind = 'key'.
 //
 // A plain column equality by construction: the alternatives live in
 // ProjectIdentityJoinSQL's rows, not in this predicate, because 24.8

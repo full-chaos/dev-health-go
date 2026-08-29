@@ -117,6 +117,34 @@ PR merges.
 
 ### Release notes
 
+**v0.5.4 — do not pin. Superseded by v0.5.5.**
+
+It regresses ambiguous-key attribution, and the failure is a
+**misattribution** rather than a missing row — strictly worse than the bug
+it fixed. Two projects sharing one `project_key`, plus an ownership row
+carrying that key and a `project_id` correlating with nothing, resolve the
+owning team onto **both** projects. acr's
+`TestCHAOS4347WideningAgainstRealClickHouse` is green on v0.5.3 and red on
+v0.5.4 with no other change.
+
+v0.5.4 was right that `key_resolution_count` is a per-scope-row property:
+an id match is unambiguous by construction, so its count is 1. What it
+missed is that a second reader was consulting the same column for a
+different question. The ownership key arm joined `o.project_key =
+p.project_key` — a column every scope row carries — and guarded itself with
+`p.key_resolution_count = 1`, meaning "this key names exactly one project".
+Once id rows reported 1, an id row satisfied that guard. Under v0.5.3 the
+id row happened to carry the project-level count and blocked it:
+accidentally correct, for a reason nobody had written down.
+
+**v0.5.5 stops asking one column two questions.** The expansion labels each
+scope row with `scope_kind` (`'id'` or `'key'`), the ambiguity filter moves
+INSIDE the expansion so an ambiguous key has **no scope row at all**, and
+the key arm matches that row (`o.project_key = p.scope` with
+`p.scope_kind = 'key'`). `key_resolution_count` survives as telemetry and is
+never a join or guard input. A consumer can no longer join an ambiguous key
+by forgetting a guard, because there is nothing to join.
+
 **v0.5.0 — do not pin. Superseded by v0.5.1.**
 
 Its project-ownership `JOIN ... ON` carries the identity arms as an `OR`.
