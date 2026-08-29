@@ -70,13 +70,58 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 // team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
 // which IS projects.project_key for that row).
 func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
-	return ProjectIdentityJoinSQL() + `
-INNER JOIN (
-	SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id
-	FROM team_project_ownership FINAL
-	WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
-	GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
-) AS tpo ON tpo.provider = p.provider AND ` + ProjectIdentityMatchSQL("tpo", ProjectOwnershipJoinColumn)
+	// TWO equality-joined arms, UNION ALL'd, then collapsed to the resolved
+	// grain. Every JOIN ON here is a plain column equality -- see
+	// ProjectIdentityJoinSQL for why ClickHouse 24.8 makes that mandatory.
+	//
+	//  A. o.project_id = p.scope        -- covers BOTH id spaces at once,
+	//     because p.scope already carries the canonical id AND the project
+	//     key as separate rows: CHAOS-4530's UUID-keyed rows match the id
+	//     row, today's GitLab rows match the key row.
+	//  B. o.project_key = p.project_key -- the ORIGINAL join, kept. An
+	//     ownership row may carry a project_id correlating with nothing
+	//     while its project_key is the only column tying it to a project;
+	//     dropping this arm reported a false "no owning teams" for exactly
+	//     the shape acr's chaos4347 fixture seeds on purpose.
+	//
+	// The outer GROUP BY is what makes the arms safe to union. A team can
+	// match through both at once (during the CHAOS-4530 transition it holds
+	// a legacy AND a UUID-keyed row), and it can hold several ownership
+	// rows per project because `source` and `valid_from` are in
+	// team_project_ownership's sorting key. Either would duplicate the team
+	// -- and a duplicate consumes DefaultRowLimit before the caller's
+	// MarkSeen dedup runs, silently truncating OTHER teams out of the
+	// answer. Collapsing at the grain the caller consumes, (provider,
+	// resolved project id, team), removes both at once.
+	projects := ProjectIdentityJoinSQL()
+	ownershipByID := `(
+		SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id
+		FROM team_project_ownership FINAL
+		WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
+		GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
+	) AS o`
+	ownershipByKey := `(
+		SELECT provider, ifNull(project_key, '') AS project_key, team_id
+		FROM team_project_ownership FINAL
+		WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
+		GROUP BY provider, project_key, team_id
+	) AS o`
+	return `(
+	SELECT provider, id, team_id
+	FROM (
+		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
+		FROM ` + projects + `
+		INNER JOIN ` + ownershipByID + ` ON o.provider = p.provider AND ` + ProjectIdentityMatchSQL("o", ProjectOwnershipJoinColumn) + `
+
+		UNION ALL
+
+		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
+		FROM ` + projects + `
+		INNER JOIN ` + ownershipByKey + ` ON o.provider = p.provider AND o.project_key = p.project_key
+		WHERE p.project_key != '' AND p.key_resolution_count = 1
+	)
+	GROUP BY provider, id, team_id
+) AS p`
 }
 
 // ProjectOwnershipJoinColumn names the team_project_ownership column that
@@ -121,119 +166,89 @@ func RepresentableInt64(value uint64) (int64, bool) {
 }
 
 // ProjectIdentityJoinSQL resolves each requested project subject to the
-// work-scope ids its OWN rows carry, with NO team-ownership hop
-// (CHAOS-4521b).
+// identity values it answers to, ONE ROW PER VALUE, so a caller can join a
+// project-identity column on a plain equality against `p.scope`.
 //
-// WHY a second project join exists beside ProjectOwnershipJoinSQL, rather
-// than replacing it: the two answer different questions, and only some
-// source tables can answer the first.
+// WHY rows instead of an OR in the caller's ON clause (CHAOS-4521b,
+// executed): ClickHouse 24.8 -- which acr's fixtures pin deliberately,
+// asserting the server version prefix "24.8." -- rejects a JOIN ON
+// containing OR or a function call, under BOTH analyzer settings:
 //
-//   - A work-scope-keyed table (estimate_coverage_metrics_daily,
-//     capacity_forecasts, work_item_metrics_daily) carries the project's
-//     OWN rows: `work_scope_id` is work_items.project_id, verified against
-//     live data and asserted by dev-health-ops' own oracle
-//     (github_work_item_derived_surfaces_oracle_test.go: "same
-//     work_scope_id (project_id)"). A project fact reads from those rows
-//     directly.
-//   - A team-scoped-by-construction table (investment_metrics_daily keyed
-//     by repo_id/team_id, compounding_risk_daily keyed by
-//     scope='repo'/'team') has no project dimension at all. Reaching a
-//     project there REQUIRES the ownership hop, and
-//     ProjectOwnershipJoinSQL stays the only way.
+//	Code: 403. DB::Exception: Unsupported JOIN ON conditions.
 //
-// The ownership hop was wrong for the first group in two independent ways,
-// both observed on live data (org 70d529e0, 2026-08-29):
+// Prod runs 26.7 with the new analyzer, where the OR form is valid, which
+// is why it passed every local proof and only CI's pinned fixtures caught
+// it. Expanding the alternatives into rows and joining on equality is
+// portable across both engines and needs no analyzer setting.
 //
-//  1. It could not reach a real project AT ALL. It joins
-//     projects.project_key to team_project_ownership.project_key, and every
-//     real Linear project carries project_key NULL -- the only non-empty
-//     Linear key is the `{org}:linear:<teamKey>` pseudo-project a team-key
-//     fallback writes. So the join matched the team pseudo-row and nothing
-//     else, and each project rollup returned zero rows (CHAOS-4530).
-//  2. When it DID resolve, it returned the wrong rows. The readers joined
-//     the daily table on team_id alone and never constrained
-//     work_scope_id, so a "project" fact was built from every work scope
-//     its owning team touched -- other projects' rows included.
+// The two identity values, and why each exists:
 //
-// Matching: `work_scope_id` equals either the project's canonical id (the
-// Linear shape: a project UUID) or its project_key (the GitLab shape:
-// `full.chaos/dev-health-ops`, while projects.id is
-// `{org}:gitlab:<numeric>`). Resolving both from `projects` once, here,
-// is what keeps this provider-agnostic without a per-provider branch.
-//
-// The project_key arm keeps ProjectOwnershipJoinSQL's
-// key_resolution_count = 1 guard: an ambiguous key must not attribute one
-// project's rows to another. The id arm needs no such guard -- projects.id
-// is unique by construction.
-//
-// `provider` is deliberately NOT part of THIS predicate, and the two
-// callers differ on it for reasons specific to each (codex P1, adjudicated
-// rather than applied wholesale):
-//
-//   - The work-scope readers do not add it. Cross-provider equal ids are
-//     ONE project by design in this data model (Linear imports GitHub), so
-//     requiring provider equality would drop legitimate rows rather than
-//     prevent a leak -- and capacity_forecasts has no provider column to
-//     match on at all.
-//   - ProjectOwnershipJoinSQL DOES add `tpo.provider = p.provider`
-//     alongside it. The ownership edge already had that equality before
-//     CHAOS-4521b, and dropping it would have been an unrequested widening
-//     on a join that decides which TEAMS a project inherits. "Equal ids are
-//     one project" is a statement about project identity, not a licence to
-//     merge two providers' ownership catalogs.
-//
-// Org scoping is unaffected either way: every subquery here and in every
-// caller filters on {org_id:String}.
-//
-// Selects p.provider and p.id so a caller can rebuild the
-// "<provider>:<id>" project subject key, exactly as ProjectOwnershipJoinSQL
-// does, and p.project_key / p.key_resolution_count so the caller's own ON
-// clause can express the match through ProjectIdentityMatchSQL.
-//
-// The name is deliberately NOT "work scope": ProjectOwnershipJoinSQL now
-// resolves its project the same way, so one subject resolution serves both
-// the work-scope-keyed tables and the ownership edge.
-func ProjectIdentityJoinSQL() string {
-	return `(
-	SELECT id, provider, project_key, key_resolution_count
-	FROM (
-		SELECT id, provider, ifNull(project_key, '') AS project_key,
-			count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
-		FROM projects FINAL
-		WHERE org_id = {org_id:String}
-	)
-	WHERE concat(provider, ':', id) IN {ids:Array(String)}
-) AS p`
-}
-
-// ProjectIdentityMatchSQL returns the ON predicate pairing a column that
-// carries PROJECT IDENTITY -- a work_scope_id, or
-// team_project_ownership's own project column -- with the project subject
-// ProjectIdentityJoinSQL resolved.
-//
-// Two id spaces coexist in those columns and neither is going away, which
-// is why the predicate has two arms rather than one:
-//
-//   - the canonical id (`p.id`): a Linear project UUID, and the space
-//     CHAOS-4530's reworked ownership rows key on;
-//   - the project key (`p.project_key`): the GitLab shape, where
-//     work_scope_id and team_project_ownership.project_id both hold
+//   - the canonical id: a Linear project UUID, and the space CHAOS-4530's
+//     ownership rows key on;
+//   - the project key: the GitLab shape, where work_scope_id and
+//     team_project_ownership.project_id both hold
 //     `full.chaos/dev-health-ops` while projects.id is
 //     `{org}:gitlab:<numeric>`.
 //
-// Keeping both arms is what makes the ownership join survive CHAOS-4530
-// in BOTH directions: it matches the UUID-keyed rows the moment they land,
-// and it keeps matching the key-shaped GitLab rows that exist today. A
-// single-arm join on either space alone would take a provider to zero.
+// The key row is emitted only for a NON-EMPTY, UNAMBIGUOUS key: every real
+// Linear project carries project_key NULL (coalesced to ”), which must
+// never match a stray empty identity, and an ambiguous key must never
+// attribute one project's rows to another.
+//
+// The GROUP BY collapses id == project_key to a single scope row, so a
+// caller cannot double-count a project whose two identity values coincide.
+//
+// `provider` is carried but deliberately NOT compared by
+// ProjectIdentityMatchSQL -- see that function.
+func ProjectIdentityJoinSQL() string {
+	return `(
+	SELECT provider, id, project_key, key_resolution_count, scope
+	FROM (
+		SELECT provider, id, project_key, key_resolution_count, id AS scope
+		FROM (` + projectIdentityRowsSQL + `)
+
+		UNION ALL
+
+		SELECT provider, id, project_key, key_resolution_count, project_key AS scope
+		FROM (` + projectIdentityRowsSQL + `)
+		WHERE project_key != '' AND key_resolution_count = 1
+	)
+	GROUP BY provider, id, project_key, key_resolution_count, scope
+) AS p`
+}
+
+// projectIdentityRowsSQL resolves the REQUESTED project subjects out of
+// `projects`, carrying the ambiguity count the key row is guarded on. It is
+// the single place `projects` is read, so the two identity rows above
+// cannot drift in what they resolve.
+const projectIdentityRowsSQL = `
+		SELECT id, provider, project_key, key_resolution_count
+		FROM (
+			SELECT id, provider, ifNull(project_key, '') AS project_key,
+				count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
+			FROM projects FINAL
+			WHERE org_id = {org_id:String}
+		)
+		WHERE concat(provider, ':', id) IN {ids:Array(String)}`
+
+// ProjectIdentityMatchSQL returns the ON predicate pairing a column that
+// carries PROJECT IDENTITY -- a work_scope_id, or team_project_ownership's
+// own project column -- with the subject ProjectIdentityJoinSQL resolved.
+//
+// A plain column equality by construction: the alternatives live in
+// ProjectIdentityJoinSQL's rows, not in this predicate, because 24.8
+// rejects an ON containing OR or a function call outright.
+//
+// `provider` is not compared here. Cross-provider equal ids are ONE project
+// by design in this data model (Linear imports GitHub), so requiring
+// provider equality on a work-scope read would DROP legitimate rows rather
+// than prevent a leak -- and capacity_forecasts has no provider column at
+// all. ProjectOwnershipJoinSQL adds `o.provider = p.provider` itself,
+// because the ownership edge decides which TEAMS a project inherits and
+// already had that equality before CHAOS-4521b.
 //
 // alias and column are internal Go string literals at every call site,
-// never caller-supplied text, so they carry no injection surface -- the
-// same discipline WithRowLimit's own limit literal follows.
-//
-// The empty-key test is what stops a project whose project_key is NULL
-// (every real Linear project) from matching a daily row whose
-// work_scope_id happens to be the empty string.
+// never caller-supplied, so inlining them carries no injection surface.
 func ProjectIdentityMatchSQL(alias, column string) string {
-	qualified := alias + "." + column
-	return "(" + qualified + " = p.id OR (p.project_key != '' AND p.key_resolution_count = 1 AND " + qualified + " = p.project_key))"
+	return alias + "." + column + " = p.scope"
 }

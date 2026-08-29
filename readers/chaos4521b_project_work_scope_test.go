@@ -75,16 +75,21 @@ func TestChaos4521b_ProjectReadersKeyOnTheProjectsOwnWorkScope(t *testing.T) {
 			// by its canonical id (the Linear shape) or its project_key
 			// (the GitLab shape). Selecting work_scope_id without
 			// constraining it is the defect in 2 above.
-			if !strings.Contains(statement, "work_scope_id = p.id") {
-				t.Errorf("statement does not match work_scope_id against the project id\n%s", statement)
+			// CHAOS-4521b re-plan: the alternatives moved OUT of the ON
+			// clause and into ProjectIdentityJoinSQL's rows, because 24.8
+			// rejects an ON containing OR. The join is now a plain equality
+			// against p.scope, and the two identity values are the two
+			// unioned scope rows.
+			if !strings.Contains(statement, "work_scope_id = p.scope") {
+				t.Errorf("statement does not match work_scope_id against the resolved identity scope\n%s", statement)
 			}
-			if !strings.Contains(statement, "work_scope_id = p.project_key") {
-				t.Errorf("statement does not match work_scope_id against the project key (the GitLab shape)\n%s", statement)
+			if !strings.Contains(statement, "id AS scope") || !strings.Contains(statement, "project_key AS scope") {
+				t.Errorf("the identity resolution does not expand BOTH the canonical id and the project key into scope rows\n%s", statement)
 			}
 			// (3) The project_key arm keeps the ambiguity guard: an
 			// ambiguous key must never attribute one project's rows to
 			// another. The id arm needs none -- projects.id is unique.
-			if !strings.Contains(statement, "p.key_resolution_count = 1") {
+			if !strings.Contains(statement, "key_resolution_count = 1") {
 				t.Errorf("statement drops the ambiguous-project_key guard\n%s", statement)
 			}
 			// (4) codex P1: team_id stays in the row_number partition.
@@ -150,31 +155,81 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	if !strings.Contains(statement, "team_project_ownership") {
 		t.Fatalf("the team-scoped rollup must keep the ownership hop\n%s", statement)
 	}
-	// ...but it is keyed on the project identity column, not project_key.
+	// ...and it now ALSO keys on the project identity column, which is the
+	// arm CHAOS-4530's UUID-keyed rows need.
 	//
 	// The column is spelled as a LITERAL here, not via
 	// readers.ProjectOwnershipJoinColumn, so this test still COMPILES at
 	// the parent commit and fails there on the assertion rather than on a
 	// missing symbol -- a build error is not a behavioural red. The
 	// constant is coupled to the SQL by its own test below.
-	if !strings.Contains(statement, "tpo.project_id = p.id") {
-		t.Errorf("ownership join does not key on tpo.project_id = p.id\n%s", statement)
+	if !strings.Contains(statement, "o.project_id = p.scope") {
+		t.Errorf("ownership join does not key on o.project_id = p.scope\n%s", statement)
 	}
-	if strings.Contains(statement, "tpo.project_key = p.project_key") {
-		t.Errorf("ownership join still keys on project_key, which reaches no real Linear project today and matches nothing after CHAOS-4530\n%s", statement)
+	// CHAOS-4521b: every JOIN ON must be a plain column equality. A single
+	// ON carrying the arms as an OR -- what v0.5.0 shipped -- is rejected
+	// by ClickHouse's OLD analyzer with "Code: 403 Unsupported JOIN ON
+	// conditions", and acr's fixtures pin 24.8, where that analyzer is the
+	// default. Prod runs 26.7 with the new one, so the OR form passed every
+	// local proof and only CI caught it.
+	for _, onClause := range strings.Split(statement, "ON ")[1:] {
+		condition := strings.SplitN(onClause, "\n", 2)[0]
+		if strings.Contains(condition, " OR ") || strings.Contains(condition, "has(") {
+			t.Errorf("a JOIN ON condition is not a plain equality (%q); the old analyzer rejects it\n%s", condition, statement)
+		}
+	}
+	if !strings.Contains(statement, "UNION ALL") {
+		t.Errorf("the arms are not expressed as unioned equality joins\n%s", statement)
+	}
+	// The key-to-key arm STAYS (codex P1 on acr #331). Removing it looked
+	// like the point of this change and was not: an ownership row can carry
+	// a project_id correlating with nothing while its project_key is the
+	// only column tying it to a project. Dropping it would report a false
+	// "no owning teams" for exactly that shape, which acr's
+	// chaos4347_metrics_widening_integration_test.go seeds on purpose
+	// ("legacy-mismatched-project-id"). Three arms, all load-bearing.
+	// Executed on a real ClickHouse with the chaos4347 shape as literals
+	// (projects.id='proj-1-internal-id' / project_key='PROJ1' against
+	// team_project_ownership.project_id='legacy-mismatched-project-id' /
+	// project_key='PROJ1'): the pre-4521b key-to-key join matched 1 row,
+	// v0.5.0's two-armed join matched 0, and the three-armed join matches 1
+	// again. That 1 -> 0 -> 1 is the regression and its repair.
+	if !strings.Contains(statement, "o.project_key = p.project_key") {
+		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
+	}
+	// codex P1: the grain must stay one row per (provider, project_id,
+	// team). team_project_ownership's sorting key carries `source` and
+	// `valid_from`, so FINAL keeps several rows per (project_id, team) and
+	// project_key -- which is NOT in that key -- can differ between them.
+	// Grouping by project_key would split a group that previously
+	// collapsed, duplicating the team and burning DefaultRowLimit before
+	// the caller's dedup runs.
+	if strings.Contains(statement, "GROUP BY provider, project_id, project_key, team_id") {
+		t.Errorf("project_key is back in the GROUP BY; multi-source ownership rows would duplicate the team\n%s", statement)
+	}
+	// codex R2: the whole join collapses to the RESOLVED grain. Deduping
+	// inside the ownership subquery is not enough -- during the 4530
+	// transition a team can hold a legacy row (matching through arm 3) AND
+	// a UUID row (arm 1) for one project, which are different groups by
+	// construction and both match. Duplicates then consume DefaultRowLimit
+	// before the caller's MarkSeen dedup runs, truncating OTHER teams out
+	// of the answer.
+	if !strings.Contains(statement, "GROUP BY provider, id, team_id") {
+		t.Errorf("ownership join is not collapsed to the resolved (provider, project id, team) grain\n%s", statement)
 	}
 	// codex P1: the ownership edge keeps its provider equality. "Equal ids
 	// are one project" is a statement about project identity, not a licence
 	// to merge two providers' ownership catalogs -- and this join decides
 	// which TEAMS a project inherits.
-	if !strings.Contains(statement, "tpo.provider = p.provider") {
+	if !strings.Contains(statement, "o.provider = p.provider") {
 		t.Errorf("ownership join dropped provider equality; a project must not inherit another provider's teams\n%s", statement)
 	}
 	// The GitLab arm survives: those ownership rows carry the project KEY
 	// in the identity column while projects.id is `{org}:gitlab:<numeric>`.
 	// Dropping this arm would take GitLab to zero the other way.
-	if !strings.Contains(statement, "tpo.project_id = p.project_key") {
-		t.Errorf("ownership join dropped the project_key arm; GitLab ownership rows key on it today\n%s", statement)
+	// The GitLab arm survives as a scope ROW rather than an ON alternative.
+	if !strings.Contains(statement, "project_key AS scope") {
+		t.Errorf("ownership join dropped the project_key identity row; GitLab ownership rows key on it today\n%s", statement)
 	}
 	// A project whose project_key is NULL (every real Linear project) must
 	// no longer be filtered out before the join is even evaluated.
@@ -200,7 +255,7 @@ func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T)
 		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
 		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
 		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
-		"tpo." + readers.ProjectOwnershipJoinColumn + " = p.id",
+		"o." + readers.ProjectOwnershipJoinColumn + " = p.scope",
 	} {
 		if !strings.Contains(statement, fragment) {
 			t.Errorf("statement does not use ProjectOwnershipJoinColumn at %q; the one-line-change promise is broken\n%s", fragment, statement)

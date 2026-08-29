@@ -97,16 +97,16 @@ func ReadProjectInvestment(ctx context.Context, client QueryClient, orgID string
 		return nil, nil
 	}
 	ownershipPredicate := OwnershipValidityPredicate(timeBound)
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), im.investment_area, im.project_stream, toString(im.day), toInt64(im.delivery_units), toInt64(im.work_items_completed), toInt64(im.prs_merged), im.churn_loc, im.cycle_p50_hours
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), p.team_id, ifNull(t.name, ''), im.investment_area, im.project_stream, toString(im.day), toInt64(im.delivery_units), toInt64(im.work_items_completed), toInt64(im.prs_merged), im.churn_loc, im.cycle_p50_hours
 FROM `+ProjectOwnershipJoinSQL(ownershipPredicate)+`
 INNER JOIN (
 	SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
 		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
 	FROM investment_metrics_daily
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
-) AS im ON im.team_id = tpo.team_id AND im.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
-ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`, DefaultRowLimit)
+) AS im ON im.team_id = p.team_id AND im.rn = 1
+LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = p.team_id
+ORDER BY p.id, p.team_id, im.investment_area, im.project_stream`, DefaultRowLimit)
 	var rows []InvestmentProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectInvestment", statement, orgID, ids, func(row RowScanner) error {
 		var r InvestmentProjectRow

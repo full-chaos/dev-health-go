@@ -114,3 +114,39 @@ require github.com/full-chaos/dev-health-go v0.1.0
 During development, a consumer may point a `replace` directive at a local
 checkout of this repo; that directive must be removed before the consumer's
 PR merges.
+
+### Release notes
+
+**v0.5.0 — do not pin. Superseded by v0.5.1.**
+
+Its project-ownership `JOIN ... ON` carries the identity arms as an `OR`.
+That is valid on prod (ClickHouse 26.7, `allow_experimental_analyzer` ON)
+but **not portable to the old analyzer**: ClickHouse 24.8 — which acr's
+container fixtures pin deliberately, asserting the server version prefix
+`"24.8."` — rejects it under both analyzer settings with
+`Code: 403 … Unsupported JOIN ON conditions`. acr's `chaos4347` and
+`chaos4363` fixtures fail against it.
+
+v0.5.1 expresses the same arms as equality-joined SELECTs `UNION ALL`-ed
+with a resolved-grain `GROUP BY`, which is analyzer-independent and passes
+on both 24.8 and 26.7. It also restores the key-to-key arm and adds the
+resolved-grain dedup.
+
+### SQL portability
+
+Readers in this module run against ClickHouse engines spanning **24.8**
+(acr's pinned test fixtures) to **26.7** (prod, compose, the kiac trial
+plane). The oldest of those is the real constraint, and it is stricter than
+the newest in ways that reject queries outright rather than mis-answering
+them.
+
+Concretely: **every `JOIN ... ON` must be a plain column equality.** No
+`OR`, no function call, no expression — 24.8 raises `Code: 403 Unsupported
+JOIN ON conditions` for those, whatever `allow_experimental_analyzer` is
+set to. Express alternatives as separate equality-joined SELECTs combined
+with `UNION ALL`, and put guards in `WHERE` rather than in the `ON`.
+
+**Proving a SQL change on a local plane is not sufficient**, because
+compose and kiac both run a far newer engine than the fixtures do. See
+CHAOS-4549 for the standing question about which version should be the
+floor.
