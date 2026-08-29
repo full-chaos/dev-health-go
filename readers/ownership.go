@@ -70,13 +70,34 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 // team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
 // which IS projects.project_key for that row).
 func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
+	// The match is THREE-armed, and each arm exists for a shape that really
+	// occurs (codex P1 on acr #331 caught the missing third):
+	//
+	//  1. tpo.<column> = projects.id -- the UUID-keyed rows CHAOS-4530
+	//     writes, matched the moment they land.
+	//  2. tpo.<column> = projects.project_key -- today's GitLab ownership
+	//     rows, whose project_id holds the project KEY while projects.id is
+	//     "{org}:gitlab:<numeric>".
+	//  3. tpo.project_key = projects.project_key -- the ORIGINAL join, kept.
+	//     An ownership row may carry a project_id correlating with nothing
+	//     (a legacy or mismatched value) while its project_key is the only
+	//     column tying it to a project. Dropping this arm would silently
+	//     stop resolving those rows and report a false "no owning teams" --
+	//     the exact regression acr's
+	//     chaos4347_metrics_widening_integration_test.go was written to
+	//     catch, with its deliberately mismatched
+	//     "legacy-mismatched-project-id".
+	//
+	// Keeping arm 3 makes this change strictly ADDITIVE: nothing that
+	// resolved before stops resolving, and the UUID rows newly do.
+	legacyKeyArm := "(tpo.project_key != '' AND p.project_key != '' AND p.key_resolution_count = 1 AND tpo.project_key = p.project_key)"
 	return ProjectIdentityJoinSQL() + `
 INNER JOIN (
-	SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id
+	SELECT provider, ` + ProjectOwnershipJoinColumn + `, ifNull(project_key, '') AS project_key, team_id
 	FROM team_project_ownership FINAL
 	WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
-	GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
-) AS tpo ON tpo.provider = p.provider AND ` + ProjectIdentityMatchSQL("tpo", ProjectOwnershipJoinColumn)
+	GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, project_key, team_id
+) AS tpo ON tpo.provider = p.provider AND (` + ProjectIdentityMatchSQL("tpo", ProjectOwnershipJoinColumn) + ` OR ` + legacyKeyArm + `)`
 }
 
 // ProjectOwnershipJoinColumn names the team_project_ownership column that
