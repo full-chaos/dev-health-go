@@ -93,3 +93,19 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRow(t *testing.T) {
 		t.Error("the key arm must name scope_kind = 'key' -- without it the arm matches id rows too")
 	}
 }
+
+// The SCOPE arm must carry NO kind restriction, and this is a real guard
+// rather than a symmetry: the column it compares (project_id,
+// work_scope_id) is not an id column, it is whichever id space that row
+// happens to use, and today's GitLab rows carry a project KEY there.
+// Restricting it to scope_kind = 'id' reads like tightening and is the
+// key-to-key arm being dropped a fourth time.
+//
+// It is safe unrestricted only because an ambiguous key has no scope row at
+// all, which the two tests above pin.
+func TestChaos4542_ScopeArmCarriesNoKindRestriction(t *testing.T) {
+	t.Parallel()
+	if match := ProjectIdentityMatchSQL("o", "project_id"); strings.Contains(match, "scope_kind") {
+		t.Errorf("the scope arm names scope_kind (%q): project_id/work_scope_id may hold EITHER id space, so a kind restriction drops the GitLab key-shaped rows", match)
+	}
+}
