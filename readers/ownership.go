@@ -72,11 +72,11 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 	return ProjectIdentityJoinSQL() + `
 INNER JOIN (
-	SELECT ` + ProjectOwnershipJoinColumn + `, team_id
+	SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id
 	FROM team_project_ownership FINAL
 	WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
-	GROUP BY ` + ProjectOwnershipJoinColumn + `, team_id
-) AS tpo ON ` + ProjectIdentityMatchSQL("tpo", ProjectOwnershipJoinColumn)
+	GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
+) AS tpo ON tpo.provider = p.provider AND ` + ProjectIdentityMatchSQL("tpo", ProjectOwnershipJoinColumn)
 }
 
 // ProjectOwnershipJoinColumn names the team_project_ownership column that
@@ -166,11 +166,24 @@ func RepresentableInt64(value uint64) (int64, bool) {
 // project's rows to another. The id arm needs no such guard -- projects.id
 // is unique by construction.
 //
-// `provider` is deliberately NOT part of the match. Cross-provider equal
-// ids are ONE project by design in this data model (Linear imports GitHub),
-// so requiring provider equality would DROP legitimate rows rather than
-// prevent a leak. Org scoping is unaffected: every subquery here and in
-// every caller filters on {org_id:String}.
+// `provider` is deliberately NOT part of THIS predicate, and the two
+// callers differ on it for reasons specific to each (codex P1, adjudicated
+// rather than applied wholesale):
+//
+//   - The work-scope readers do not add it. Cross-provider equal ids are
+//     ONE project by design in this data model (Linear imports GitHub), so
+//     requiring provider equality would drop legitimate rows rather than
+//     prevent a leak -- and capacity_forecasts has no provider column to
+//     match on at all.
+//   - ProjectOwnershipJoinSQL DOES add `tpo.provider = p.provider`
+//     alongside it. The ownership edge already had that equality before
+//     CHAOS-4521b, and dropping it would have been an unrequested widening
+//     on a join that decides which TEAMS a project inherits. "Equal ids are
+//     one project" is a statement about project identity, not a licence to
+//     merge two providers' ownership catalogs.
+//
+// Org scoping is unaffected either way: every subquery here and in every
+// caller filters on {org_id:String}.
 //
 // Selects p.provider and p.id so a caller can rebuild the
 // "<provider>:<id>" project subject key, exactly as ProjectOwnershipJoinSQL

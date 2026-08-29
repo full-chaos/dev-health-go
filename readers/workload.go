@@ -97,8 +97,11 @@ func ReadProjectWorkload(ctx context.Context, client QueryClient, orgID string, 
 	}
 	// CHAOS-4521b: the project's OWN capacity_forecasts rows, matched on
 	// work_scope_id, with no team-ownership hop. Same reasoning as
-	// ReadProjectReadiness -- including the rn partition dropping team_id,
-	// and the reported team coming from the forecast row itself.
+	// ReadProjectReadiness -- including keeping team_id in the rn
+	// partition, and the reported team coming from the forecast row
+	// itself. Monte Carlo statistics from different teams cannot be
+	// merged, so one forecast per (team, work scope) is the only correct
+	// grain here.
 	//
 	// capacity_forecasts has no `provider` column at all, which is the
 	// second reason ProjectIdentityMatchSQL does not match on provider:
@@ -108,7 +111,7 @@ func ReadProjectWorkload(ctx context.Context, client QueryClient, orgID string, 
 FROM `+ProjectIdentityJoinSQL()+`
 INNER JOIN (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
-		row_number() OVER (PARTITION BY work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
 	FROM capacity_forecasts FINAL
 	WHERE org_id = {org_id:String}`+timeBound.TimestampPredicate("computed_at")+`
 ) AS cf ON `+ProjectIdentityMatchSQL("cf", "work_scope_id")+` AND cf.rn = 1

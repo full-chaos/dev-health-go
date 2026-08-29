@@ -33,11 +33,13 @@ func TestChaos4521b_ProjectReadersKeyOnTheProjectsOwnWorkScope(t *testing.T) {
 	cases := []struct {
 		name        string
 		sourceTable string
+		rnPartition string
 		read        func(*fakeClient) error
 	}{
 		{
 			name:        "readiness",
 			sourceTable: "FROM estimate_coverage_metrics_daily",
+			rnPartition: "PARTITION BY team_id, work_scope_id, provider",
 			read: func(client *fakeClient) error {
 				_, err := readers.ReadProjectReadiness(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 				return err
@@ -46,6 +48,7 @@ func TestChaos4521b_ProjectReadersKeyOnTheProjectsOwnWorkScope(t *testing.T) {
 		{
 			name:        "workload",
 			sourceTable: "FROM capacity_forecasts",
+			rnPartition: "PARTITION BY team_id, work_scope_id",
 			read: func(client *fakeClient) error {
 				_, err := readers.ReadProjectWorkload(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 				return err
@@ -84,7 +87,17 @@ func TestChaos4521b_ProjectReadersKeyOnTheProjectsOwnWorkScope(t *testing.T) {
 			if !strings.Contains(statement, "p.key_resolution_count = 1") {
 				t.Errorf("statement drops the ambiguous-project_key guard\n%s", statement)
 			}
-			// (4) Org scoping survives the rewrite.
+			// (4) codex P1: team_id stays in the row_number partition.
+			// An earlier revision dropped it, and the org this was measured
+			// against has ONE team -- so row_number() keeping a single
+			// team's row per work scope, and silently dropping every other
+			// contributing team, was invisible in the data and would have
+			// shipped. team_id is part of the source table's natural key
+			// AND of the row shape these readers return.
+			if !strings.Contains(statement, testCase.rnPartition) {
+				t.Errorf("row_number partition is not %q; dropping team_id silently keeps one team per work scope\n%s", testCase.rnPartition, statement)
+			}
+			// (5) Org scoping survives the rewrite.
 			if !strings.Contains(statement, "org_id = {org_id:String}") {
 				t.Errorf("statement lost its org scoping\n%s", statement)
 			}
@@ -150,6 +163,13 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	if strings.Contains(statement, "tpo.project_key = p.project_key") {
 		t.Errorf("ownership join still keys on project_key, which reaches no real Linear project today and matches nothing after CHAOS-4530\n%s", statement)
 	}
+	// codex P1: the ownership edge keeps its provider equality. "Equal ids
+	// are one project" is a statement about project identity, not a licence
+	// to merge two providers' ownership catalogs -- and this join decides
+	// which TEAMS a project inherits.
+	if !strings.Contains(statement, "tpo.provider = p.provider") {
+		t.Errorf("ownership join dropped provider equality; a project must not inherit another provider's teams\n%s", statement)
+	}
 	// The GitLab arm survives: those ownership rows carry the project KEY
 	// in the identity column while projects.id is `{org}:gitlab:<numeric>`.
 	// Dropping this arm would take GitLab to zero the other way.
@@ -177,9 +197,9 @@ func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T)
 	}
 	statement := client.queries[0].statement
 	for _, fragment := range []string{
-		"SELECT " + readers.ProjectOwnershipJoinColumn + ", team_id",
+		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
 		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
-		"GROUP BY " + readers.ProjectOwnershipJoinColumn + ", team_id",
+		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
 		"tpo." + readers.ProjectOwnershipJoinColumn + " = p.id",
 	} {
 		if !strings.Contains(statement, fragment) {
