@@ -201,16 +201,47 @@ func RepresentableInt64(value uint64) (int64, bool) {
 // `provider` is carried but deliberately NOT compared by
 // ProjectIdentityMatchSQL -- see that function.
 func ProjectIdentityJoinSQL() string {
+	return projectIdentityExpansionSQL(projectIdentityRowsSQL)
+}
+
+// ProjectIdentityCatalogSQL is ProjectIdentityJoinSQL for a caller that
+// walks the WHOLE catalog rather than resolving a requested subject list
+// (CHAOS-4542).
+//
+// The distinction is not cosmetic. ProjectIdentityJoinSQL's row source ends
+// `WHERE concat(provider, ':', id) IN {ids:Array(String)}`, so a caller
+// that binds no `ids` parameter gets
+//
+//	Code: 456. DB::Exception: Substitution `ids` is not set.
+//
+// which is exactly how devhealthsource's queryProjectTeams failed when it
+// first tried to reuse the filtered form: it is a catalog producer paginating
+// by cursor, and has no subject list to bind. A design mismatch, not a syntax
+// error -- and one worth naming here, because "reuse the identity helper" is
+// the obvious instinct and it is wrong for that caller.
+//
+// Both forms are built from projectIdentityExpansionSQL over the same row
+// builder, so the two scope rows and their guards have ONE definition: the
+// filtered form is the catalog form plus the `ids` predicate, and neither
+// can drift in what an identity value means.
+func ProjectIdentityCatalogSQL() string {
+	return projectIdentityExpansionSQL(projectIdentityCatalogRowsSQL)
+}
+
+// projectIdentityExpansionSQL turns a project row source into one row per
+// (project, identity value it answers to) -- see ProjectIdentityJoinSQL for
+// why the alternatives are rows rather than an OR in the caller's ON.
+func projectIdentityExpansionSQL(rows string) string {
 	return `(
 	SELECT provider, id, project_key, key_resolution_count, scope
 	FROM (
 		SELECT provider, id, project_key, key_resolution_count, id AS scope
-		FROM (` + projectIdentityRowsSQL + `)
+		FROM (` + rows + `)
 
 		UNION ALL
 
 		SELECT provider, id, project_key, key_resolution_count, project_key AS scope
-		FROM (` + projectIdentityRowsSQL + `)
+		FROM (` + rows + `)
 		WHERE project_key != '' AND key_resolution_count = 1
 	)
 	GROUP BY provider, id, project_key, key_resolution_count, scope
@@ -221,15 +252,25 @@ func ProjectIdentityJoinSQL() string {
 // `projects`, carrying the ambiguity count the key row is guarded on. It is
 // the single place `projects` is read, so the two identity rows above
 // cannot drift in what they resolve.
-const projectIdentityRowsSQL = `
+const projectIdentityRowsSQL = projectIdentityCatalogRowsSQL + `
+		WHERE concat(provider, ':', id) IN {ids:Array(String)}`
+
+// projectIdentityCatalogRowsSQL is every project in the organization, with
+// the ambiguity count the key row is guarded on.
+//
+// The window runs over the WHOLE org and is not narrowed by the subject
+// filter above -- that ordering is load-bearing in both forms:
+// key_resolution_count must count across every project sharing a
+// (provider, project_key), not just the requested ones, or an ambiguous key
+// stops being detected and the guard it feeds becomes decorative.
+const projectIdentityCatalogRowsSQL = `
 		SELECT id, provider, project_key, key_resolution_count
 		FROM (
 			SELECT id, provider, ifNull(project_key, '') AS project_key,
 				count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
 			FROM projects FINAL
 			WHERE org_id = {org_id:String}
-		)
-		WHERE concat(provider, ':', id) IN {ids:Array(String)}`
+		)`
 
 // ProjectIdentityMatchSQL returns the ON predicate pairing a column that
 // carries PROJECT IDENTITY -- a work_scope_id, or team_project_ownership's
