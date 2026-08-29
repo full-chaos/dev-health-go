@@ -262,8 +262,23 @@ func projectIdentityExpansionSQL(rows string) string {
 	//
 	// A project-level number that reads like a per-match one is a footgun,
 	// so it is removed rather than documented.
+	// scope_kind is aggregated, NOT grouped by (codex R1 on this change).
+	// The GROUP BY below exists to collapse the two branches where they
+	// produce the same scope row -- a project whose id EQUALS its
+	// project_key emits one from each. Adding scope_kind to the grouping
+	// makes those rows differ, so they both survive, and the scope arm
+	// matches both: ReadProjectWorkload and ReadProjectReadiness have no
+	// outer GROUP BY of their own, so every matching source row comes back
+	// twice and burns DefaultRowLimit at double rate -- silently truncating
+	// OTHER projects out of the answer, which is the same failure mode the
+	// resolved-grain collapse in ProjectOwnershipJoinSQL exists to prevent.
+	//
+	// max() keeps the discriminator without splitting the identity: 'key'
+	// sorts above 'id', so a row reachable as BOTH is labelled 'key' and the
+	// key arm still matches it -- which is correct, since that key really
+	// does resolve to this project.
 	return `(
-	SELECT provider, id, project_key, key_resolution_count, scope, scope_kind
+	SELECT provider, id, project_key, key_resolution_count, scope, max(scope_kind) AS scope_kind
 	FROM (
 		SELECT provider, id, project_key, toUInt64(1) AS key_resolution_count, id AS scope, 'id' AS scope_kind
 		FROM (` + rows + `)
@@ -274,7 +289,7 @@ func projectIdentityExpansionSQL(rows string) string {
 		FROM (` + rows + `)
 		WHERE project_key != '' AND key_resolution_count = 1
 	)
-	GROUP BY provider, id, project_key, key_resolution_count, scope, scope_kind
+	GROUP BY provider, id, project_key, key_resolution_count, scope
 ) AS p`
 }
 

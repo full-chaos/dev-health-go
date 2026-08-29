@@ -109,3 +109,28 @@ func TestChaos4542_ScopeArmCarriesNoKindRestriction(t *testing.T) {
 		t.Errorf("the scope arm names scope_kind (%q): project_id/work_scope_id may hold EITHER id space, so a kind restriction drops the GitLab key-shaped rows", match)
 	}
 }
+
+// scope_kind must NOT join the identity grouping (codex R1 on the scope_kind
+// change, confirmed).
+//
+// The two UNION branches produce the SAME scope row for a project whose id
+// equals its project_key, and the GROUP BY exists to collapse exactly that.
+// Grouping by scope_kind makes those rows differ, so both survive and the
+// scope arm matches both. ReadProjectWorkload and ReadProjectReadiness have
+// no outer GROUP BY, so each matching source row returns twice and burns
+// DefaultRowLimit at double rate -- silently truncating other projects out of
+// the answer.
+//
+// A duplicate that costs the caller OTHER rows is the same failure mode the
+// resolved-grain collapse in ProjectOwnershipJoinSQL was added to prevent, so
+// it gets its own guard rather than a comment.
+func TestChaos4542_ScopeKindDoesNotSplitTheIdentityGrouping(t *testing.T) {
+	t.Parallel()
+	expansion := ProjectIdentityCatalogSQL()
+	if strings.Contains(expansion, "GROUP BY provider, id, project_key, key_resolution_count, scope, scope_kind") {
+		t.Error("scope_kind is in the GROUP BY: a project whose id equals its project_key now yields TWO scope rows, and the scope arm matches both")
+	}
+	if !strings.Contains(expansion, "max(scope_kind) AS scope_kind") {
+		t.Error("scope_kind must be aggregated so the discriminator survives without splitting the identity")
+	}
+}
