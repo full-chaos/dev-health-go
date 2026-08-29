@@ -136,7 +136,7 @@ INNER JOIN (
 		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
 	FROM team_metrics_daily
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
-) AS tm ON tm.team_id = tpo.team_id AND tm.rn = 1
+) AS tm ON tm.team_id = p.team_id AND tm.rn = 1
 ORDER BY p.id, tm.team_id`, DefaultRowLimit)
 	var rows []ProjectTeamMetricsRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectMetricsBreakdown", statement, orgID, projectKeys, func(row RowScanner) error {

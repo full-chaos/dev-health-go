@@ -70,57 +70,48 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 // team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
 // which IS projects.project_key for that row).
 func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
-	// The match is THREE-armed, and each arm exists for a shape that really
-	// occurs (codex P1 on acr #331 caught the missing third):
-	//
-	//  1. tpo.<column> = projects.id -- the UUID-keyed rows CHAOS-4530
-	//     writes, matched the moment they land.
-	//  2. tpo.<column> = projects.project_key -- today's GitLab ownership
-	//     rows, whose project_id holds the project KEY while projects.id is
-	//     "{org}:gitlab:<numeric>".
-	//  3. tpo.project_key = projects.project_key -- the ORIGINAL join, kept.
-	//     An ownership row may carry a project_id correlating with nothing
-	//     (a legacy or mismatched value) while its project_key is the only
-	//     column tying it to a project. Dropping this arm would silently
-	//     stop resolving those rows and report a false "no owning teams" --
-	//     the exact regression acr's
-	//     chaos4347_metrics_widening_integration_test.go was written to
-	//     catch, with its deliberately mismatched
-	//     "legacy-mismatched-project-id".
-	//
-	// Keeping arm 3 makes this change strictly ADDITIVE: nothing that
-	// resolved before stops resolving, and the UUID rows newly do.
 	// Arm 3 is a SEMI-join over the group's keys, not a column comparison
-	// (codex P1). team_project_ownership's sorting key is
+	// (codex R1). team_project_ownership's sorting key is
 	// (org_id, provider, project_id, team_id, source, valid_from), so
 	// `source` and `valid_from` are part of it and FINAL legitimately keeps
-	// SEVERAL rows for one (project_id, team) -- a native and a manual
-	// assertion, say. project_key is NOT in that key, so those rows can
-	// carry DIFFERENT project_key values, which is exactly the shape the
-	// CHAOS-4530 transition produces (one row keyed, one nulled).
+	// SEVERAL rows for one (project_id, team). project_key is NOT in that
+	// key, so those rows can carry DIFFERENT project_key values -- exactly
+	// the shape the CHAOS-4530 transition produces, one row keyed and one
+	// nulled. Grouping by project_key would split a group that previously
+	// collapsed; has() over the group's keys is what arm 3 MEANS, where
+	// max() would have picked one arbitrarily.
+	legacyKeyArm := "(p.project_key != '' AND p.key_resolution_count = 1 AND has(o.project_keys, p.project_key))"
+	// And the WHOLE join is collapsed to the RESOLVED grain (codex R2).
 	//
-	// Adding project_key to the GROUP BY would therefore SPLIT a group that
-	// previously collapsed, and both halves match arm 1 -- duplicating the
-	// team's contribution and, worse, consuming DefaultRowLimit before the
-	// caller's MarkSeen dedup ever runs, silently truncating other teams
-	// out of the answer. That is the precise hazard acr's
-	// chaos4347_metrics_widening_integration_test.go was written to catch
-	// ("collapse to ONE contribution (SQL-level GROUP BY, not just the
-	// Go-side dedup)").
+	// Deduplicating inside the ownership subquery cannot be enough, because
+	// the duplication happens ACROSS project_id values that resolve to the
+	// SAME project: during the 4530 transition a team can hold both a
+	// legacy row (mismatched project_id, matching project_key -> arm 3) and
+	// a UUID-keyed row (-> arm 1) for one project. Those are different
+	// groups by construction, and both match.
 	//
-	// So the grain stays one row per (provider, project_id, team), and the
-	// keys are aggregated into an array the predicate tests membership in.
-	// Equality against ANY of the group's keys is what arm 3 means, and
-	// has() says that exactly -- where max() would have picked one
-	// arbitrarily.
-	legacyKeyArm := "(p.project_key != '' AND p.key_resolution_count = 1 AND has(tpo.project_keys, p.project_key))"
-	return ProjectIdentityJoinSQL() + `
-INNER JOIN (
-	SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id, groupUniqArray(ifNull(project_key, '')) AS project_keys
-	FROM team_project_ownership FINAL
-	WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
-	GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
-) AS tpo ON tpo.provider = p.provider AND (` + ProjectIdentityMatchSQL("tpo", ProjectOwnershipJoinColumn) + ` OR ` + legacyKeyArm + `)`
+	// The consequence is not merely a repeated row: duplicates consume
+	// DefaultRowLimit before the caller's MarkSeen dedup ever runs, which
+	// silently truncates OTHER teams out of the answer. So the grain that
+	// matters is the one the caller actually consumes -- (provider,
+	// resolved project id, team) -- and the GROUP BY is applied after every
+	// arm has been given its chance to match.
+	//
+	// This is why the fragment now exposes ONE alias, `p`, carrying
+	// team_id: there is no longer a separate `tpo` row to reference, and a
+	// caller that could still say `tpo.team_id` would be reading the
+	// pre-dedup grain.
+	return `(
+	SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
+	FROM ` + ProjectIdentityJoinSQL() + `
+	INNER JOIN (
+		SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id, groupUniqArray(ifNull(project_key, '')) AS project_keys
+		FROM team_project_ownership FINAL
+		WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
+		GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
+	) AS o ON o.provider = p.provider AND (` + ProjectIdentityMatchSQL("o", ProjectOwnershipJoinColumn) + ` OR ` + legacyKeyArm + `)
+	GROUP BY p.provider, p.id, o.team_id
+) AS p`
 }
 
 // ProjectOwnershipJoinColumn names the team_project_ownership column that

@@ -158,8 +158,8 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// the parent commit and fails there on the assertion rather than on a
 	// missing symbol -- a build error is not a behavioural red. The
 	// constant is coupled to the SQL by its own test below.
-	if !strings.Contains(statement, "tpo.project_id = p.id") {
-		t.Errorf("ownership join does not key on tpo.project_id = p.id\n%s", statement)
+	if !strings.Contains(statement, "o.project_id = p.id") {
+		t.Errorf("ownership join does not key on o.project_id = p.id\n%s", statement)
 	}
 	// The key-to-key arm STAYS (codex P1 on acr #331). Removing it looked
 	// like the point of this change and was not: an ownership row can carry
@@ -174,7 +174,7 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// project_key='PROJ1'): the pre-4521b key-to-key join matched 1 row,
 	// v0.5.0's two-armed join matched 0, and the three-armed join matches 1
 	// again. That 1 -> 0 -> 1 is the regression and its repair.
-	if !strings.Contains(statement, "has(tpo.project_keys, p.project_key)") {
+	if !strings.Contains(statement, "has(o.project_keys, p.project_key)") {
 		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
 	}
 	// codex P1: the grain must stay one row per (provider, project_id,
@@ -187,17 +187,27 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	if strings.Contains(statement, "GROUP BY provider, project_id, project_key") {
 		t.Errorf("project_key is back in the GROUP BY; multi-source ownership rows would duplicate the team\n%s", statement)
 	}
+	// codex R2: the whole join collapses to the RESOLVED grain. Deduping
+	// inside the ownership subquery is not enough -- during the 4530
+	// transition a team can hold a legacy row (matching through arm 3) AND
+	// a UUID row (arm 1) for one project, which are different groups by
+	// construction and both match. Duplicates then consume DefaultRowLimit
+	// before the caller's MarkSeen dedup runs, truncating OTHER teams out
+	// of the answer.
+	if !strings.Contains(statement, "GROUP BY p.provider, p.id, o.team_id") {
+		t.Errorf("ownership join is not collapsed to the resolved (provider, project id, team) grain\n%s", statement)
+	}
 	// codex P1: the ownership edge keeps its provider equality. "Equal ids
 	// are one project" is a statement about project identity, not a licence
 	// to merge two providers' ownership catalogs -- and this join decides
 	// which TEAMS a project inherits.
-	if !strings.Contains(statement, "tpo.provider = p.provider") {
+	if !strings.Contains(statement, "o.provider = p.provider") {
 		t.Errorf("ownership join dropped provider equality; a project must not inherit another provider's teams\n%s", statement)
 	}
 	// The GitLab arm survives: those ownership rows carry the project KEY
 	// in the identity column while projects.id is `{org}:gitlab:<numeric>`.
 	// Dropping this arm would take GitLab to zero the other way.
-	if !strings.Contains(statement, "tpo.project_id = p.project_key") {
+	if !strings.Contains(statement, "o.project_id = p.project_key") {
 		t.Errorf("ownership join dropped the project_key arm; GitLab ownership rows key on it today\n%s", statement)
 	}
 	// A project whose project_key is NULL (every real Linear project) must
@@ -224,7 +234,7 @@ func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T)
 		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id, groupUniqArray(ifNull(project_key, '')) AS project_keys",
 		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
 		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
-		"tpo." + readers.ProjectOwnershipJoinColumn + " = p.id",
+		"o." + readers.ProjectOwnershipJoinColumn + " = p.id",
 	} {
 		if !strings.Contains(statement, fragment) {
 			t.Errorf("statement does not use ProjectOwnershipJoinColumn at %q; the one-line-change promise is broken\n%s", fragment, statement)
