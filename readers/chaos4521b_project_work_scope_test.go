@@ -168,6 +168,12 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// "no owning teams" for exactly that shape, which acr's
 	// chaos4347_metrics_widening_integration_test.go seeds on purpose
 	// ("legacy-mismatched-project-id"). Three arms, all load-bearing.
+	// Executed on a real ClickHouse with the chaos4347 shape as literals
+	// (projects.id='proj-1-internal-id' / project_key='PROJ1' against
+	// team_project_ownership.project_id='legacy-mismatched-project-id' /
+	// project_key='PROJ1'): the pre-4521b key-to-key join matched 1 row,
+	// v0.5.0's two-armed join matched 0, and the three-armed join matches 1
+	// again. That 1 -> 0 -> 1 is the regression and its repair.
 	if !strings.Contains(statement, "tpo.project_key = p.project_key") {
 		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
 	}
