@@ -150,7 +150,8 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	if !strings.Contains(statement, "team_project_ownership") {
 		t.Fatalf("the team-scoped rollup must keep the ownership hop\n%s", statement)
 	}
-	// ...but it is keyed on the project identity column, not project_key.
+	// ...and it now ALSO keys on the project identity column, which is the
+	// arm CHAOS-4530's UUID-keyed rows need.
 	//
 	// The column is spelled as a LITERAL here, not via
 	// readers.ProjectOwnershipJoinColumn, so this test still COMPILES at
@@ -160,8 +161,15 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	if !strings.Contains(statement, "tpo.project_id = p.id") {
 		t.Errorf("ownership join does not key on tpo.project_id = p.id\n%s", statement)
 	}
-	if strings.Contains(statement, "tpo.project_key = p.project_key") {
-		t.Errorf("ownership join still keys on project_key, which reaches no real Linear project today and matches nothing after CHAOS-4530\n%s", statement)
+	// The key-to-key arm STAYS (codex P1 on acr #331). Removing it looked
+	// like the point of this change and was not: an ownership row can carry
+	// a project_id correlating with nothing while its project_key is the
+	// only column tying it to a project. Dropping it would report a false
+	// "no owning teams" for exactly that shape, which acr's
+	// chaos4347_metrics_widening_integration_test.go seeds on purpose
+	// ("legacy-mismatched-project-id"). Three arms, all load-bearing.
+	if !strings.Contains(statement, "tpo.project_key = p.project_key") {
+		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
 	}
 	// codex P1: the ownership edge keeps its provider equality. "Equal ids
 	// are one project" is a statement about project identity, not a licence
@@ -197,9 +205,9 @@ func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T)
 	}
 	statement := client.queries[0].statement
 	for _, fragment := range []string{
-		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
+		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", ifNull(project_key, '') AS project_key, team_id",
 		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
-		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
+		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", project_key, team_id",
 		"tpo." + readers.ProjectOwnershipJoinColumn + " = p.id",
 	} {
 		if !strings.Contains(statement, fragment) {
