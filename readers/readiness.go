@@ -100,17 +100,30 @@ func ReadProjectReadiness(ctx context.Context, client QueryClient, orgID string,
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	ownershipPredicate := OwnershipValidityPredicate(timeBound)
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
-FROM `+ProjectOwnershipJoinSQL(ownershipPredicate)+`
+	// CHAOS-4521b: the project's OWN estimate_coverage_metrics_daily rows,
+	// matched on work_scope_id, with no team-ownership hop. The team is
+	// still reported -- from the ROW's own team_id, which is the team that
+	// produced that coverage row, not "some team that owns this project".
+	//
+	// The rn partition KEEPS team_id (codex P1). An earlier revision of
+	// this change dropped it, reasoning that the question was now "the
+	// latest row per work scope" -- that was wrong. team_id is part of
+	// estimate_coverage_metrics_daily's own natural key and part of the
+	// row shape this reader returns, so partitioning without it makes
+	// row_number() keep ONE team's row and silently drop every other team
+	// that contributed to the same work scope. The org this was measured
+	// against has a single team, which is exactly why the defect was
+	// invisible there and would have shipped.
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), ec.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
+FROM `+ProjectIdentityJoinSQL()+`
 INNER JOIN (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
 		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
 	FROM estimate_coverage_metrics_daily FINAL
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
-) AS ec ON ec.team_id = tpo.team_id AND ec.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
-ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`, DefaultRowLimit)
+) AS ec ON `+ProjectIdentityMatchSQL("ec", "work_scope_id")+` AND ec.rn = 1
+LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ec.team_id
+ORDER BY p.id, ec.work_scope_id, ec.provider`, DefaultRowLimit)
 	var rows []ReadinessProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectReadiness", statement, orgID, ids, func(row RowScanner) error {
 		var r ReadinessProjectRow
