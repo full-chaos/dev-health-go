@@ -232,10 +232,32 @@ func ProjectIdentityCatalogSQL() string {
 // (project, identity value it answers to) -- see ProjectIdentityJoinSQL for
 // why the alternatives are rows rather than an OR in the caller's ON.
 func projectIdentityExpansionSQL(rows string) string {
+	// key_resolution_count is emitted PER SCOPE ROW, not per project
+	// (CHAOS-4542). The two rows answer different questions and conflating
+	// them cost a whole review round:
+	//
+	//   - the ID row is unambiguous BY CONSTRUCTION -- projects.id is
+	//     unique -- so its count is always 1;
+	//   - the KEY row carries the key partition's count, which is what the
+	//     ambiguity guard is actually about.
+	//
+	// Emitting the project-level number on both looked harmless and was
+	// not. Every real Linear project has project_key NULL, they therefore
+	// all share the empty-key partition, and the count on their ID rows
+	// came back as "however many NULL-key projects this org has" -- 17 on
+	// the org this was measured against. A consumer that gates on
+	// key_resolution_count > 1 then discards a perfectly unambiguous
+	// project_id = projects.id match. devhealthsource's queryProjectTeams
+	// did exactly that and still emitted zero Linear edges after being
+	// "fixed"; no fixture caught it, because they all seed projects WITH
+	// keys.
+	//
+	// A project-level number that reads like a per-match one is a footgun,
+	// so it is removed rather than documented.
 	return `(
 	SELECT provider, id, project_key, key_resolution_count, scope
 	FROM (
-		SELECT provider, id, project_key, key_resolution_count, id AS scope
+		SELECT provider, id, project_key, toUInt64(1) AS key_resolution_count, id AS scope
 		FROM (` + rows + `)
 
 		UNION ALL
@@ -267,7 +289,7 @@ const projectIdentityCatalogRowsSQL = `
 		SELECT id, provider, project_key, key_resolution_count
 		FROM (
 			SELECT id, provider, ifNull(project_key, '') AS project_key,
-				count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
+				countIf(ifNull(project_key, '') != '') OVER (PARTITION BY provider, ifNull(project_key, '')) AS key_resolution_count
 			FROM projects FINAL
 			WHERE org_id = {org_id:String}
 		)`

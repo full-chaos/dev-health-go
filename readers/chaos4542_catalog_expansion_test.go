@@ -54,13 +54,56 @@ func TestChaos4542_TheFilteredFormIsTheCatalogFormPlusTheSubjectPredicate(t *tes
 	// And the guards survive in the catalog form specifically, since that
 	// is the one a new caller will reach for.
 	for _, guard := range []string{
-		"project_key != '' AND key_resolution_count = 1",    // the key scope row
-		"count() OVER (PARTITION BY provider, project_key)", // org-wide ambiguity window
+		"project_key != '' AND key_resolution_count = 1",                                               // the key scope row
+		"countIf(ifNull(project_key, '') != '') OVER (PARTITION BY provider, ifNull(project_key, ''))", // org-wide ambiguity window, empty keys excluded
 		"id AS scope",
 		"project_key AS scope",
 	} {
 		if !strings.Contains(catalog, guard) {
 			t.Errorf("the catalog expansion lost %q\n%s", guard, catalog)
 		}
+	}
+}
+
+// CHAOS-4542, codex R1 P1. key_resolution_count is a property of the SCOPE
+// ROW, not of the project, and conflating the two shipped a fix that fixed
+// nothing.
+//
+// Every real Linear project carries project_key NULL. They therefore all
+// share the empty-key partition, so a project-level count came back as
+// "however many NULL-key projects this org has" -- 17 on the org this was
+// measured against -- and rode along on the project's ID row too. A
+// consumer that gates on `key_resolution_count > 1`, as
+// devhealthsource's queryProjectTeams does, then discards a perfectly
+// unambiguous `project_id = projects.id` match. That producer still emitted
+// zero Linear edges after being "fixed", and 13 green integration subtests
+// missed it, because every fixture seeds projects WITH keys.
+//
+// Two properties make the trap unavailable rather than merely documented.
+func TestChaos4542_KeyResolutionCountIsPerScopeRow(t *testing.T) {
+	t.Parallel()
+	for name, expansion := range map[string]string{
+		"catalog":  readers.ProjectIdentityCatalogSQL(),
+		"filtered": readers.ProjectIdentityJoinSQL(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// 1. The ID row's count is the literal 1. projects.id is unique,
+			//    so an id match is unambiguous BY CONSTRUCTION and no
+			//    partition count can say otherwise.
+			if !strings.Contains(expansion, "toUInt64(1) AS key_resolution_count, id AS scope") {
+				t.Errorf("the id scope row does not carry a literal count of 1; a project-level count would gate an unambiguous id match\n%s", expansion)
+			}
+			// 2. The ambiguity window EXCLUDES empty keys. An empty key is
+			//    never a match candidate -- the key row is guarded on
+			//    `project_key != ''` -- so counting empty keys can only
+			//    produce a number that describes nothing.
+			if !strings.Contains(expansion, "countIf(ifNull(project_key, '') != '') OVER") {
+				t.Errorf("the ambiguity window still counts empty keys; NULL-key projects would inflate each other's counts\n%s", expansion)
+			}
+			if strings.Contains(expansion, "count() OVER (PARTITION BY provider, project_key)") {
+				t.Errorf("the unqualified count() window is back; it counts empty keys\n%s", expansion)
+			}
+		})
 	}
 }
