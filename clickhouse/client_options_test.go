@@ -120,9 +120,10 @@ func TestApplyOptions_applies_default_execution_limits(t *testing.T) {
 func TestApplyOptions_appliesConfiguredMaxBytesToRead(t *testing.T) {
 	// Given
 	configured := &clickhousedriver.Options{}
+	limit := uint64(64 << 20)
 
 	// When
-	applyOptions(configured, Options{MaxBytesToRead: 64 << 20})
+	applyOptions(configured, Options{MaxBytesToRead: &limit})
 
 	// Then
 	if configured.Settings["max_bytes_to_read"] != uint64(64<<20) {

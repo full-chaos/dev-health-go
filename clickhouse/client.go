@@ -54,8 +54,19 @@ type Options struct {
 	MaxIdleConns     int
 	ConnMaxLifetime  time.Duration
 	MaxExecutionTime uint
-	MaxResultRows    uint
-	MaxBytesToRead   uint64
+	// MaxResultRows and MaxBytesToRead are pointers so a caller can
+	// distinguish "unset, use the default" (nil) from "explicitly no
+	// ceiling" (a pointer to 0) -- CHAOS-4651. ClickHouse defines 0 as
+	// "unrestricted" for both of these query-complexity settings, and this
+	// package sends whatever value is configured verbatim; collapsing that
+	// through a plain uint/uint64 made unlimited inexpressible; a caller
+	// deleting the field to "remove" the ceiling silently got the default
+	// back instead, which was CHAOS-4647's actual defect wearing a two-line
+	// diff. To request unlimited, use new(uint) / new(uint64) (a pointer to
+	// the zero value); to request a specific ceiling, take the address of a
+	// local holding it.
+	MaxResultRows  *uint
+	MaxBytesToRead *uint64
 }
 
 type Client struct {
@@ -209,5 +220,55 @@ type operationError struct {
 	cause     error
 }
 
-func (e *operationError) Error() string { return "ClickHouse " + e.operation + " failed" }
+// Error reports the underlying cause (CHAOS-4651): before this, every
+// distinct ClickHouse failure -- a type mismatch, a scan failure, a
+// permissions error, a malformed statement -- presented as the identical
+// fixed string "ClickHouse <operation> failed", which is why CHAOS-4647 took
+// hours to diagnose from outside the resolver. Unwrap() already carried the
+// cause; this reaches it from the formatting path too, via describeCause,
+// which decides what of the cause is safe to say.
+func (e *operationError) Error() string {
+	if e.cause == nil {
+		return "ClickHouse " + e.operation + " failed"
+	}
+	return "ClickHouse " + e.operation + " failed: " + describeCause(e.cause)
+}
+
+// Unwrap returns the cause UNREDACTED and untyped-away: errors.Is/errors.As
+// (e.g. QueryBudgetExceededCode's errors.As against *clickhousedriver.Exception)
+// must keep working against the real cause. Only the formatting path in
+// Error()/describeCause makes a safety decision -- Unwrap is not that path
+// and must never be "simplified" into sharing describeCause's output.
 func (e *operationError) Unwrap() error { return e.cause }
+
+// describeCause renders an operation's cause for a human, using a fail-
+// CLOSED allowlist rather than a denylist. A ClickHouse *Exception is the
+// server's own structured error (lib/proto/exception.go: Error() = "code:
+// %d, message: %s") -- generated server-side, so it does not carry the
+// client's DSN or credentials -- and its code/message is exactly the
+// diagnostic CHAOS-4651 exists to surface (this is what would have named
+// CHAOS-4647's live failures directly instead of two hours of Unwrap()
+// spelunking). Every other cause -- dial failures, DSN/config errors, and
+// anything from a driver version this package has not been taught about --
+// reports only its Go type, never its free-form text.
+//
+// This is deliberately an allowlist, not a denylist that strips known-bad
+// substrings/patterns (e.g. "user:pass@"): a denylist fails OPEN on any
+// shape it does not recognize -- it would miss a credential in a query
+// string (?password=...) as readily as CHAOS-4643's method-name denylist
+// failed open on any name it hadn't been told about, which cost this project
+// ten codex rounds to invert. Matching on TYPE instead means an unrecognized
+// cause yields no free-form text at all by construction, not by omission.
+//
+// The boundary this enforces, precisely: no free-form text from an
+// unrecognized cause reaches Error(). It does NOT claim a recognized
+// server Exception message can never contain a secret -- ClickHouse itself
+// controls what it puts in an exception message, outside this package's
+// control.
+func describeCause(cause error) string {
+	var exception *clickhousedriver.Exception
+	if errors.As(cause, &exception) {
+		return fmt.Sprintf("code: %d, message: %s", exception.Code, exception.Message)
+	}
+	return fmt.Sprintf("%T", cause)
+}
