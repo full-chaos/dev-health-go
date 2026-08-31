@@ -10,14 +10,16 @@ import (
 
 const defaultMaxExecutionTime uint = 10
 
-// DefaultMaxBytesToRead is the read-budget ceiling applied when Options.MaxBytesToRead
-// is unset (zero). CHAOS-3848: the previous 16 MiB default was sized before
-// CHAOS-3833's enriched projection rows (PR body heads, labels, descriptions)
-// pushed a routine 200-row pull_requests batch to ~17 MiB of granule reads,
-// which ClickHouse rejects with Code 307 (TOO_MANY_BYTES) on every retry --
-// a permanent wedge, not a transient one. 64 MiB is four times the old
-// ceiling: real headroom for v2 row widths while remaining a genuine guard
-// against an unbounded scan.
+// DefaultMaxBytesToRead is the read-budget ceiling applied when
+// Options.MaxBytesToRead is nil (unset). CHAOS-3848: the previous 16 MiB
+// default was sized before CHAOS-3833's enriched projection rows (PR body
+// heads, labels, descriptions) pushed a routine 200-row pull_requests batch
+// to ~17 MiB of granule reads, which ClickHouse rejects with Code 307
+// (TOO_MANY_BYTES) on every retry -- a permanent wedge, not a transient one.
+// 64 MiB is four times the old ceiling: real headroom for v2 row widths
+// while remaining a genuine guard against an unbounded scan. A caller that
+// wants no ceiling at all must say so explicitly (Options.MaxBytesToRead =
+// new(uint64)); this default only fills in for a caller who set nothing.
 const DefaultMaxBytesToRead uint64 = 64 << 20
 
 func applyOptions(configured *clickhousedriver.Options, options Options) {
@@ -32,8 +34,8 @@ func applyOptions(configured *clickhousedriver.Options, options Options) {
 	}
 	configured.Settings = cloneSettings(configured.Settings)
 	configured.Settings["max_execution_time"] = maxExecutionTime(options)
-	configured.Settings["max_result_rows"] = defaultPositiveUint(options.MaxResultRows, 1_000)
-	configured.Settings["max_bytes_to_read"] = defaultPositiveUint64(options.MaxBytesToRead, DefaultMaxBytesToRead)
+	configured.Settings["max_result_rows"] = resolveCeilingUint(options.MaxResultRows, 1_000)
+	configured.Settings["max_bytes_to_read"] = resolveCeilingUint64(options.MaxBytesToRead, DefaultMaxBytesToRead)
 }
 
 func queryTimeoutForOptions(options Options) time.Duration {
@@ -112,9 +114,32 @@ func defaultPositiveUint(value, fallback uint) uint {
 	return fallback
 }
 
-func defaultPositiveUint64(value, fallback uint64) uint64 {
-	if value > 0 {
-		return value
+// resolveCeilingUint resolves a ClickHouse "maximum X" query-complexity
+// setting where 0 is a meaningful, distinct value: ClickHouse defines 0 as
+// "unrestricted" for these settings (query-complexity docs: "Restrictions on
+// the 'maximum amount of something' can take a value of 0, which means that
+// it is 'unrestricted'"), and this package forwards whatever is configured
+// verbatim (see conn.go in clickhouse-go/v2, which sends every key in
+// Options.Settings unconditionally -- no special-casing of 0).
+//
+// nil means the caller did not set the option: use fallback. A non-nil
+// pointer -- INCLUDING one pointing at 0 -- is the caller's explicit choice
+// and must reach the driver unchanged. Do not collapse this back to "any
+// value <=0 substitutes the fallback" (that was CHAOS-4651: it made
+// "unlimited" inexpressible, and a caller deleting the field to remove a
+// ceiling silently got the default restored instead).
+func resolveCeilingUint(value *uint, fallback uint) uint {
+	if value == nil {
+		return fallback
 	}
-	return fallback
+	return *value
+}
+
+// resolveCeilingUint64 is resolveCeilingUint's uint64 counterpart, for
+// Options.MaxBytesToRead. See resolveCeilingUint for the full rationale.
+func resolveCeilingUint64(value *uint64, fallback uint64) uint64 {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
