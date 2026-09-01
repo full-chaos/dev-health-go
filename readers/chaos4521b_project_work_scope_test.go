@@ -163,8 +163,17 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// the parent commit and fails there on the assertion rather than on a
 	// missing symbol -- a build error is not a behavioural red. The
 	// constant is coupled to the SQL by its own test below.
-	if !strings.Contains(statement, "o.project_id = p.scope") {
-		t.Errorf("ownership join does not key on o.project_id = p.scope\n%s", statement)
+	//
+	// RESPELLED by CHAOS-4552 (union-once), not relaxed: both arms now
+	// share ONE join predicate (`o.scope_value = p.scope`), and the
+	// id-sourced rows project their identity column into that shared
+	// `scope_value` alias rather than joining on their own column name
+	// directly.
+	if !strings.Contains(statement, "project_id AS scope_value") {
+		t.Errorf("ownership join does not project project_id into the shared scope_value column\n%s", statement)
+	}
+	if !strings.Contains(statement, "o.scope_value = p.scope") {
+		t.Errorf("ownership join does not key on o.scope_value = p.scope\n%s", statement)
 	}
 	// CHAOS-4521b: every JOIN ON must be a plain column equality. A single
 	// ON carrying the arms as an OR -- what v0.5.0 shipped -- is rejected
@@ -208,8 +217,19 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// resolve one, and no consumer has to remember a guard. This assertion
 	// still exists for its original purpose (the arm has been dropped three
 	// separate times), only against the spelling that is now load-bearing.
-	if !strings.Contains(statement, "o.project_key = p.scope") || !strings.Contains(statement, "p.scope_kind = 'key'") {
+	//
+	// RESPELLED AGAIN by CHAOS-4552: the key arm no longer joins on its own
+	// column (`o.project_key = p.scope`) or restricts with a standalone
+	// `p.scope_kind = 'key'` WHERE -- it projects project_key into the
+	// SAME shared scope_value column the id arm uses, tagged
+	// `required_scope_kind = 'key'`, enforced by the shared WHERE OR. Both
+	// halves must survive: the tag naming 'key', and the join actually
+	// requiring it.
+	if !strings.Contains(statement, "ifNull(project_key, '') AS scope_value") || !strings.Contains(statement, "'key' AS required_scope_kind") {
 		t.Errorf("ownership join dropped the legacy key-to-key arm; an ownership row whose project_id correlates with nothing would stop resolving\n%s", statement)
+	}
+	if !strings.Contains(statement, "o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind") {
+		t.Errorf("the key arm's scope_kind restriction is not enforced; an ownership row's project_key could cross-match another project's id scope row\n%s", statement)
 	}
 	// codex P1: the grain must stay one row per (provider, project_id,
 	// team). team_project_ownership's sorting key carries `source` and
@@ -266,10 +286,9 @@ func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T)
 	}
 	statement := client.queries[0].statement
 	for _, fragment := range []string{
-		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
+		"SELECT provider, " + readers.ProjectOwnershipJoinColumn + " AS scope_value, team_id",
 		"AND " + readers.ProjectOwnershipJoinColumn + " IS NOT NULL",
 		"GROUP BY provider, " + readers.ProjectOwnershipJoinColumn + ", team_id",
-		"o." + readers.ProjectOwnershipJoinColumn + " = p.scope",
 	} {
 		if !strings.Contains(statement, fragment) {
 			t.Errorf("statement does not use ProjectOwnershipJoinColumn at %q; the one-line-change promise is broken\n%s", fragment, statement)

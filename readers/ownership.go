@@ -70,64 +70,80 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 // team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
 // which IS projects.project_key for that row).
 func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
-	// TWO equality-joined arms, UNION ALL'd, then collapsed to the resolved
-	// grain. Every JOIN ON here is a plain column equality -- see
-	// ProjectIdentityJoinSQL for why ClickHouse 24.8 makes that mandatory.
+	// ONE join against ONE copy of the identity expansion (CHAOS-4552).
 	//
-	//  A. o.project_id = p.scope        -- the SCOPE arm. It matches scope
-	//     rows of BOTH kinds deliberately, and must NOT be given a
-	//     scope_kind restriction: project_id is not an id column, it is
-	//     whichever id space that row happens to use, and today's GitLab
-	//     rows hold a project KEY there. Restricting this arm to
-	//     scope_kind = 'id' would drop them -- the same arm has already
-	//     been dropped three separate times.
+	// Before this, two arms each embedded a full copy of ProjectIdentityJoinSQL's
+	// text -- and that text itself scans `projects FINAL` twice (id-row,
+	// key-row branches), so the rendered statement carried FOUR physical
+	// scans, measured (EXPLAIN PLAN, real ClickHouse 26.7.5.10, seeded
+	// data so the optimizer could not fold an empty table into
+	// ReadNothing): four `ReadFromMergeTree(default.projects)` nodes. This
+	// shape halves that to two -- the id-row/key-row doubling inside the
+	// identity expansion itself is a separate, riskier restructure, out of
+	// scope here (see the identity-expansion doc comment for why).
 	//
-	//     Leaving it unrestricted is safe only because an ambiguous key has
-	//     no scope row at all (ProjectIdentityJoinSQL applies the ambiguity
-	//     filter INSIDE the expansion), so this arm cannot resolve one
-	//     either. Only the arm naming project_key needs scope_kind = 'key'.
-	//  B. o.project_key = p.project_key -- the ORIGINAL join, kept. An
-	//     ownership row may carry a project_id correlating with nothing
-	//     while its project_key is the only column tying it to a project;
-	//     dropping this arm reported a false "no owning teams" for exactly
-	//     the shape acr's chaos4347 fixture seeds on purpose.
+	// The two arms union at the OWNERSHIP side instead of the identity
+	// side, tagged with the scope-kind restriction each arm's column has
+	// always required:
 	//
-	// The outer GROUP BY is what makes the arms safe to union. A team can
-	// match through both at once (during the CHAOS-4530 transition it holds
-	// a legacy AND a UUID-keyed row), and it can hold several ownership
-	// rows per project because `source` and `valid_from` are in
-	// team_project_ownership's sorting key. Either would duplicate the team
-	// -- and a duplicate consumes DefaultRowLimit before the caller's
-	// MarkSeen dedup runs, silently truncating OTHER teams out of the
-	// answer. Collapsing at the grain the caller consumes, (provider,
-	// resolved project id, team), removes both at once.
+	//  - project_id rows carry requiredScopeKind = "" (any scope row). This
+	//    is the SCOPE arm's old behaviour, unchanged: project_id is not an
+	//    id column, it is whichever id space that row happens to use, and
+	//    today's GitLab rows hold a project KEY there. Restricting it to
+	//    scope_kind = 'id' would drop them -- the same arm has already been
+	//    dropped three separate times.
+	//  - project_key rows carry requiredScopeKind = "key". This is the KEY
+	//    arm's old restriction, unchanged: project_key must only match the
+	//    KEY scope row, never the id scope row.
+	//
+	// WHY THE TAG, not just `o.scope_value = p.scope`. Without it, one
+	// join serving both arms would let an ownership row's project_key
+	// happen to equal some OTHER project's id and cross-attribute through
+	// that project's id scope row -- a new match combination the old,
+	// separately-restricted arms could never produce (CHAOS-4552
+	// acceptance box 3, planted-failure tested). The tag is carried in the
+	// WHERE, not the ON -- 24.8 rejects an ON with anything but a plain
+	// column equality, and `o.provider = p.provider AND o.scope_value =
+	// p.scope` is exactly that; the scope-kind restriction, being an OR
+	// with a literal comparison, has to live in the WHERE regardless of
+	// engine.
+	//
+	// project_key rows are prefiltered to non-empty in this arm's own
+	// WHERE (`project_key != ''`), where the old ownershipByKey subquery
+	// left that filtering to the join (an empty-string project_key can
+	// never match a key scope row -- ProjectIdentityJoinSQL's own guard
+	// requires project_key != '' for one to exist -- so the row was always
+	// discarded, just one join later). Same output, fewer rows unioned.
+	//
+	// The outer GROUP BY is what makes the two arms safe to union at all.
+	// A team can match through both at once (during the CHAOS-4530
+	// transition it holds a legacy AND a UUID-keyed row), and it can hold
+	// several ownership rows per project because `source` and `valid_from`
+	// are in team_project_ownership's sorting key. Either would duplicate
+	// the team -- and a duplicate consumes DefaultRowLimit before the
+	// caller's MarkSeen dedup runs, silently truncating OTHER teams out of
+	// the answer. Collapsing at the grain the caller consumes, (provider,
+	// resolved project id, team), removes both at once -- unchanged from
+	// before this change.
 	projects := ProjectIdentityJoinSQL()
-	ownershipByID := `(
-		SELECT provider, ` + ProjectOwnershipJoinColumn + `, team_id
+	ownership := `(
+		SELECT provider, ` + ProjectOwnershipJoinColumn + ` AS scope_value, team_id, '' AS required_scope_kind
 		FROM team_project_ownership FINAL
 		WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
 		GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
-	) AS o`
-	ownershipByKey := `(
-		SELECT provider, ifNull(project_key, '') AS project_key, team_id
+
+		UNION ALL
+
+		SELECT provider, ifNull(project_key, '') AS scope_value, team_id, 'key' AS required_scope_kind
 		FROM team_project_ownership FINAL
-		WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
+		WHERE org_id = {org_id:String} AND project_key IS NOT NULL AND project_key != ''` + ownershipPredicate + `
 		GROUP BY provider, project_key, team_id
 	) AS o`
 	return `(
 	SELECT provider, id, team_id
-	FROM (
-		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
-		FROM ` + projects + `
-		INNER JOIN ` + ownershipByID + ` ON o.provider = p.provider AND ` + ProjectIdentityMatchSQL("o", ProjectOwnershipJoinColumn) + `
-
-		UNION ALL
-
-		SELECT p.provider AS provider, p.id AS id, o.team_id AS team_id
-		FROM ` + projects + `
-		INNER JOIN ` + ownershipByKey + ` ON o.provider = p.provider AND o.project_key = p.scope
-		WHERE p.scope_kind = 'key'
-	)
+	FROM ` + projects + `
+	INNER JOIN ` + ownership + ` ON o.provider = p.provider AND o.scope_value = p.scope
+	WHERE o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind
 	GROUP BY provider, id, team_id
 ) AS p`
 }
