@@ -83,7 +83,10 @@ func TestChaos4521b_ProjectReadersKeyOnTheProjectsOwnWorkScope(t *testing.T) {
 			if !strings.Contains(statement, "work_scope_id = p.scope") {
 				t.Errorf("statement does not match work_scope_id against the resolved identity scope\n%s", statement)
 			}
-			if !strings.Contains(statement, "id AS scope") || !strings.Contains(statement, "project_key AS scope") {
+			// RESPELLED by CHAOS-4751, not relaxed: the two scope rows come
+			// from one fan-out array now rather than two UNION branches, so
+			// the pair of substrings became one literal naming both.
+			if !strings.Contains(statement, "if(key_scope_emitted, [id, project_key], [id]) AS scope") {
 				t.Errorf("the identity resolution does not expand BOTH the canonical id and the project key into scope rows\n%s", statement)
 			}
 			// (3) The project_key arm keeps the ambiguity guard: an
@@ -261,8 +264,10 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 	// The GitLab arm survives: those ownership rows carry the project KEY
 	// in the identity column while projects.id is `{org}:gitlab:<numeric>`.
 	// Dropping this arm would take GitLab to zero the other way.
-	// The GitLab arm survives as a scope ROW rather than an ON alternative.
-	if !strings.Contains(statement, "project_key AS scope") {
+	// The GitLab arm survives as a scope ROW rather than an ON alternative
+	// -- since CHAOS-4751, as the key position of the fan-out array rather
+	// than its own UNION branch. Same row, same guard, one read.
+	if !strings.Contains(statement, "if(key_scope_emitted, [id, project_key], [id]) AS scope") {
 		t.Errorf("ownership join dropped the project_key identity row; GitLab ownership rows key on it today\n%s", statement)
 	}
 	// A project whose project_key is NULL (every real Linear project) must

@@ -56,8 +56,13 @@ func TestChaos4542_TheFilteredFormIsTheCatalogFormPlusTheSubjectPredicate(t *tes
 	for _, guard := range []string{
 		"project_key != '' AND key_resolution_count = 1",                                               // the key scope row
 		"countIf(ifNull(project_key, '') != '') OVER (PARTITION BY provider, ifNull(project_key, ''))", // org-wide ambiguity window, empty keys excluded
-		"id AS scope",
-		"project_key AS scope",
+		// RESPELLED by CHAOS-4751, not relaxed: the two identity values
+		// used to be two UNION branches ("id AS scope", "project_key AS
+		// scope") and are now the two positions of one fan-out array. One
+		// literal pins both, AND pins that the id value is unconditional
+		// while the key value appears only in the guarded arm -- which the
+		// two separate substrings could not distinguish.
+		"if(key_scope_emitted, [id, project_key], [id]) AS scope",
 	} {
 		if !strings.Contains(catalog, guard) {
 			t.Errorf("the catalog expansion lost %q\n%s", guard, catalog)
@@ -91,7 +96,15 @@ func TestChaos4542_KeyResolutionCountIsPerScopeRow(t *testing.T) {
 			// 1. The ID row's count is the literal 1. projects.id is unique,
 			//    so an id match is unambiguous BY CONSTRUCTION and no
 			//    partition count can say otherwise.
-			if !strings.Contains(expansion, "toUInt64(1) AS key_resolution_count, id AS scope") {
+			// RESPELLED by CHAOS-4751, and stronger for it. The id row's
+			// count and the key row's used to live in two UNION branches, so
+			// this could only pin the id one; they are now the two positions
+			// of a single array, and this pins BOTH at once -- the id
+			// position is the literal 1, the key position the project's own
+			// partition count. The names differ on purpose: the scope row's
+			// number is key_resolution_count, the project's is
+			// project_key_resolution_count.
+			if !strings.Contains(expansion, "if(key_scope_emitted, [toUInt64(1), project_key_resolution_count], [toUInt64(1)]) AS key_resolution_count") {
 				t.Errorf("the id scope row does not carry a literal count of 1; a project-level count would gate an unambiguous id match\n%s", expansion)
 			}
 			// 2. The ambiguity window EXCLUDES empty keys. An empty key is

@@ -73,14 +73,18 @@ func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 	// ONE join against ONE copy of the identity expansion (CHAOS-4552).
 	//
 	// Before this, two arms each embedded a full copy of ProjectIdentityJoinSQL's
-	// text -- and that text itself scans `projects FINAL` twice (id-row,
+	// text -- and that text itself scanned `projects FINAL` twice (id-row,
 	// key-row branches), so the rendered statement carried FOUR physical
 	// scans, measured (EXPLAIN PLAN, real ClickHouse 26.7.5.10, seeded
 	// data so the optimizer could not fold an empty table into
 	// ReadNothing): four `ReadFromMergeTree(default.projects)` nodes. This
-	// shape halves that to two -- the id-row/key-row doubling inside the
-	// identity expansion itself is a separate, riskier restructure, out of
-	// scope here (see the identity-expansion doc comment for why).
+	// shape halved that to two. The remaining pair, the id-row/key-row
+	// doubling inside the identity expansion itself, is gone too
+	// (CHAOS-4751): that expansion now reads its row source once and fans
+	// the scope rows out with ARRAY JOIN, so the rendered statement here
+	// carries ONE scan. Both halves were separate changes on purpose --
+	// this one restructured the ownership side, that one the row
+	// expansion, and each carried its own equivalence proof.
 	//
 	// The two arms union at the OWNERSHIP side instead of the identity
 	// side, tagged with the scope-kind restriction each arm's column has
@@ -256,12 +260,39 @@ func ProjectIdentityCatalogSQL() string {
 // (project, identity value it answers to) -- see ProjectIdentityJoinSQL for
 // why the alternatives are rows rather than an OR in the caller's ON.
 func projectIdentityExpansionSQL(rows string) string {
+	// ONE read of the row source, fanned out by ARRAY JOIN (CHAOS-4751).
+	//
+	// This was a UNION ALL of an id-row branch and a key-row branch, each
+	// spelling `rows` -- and so `projects FINAL` -- in full. Two textually
+	// independent subqueries are two physical scans: ClickHouse's planner
+	// does not share a read across them. Measured (EXPLAIN PLAN, real
+	// ClickHouse 26.7, seeded data so the optimizer could not fold an empty
+	// table into ReadNothing) as two `ReadFromMergeTree(default.projects)`
+	// nodes here, and four once ProjectOwnershipJoinSQL embedded the
+	// fragment on both sides of its join. CHAOS-4552 took the four to two by
+	// unioning the ownership side once; this takes the two to one.
+	//
+	// A CTE is not the fix on either engine this fragment must run on: 24.8
+	// substitutes WITH textually, so the scan count is unchanged, and the
+	// fragment is spliced into a caller's FROM, where a top-level WITH is
+	// not available to it anyway.
+	//
+	// The three fan-out arrays are ARRAY JOIN-ed together, so ClickHouse
+	// zips them element-wise and REQUIRES equal lengths per row. They are
+	// equal by construction -- one shared condition, two elements when the
+	// key scope row is emitted and one when it is not -- and a drift is a
+	// loud "Sizes of ARRAY-JOIN-ed arrays do not match", never a wrong
+	// answer. Plain ARRAY JOIN rather than LEFT is deliberate and safe: the
+	// id element is unconditional, so no array is ever empty and the fan-out
+	// cannot drop a project.
+	//
 	// key_resolution_count is emitted PER SCOPE ROW, not per project
-	// (CHAOS-4542). The two rows answer different questions and conflating
+	// (CHAOS-4542) -- now as the two POSITIONS of one array rather than two
+	// UNION branches. The two rows answer different questions and conflating
 	// them cost a whole review round:
 	//
 	//   - the ID row is unambiguous BY CONSTRUCTION -- projects.id is
-	//     unique -- so its count is always 1;
+	//     unique -- so its count is always the literal 1;
 	//   - the KEY row carries the key partition's count, which is what the
 	//     ambiguity guard is actually about.
 	//
@@ -276,35 +307,49 @@ func projectIdentityExpansionSQL(rows string) string {
 	// "fixed"; no fixture caught it, because they all seed projects WITH
 	// keys.
 	//
-	// A project-level number that reads like a per-match one is a footgun,
-	// so it is removed rather than documented.
+	// So the two numbers now carry two NAMES rather than one name and a
+	// warning: project_key_resolution_count is the PROJECT's key-partition
+	// count, readable only here to build the guard and the key row's value,
+	// and key_resolution_count is the SCOPE ROW's. One name for both is what
+	// made the confusion available in the first place.
+	//
 	// scope_kind is aggregated, NOT grouped by (codex R1 on this change).
-	// The GROUP BY below exists to collapse the two branches where they
-	// produce the same scope row -- a project whose id EQUALS its
-	// project_key emits one from each. Adding scope_kind to the grouping
-	// makes those rows differ, so they both survive, and the scope arm
-	// matches both: ReadProjectWorkload and ReadProjectReadiness have no
-	// outer GROUP BY of their own, so every matching source row comes back
-	// twice and burns DefaultRowLimit at double rate -- silently truncating
-	// OTHER projects out of the answer, which is the same failure mode the
-	// resolved-grain collapse in ProjectOwnershipJoinSQL exists to prevent.
+	// The GROUP BY below exists to collapse the two scope rows where they
+	// coincide -- a project whose id EQUALS its project_key fans out to one
+	// of each. Adding scope_kind to the grouping makes those rows differ, so
+	// they both survive, and the scope arm matches both: ReadProjectWorkload
+	// and ReadProjectReadiness have no outer GROUP BY of their own, so every
+	// matching source row comes back twice and burns DefaultRowLimit at
+	// double rate -- silently truncating OTHER projects out of the answer,
+	// which is the same failure mode the resolved-grain collapse in
+	// ProjectOwnershipJoinSQL exists to prevent.
 	//
 	// max() keeps the discriminator without splitting the identity: 'key'
 	// sorts above 'id', so a row reachable as BOTH is labelled 'key' and the
 	// key arm still matches it -- which is correct, since that key really
 	// does resolve to this project.
+	//
+	// The outer projection is a CROSS-REPO CONTRACT and is unchanged by this
+	// restructure, down to column order: acr's project-teams edge producer
+	// embeds the catalog form as `FROM (SELECT * FROM <this>) AS pi`, so
+	// adding, removing or reordering a column changes that producer's row
+	// shape with nothing in this repo to catch it.
+	//
+	// The parentheses around the key-scope condition are load-bearing:
+	// ClickHouse binds AS to the last operand of an unparenthesised AND
+	// chain, which would alias the comparison rather than the conjunction.
 	return `(
 	SELECT provider, id, project_key, key_resolution_count, scope, max(scope_kind) AS scope_kind
 	FROM (
-		SELECT provider, id, project_key, toUInt64(1) AS key_resolution_count, id AS scope, 'id' AS scope_kind
+		SELECT provider, id, project_key,
+			key_resolution_count AS project_key_resolution_count,
+			(project_key != '' AND key_resolution_count = 1) AS key_scope_emitted
 		FROM (` + rows + `)
-
-		UNION ALL
-
-		SELECT provider, id, project_key, key_resolution_count, project_key AS scope, 'key' AS scope_kind
-		FROM (` + rows + `)
-		WHERE project_key != '' AND key_resolution_count = 1
 	)
+	ARRAY JOIN
+		if(key_scope_emitted, [id, project_key], [id]) AS scope,
+		if(key_scope_emitted, ['id', 'key'], ['id']) AS scope_kind,
+		if(key_scope_emitted, [toUInt64(1), project_key_resolution_count], [toUInt64(1)]) AS key_resolution_count
 	GROUP BY provider, id, project_key, key_resolution_count, scope
 ) AS p`
 }
