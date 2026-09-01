@@ -18,6 +18,16 @@ var (
 	ErrInvalidConfiguration = errors.New("clickhouse runtime: invalid configuration")
 	ErrUnsafeStatement      = errors.New("clickhouse runtime: unsafe statement")
 	ErrInvalidBinding       = errors.New("clickhouse runtime: invalid binding")
+	// ErrUnsupportedBinding is returned by a Binding.Value whose Go type has
+	// no ClickHouse literal encoding in this package yet -- e.g. a
+	// slice-of-tuples value for an Array(Tuple(...)) parameter (CHAOS-4729).
+	// It is distinct from ErrInvalidBinding (a malformed name or a
+	// duplicate binding) so a caller can tell "this binding is wrong" apart
+	// from "this value shape isn't supported here yet" without parsing
+	// Error() text. Fail closed: a value shape this package cannot render
+	// with a proven round-trip encoding is rejected rather than encoded
+	// best-effort.
+	ErrUnsupportedBinding = errors.New("clickhouse runtime: unsupported binding value type")
 )
 
 var (

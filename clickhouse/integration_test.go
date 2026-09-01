@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -119,6 +120,69 @@ func assertIntegrationExecutionLimit(t *testing.T, options Options) {
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("execution-limited query took %v, want at most 2s", elapsed)
+	}
+}
+
+// arrayStringEscapingCorpus is the CHAOS-4745 property-style escaping
+// corpus: every element is chosen to stress a specific interaction between
+// this package's clickHouseStringArray encoding and ClickHouse's
+// native-protocol Array(String) parameter parser -- quotes, backslashes,
+// the two in direct adjacency (both orders), runs of only one or the
+// other, structural characters the array-literal grammar itself uses
+// (comma, brackets), unicode, and the empty string.
+var arrayStringEscapingCorpus = []string{
+	"",
+	"plain-value",
+	"O'Brien's project",
+	`back\slash`,
+	`a\'b`,   // backslash directly followed by a quote
+	`a'\b`,   // quote directly followed by a backslash
+	`\'\'\'`, // alternating run
+	"''''",   // run of only quotes
+	`\\\\`,   // run of only backslashes
+	"comma,separated,value",
+	"[bracketed-value]",
+	"a,'b\\c[d]",
+	"héllo wörld 日本語 🚀",
+	"tab\tand\nnewline",
+}
+
+// TestIntegrationClient_binds_Array_String_values_byte_exact is the
+// CHAOS-4745 red/green proof: clickHouseStringArray's escaping must
+// round-trip every element of arrayStringEscapingCorpus through ClickHouse's
+// real native-protocol Array(String) query-parameter parser byte-exact, not
+// merely avoid an error. On the pre-fix \' escaping, this fails outright
+// (ClickHouse rejects the query -- "Cannot parse escape sequence") the
+// moment the corpus includes an embedded quote.
+func TestIntegrationClient_binds_Array_String_values_byte_exact(t *testing.T) {
+	client, _ := integrationClient(t)
+
+	rows, err := client.Query(context.Background(), "SELECT {values:Array(String)}", []Binding{{Name: "values", Value: arrayStringEscapingCorpus}})
+	if err != nil {
+		t.Fatalf("Query() error = %v (want the Array(String) binding to be accepted)", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("Array(String) round-trip returned no rows: %v", rows.Err())
+	}
+	var got []string
+	if err := rows.Scan(&got); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, arrayStringEscapingCorpus) {
+		for i := range arrayStringEscapingCorpus {
+			if i >= len(got) {
+				t.Errorf("element %d missing from result (want %q)", i, arrayStringEscapingCorpus[i])
+				continue
+			}
+			if got[i] != arrayStringEscapingCorpus[i] {
+				t.Errorf("element %d = %q (%d bytes), want %q (%d bytes)", i, got[i], len(got[i]), arrayStringEscapingCorpus[i], len(arrayStringEscapingCorpus[i]))
+			}
+		}
+		if len(got) != len(arrayStringEscapingCorpus) {
+			t.Errorf("result has %d elements, want %d", len(got), len(arrayStringEscapingCorpus))
+		}
+		t.Fatalf("Array(String) round-trip mismatch:\n got  = %#v\n want = %#v", got, arrayStringEscapingCorpus)
 	}
 }
 
