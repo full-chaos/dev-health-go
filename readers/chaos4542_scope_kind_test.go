@@ -58,8 +58,16 @@ func TestChaos4542_NoConsumerGuardsOnKeyResolutionCount(t *testing.T) {
 
 // statementOutsideExpansion strips the one place the ambiguity filter is
 // allowed to live, so the assertion above cannot be satisfied by accident.
+//
+// RESPELLED by CHAOS-4751, not relaxed. The filter used to be the key-row
+// UNION branch's own WHERE; now that the expansion reads its row source
+// once and fans the scope rows out with ARRAY JOIN, it is the named
+// condition that decides whether the key element is emitted. Same filter,
+// same single site -- and the marker now includes the alias, so a stray
+// copy of the bare condition anywhere else is no longer stripped and trips
+// the assertion instead of hiding behind it.
 func statementOutsideExpansion(statement string) string {
-	const marker = "WHERE project_key != '' AND key_resolution_count = 1"
+	const marker = "(project_key != '' AND key_resolution_count = 1) AS key_scope_emitted"
 	return strings.ReplaceAll(statement, marker, "")
 }
 
@@ -69,11 +77,16 @@ func TestChaos4542_AmbiguousKeyHasNoScopeRow(t *testing.T) {
 	// The filter must be INSIDE the expansion, on the key row's own SELECT.
 	// That is what makes an ambiguous key unjoinable by anyone: it is not a
 	// guard a consumer may forget, it is a row that does not exist.
-	if !strings.Contains(expansion, "WHERE project_key != '' AND key_resolution_count = 1") {
+	if !strings.Contains(expansion, "(project_key != '' AND key_resolution_count = 1) AS key_scope_emitted") {
 		t.Fatal("the key scope row must be emitted only when its key names exactly one project -- otherwise every consumer has to remember a guard, and the last three did not")
 	}
-	if !strings.Contains(expansion, "'id' AS scope_kind") || !strings.Contains(expansion, "'key' AS scope_kind") {
-		t.Fatal("the expansion must label each scope row with the question it answers ('id' or 'key')")
+	// RESPELLED by CHAOS-4751, and stronger for it. The labels used to be
+	// two independent branch literals, which two Contains checks could
+	// confirm separately while saying nothing about whether the 'key' label
+	// was actually guarded. One literal now pins that 'key' exists ONLY in
+	// the emitted arm and 'id' in both.
+	if !strings.Contains(expansion, "if(key_scope_emitted, ['id', 'key'], ['id']) AS scope_kind") {
+		t.Fatal("the expansion must label each scope row with the question it answers ('id' or 'key'), with the key label emitted only under the ambiguity guard")
 	}
 }
 
