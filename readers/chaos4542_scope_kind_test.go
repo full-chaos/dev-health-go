@@ -77,6 +77,15 @@ func TestChaos4542_AmbiguousKeyHasNoScopeRow(t *testing.T) {
 	}
 }
 
+// RESPELLED by CHAOS-4552, not relaxed. Before it, the key arm was its own
+// separately-joined SELECT, so this test could name a literal
+// `o.project_key = p.scope ... WHERE p.scope_kind = 'key'` substring. After
+// CHAOS-4552 unions the ownership side once, both arms share ONE join
+// (`o.scope_value = p.scope`) and the restriction travels as a per-row TAG
+// (`required_scope_kind`) enforced in a shared WHERE, not a literal
+// per-arm predicate. This test keeps its original job -- prove the key
+// arm's rows can only ever match the KEY scope row -- against the new
+// spelling that is now load-bearing.
 func TestChaos4542_KeyArmSelectsTheKeyScopeRow(t *testing.T) {
 	t.Parallel()
 	ownership := ProjectOwnershipJoinSQL("")
@@ -86,11 +95,14 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRow(t *testing.T) {
 	if strings.Contains(ownership, "o.project_key = p.project_key") {
 		t.Error("the key arm joins p.project_key, a column present on EVERY scope row: an id row carrying the same key matches, which is defect 6")
 	}
-	if !strings.Contains(ownership, "o.project_key = p.scope") {
-		t.Error("the key arm must match the key SCOPE row (o.project_key = p.scope)")
+	if !strings.Contains(ownership, "ifNull(project_key, '') AS scope_value") {
+		t.Error("the key-sourced rows must project project_key into the shared scope_value column that joins p.scope")
 	}
-	if !strings.Contains(ownership, "p.scope_kind = 'key'") {
-		t.Error("the key arm must name scope_kind = 'key' -- without it the arm matches id rows too")
+	if !strings.Contains(ownership, "'key' AS required_scope_kind") {
+		t.Error("the key-sourced rows must tag required_scope_kind = 'key' -- without it the arm matches id rows too")
+	}
+	if !strings.Contains(ownership, "o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind") {
+		t.Error("the required_scope_kind tag is computed but never enforced in a WHERE -- the restriction would be decorative and the key-sourced rows could match an id scope row")
 	}
 }
 
