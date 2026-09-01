@@ -105,6 +105,8 @@ func safeErrorClass(err error) string {
 	// (potentially data-bearing) error text.
 	case errors.Is(err, clickhouse.ErrUnsupportedBinding):
 		return "unsupported_binding"
+	case errors.Is(err, clickhouse.ErrUnsafeBindingValue):
+		return "unsafe_binding_value"
 	case errors.Is(err, clickhouse.ErrInvalidBinding):
 		return "invalid_binding"
 	default:

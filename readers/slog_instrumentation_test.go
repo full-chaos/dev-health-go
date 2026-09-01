@@ -130,6 +130,11 @@ func TestSlogInstrumentation_ClassifiesRejectedBindingsDistinctlyFromQueryErrors
 			want: "unsupported_binding",
 		},
 		{
+			name: "unsafe binding value (e.g. a backslash in an Array(String) element)",
+			err:  fmt.Errorf("binding value: %w", clickhouse.ErrUnsafeBindingValue),
+			want: "unsafe_binding_value",
+		},
+		{
 			name: "invalid binding name",
 			err:  fmt.Errorf("binding name: %w", clickhouse.ErrInvalidBinding),
 			want: "invalid_binding",
