@@ -28,6 +28,19 @@ var (
 	// with a proven round-trip encoding is rejected rather than encoded
 	// best-effort.
 	ErrUnsupportedBinding = errors.New("clickhouse runtime: unsupported binding value type")
+	// ErrUnsafeBindingValue is returned by a []string Binding.Value element
+	// this package cannot encode with a proven round-trip -- specifically,
+	// any value containing a backslash byte (CHAOS-4745). Executed proof
+	// against a real ClickHouse server shows its native-protocol
+	// Array(String) parameter-value escape decoder handles an isolated
+	// backslash correctly but corrupts or hard-errors on several other
+	// backslash placements (adjacent to another escape, or followed by a
+	// letter ClickHouse's escape table also recognizes on its own) in ways
+	// this package cannot reliably distinguish in advance. Rejecting every
+	// backslash trades some over-rejection for never silently truncating a
+	// value -- see clickHouseQuotedString's doc comment for the full
+	// executed evidence.
+	ErrUnsafeBindingValue = errors.New("clickhouse runtime: binding value cannot be safely encoded")
 )
 
 var (

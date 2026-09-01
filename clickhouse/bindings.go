@@ -37,7 +37,7 @@ func clickHouseParameter(value any) (string, error) {
 	case time.Time:
 		return value.UTC().Format("2006-01-02 15:04:05.000"), nil
 	case []string:
-		return clickHouseStringArray(value), nil
+		return clickHouseStringArray(value)
 	}
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
@@ -63,19 +63,24 @@ func clickHouseParameter(value any) (string, error) {
 // clickHouseStringArray renders values as a ClickHouse Array(String)
 // literal suitable for a native-protocol query-parameter value (the
 // {name:Array(String)} mechanism clickhousedriver.WithParameters uses --
-// see clickHouseQuotedString's doc comment for why this is not the same
-// escaping ordinary ClickHouse SQL text accepts).
-func clickHouseStringArray(values []string) string {
+// see clickHouseQuotedString's doc comment for the escaping this requires,
+// and for why a backslash in value fails closed instead of being escaped).
+func clickHouseStringArray(values []string) (string, error) {
 	encoded := make([]string, len(values))
 	for i, value := range values {
-		encoded[i] = "'" + clickHouseQuotedString(value) + "'"
+		quoted, err := clickHouseQuotedString(value)
+		if err != nil {
+			return "", err
+		}
+		encoded[i] = "'" + quoted + "'"
 	}
-	return "[" + strings.Join(encoded, ",") + "]"
+	return "[" + strings.Join(encoded, ",") + "]", nil
 }
 
 // clickHouseQuotedString escapes value for embedding inside a single-quoted
 // element of a ClickHouse array literal sent as a native-protocol
-// query-parameter value.
+// query-parameter value, or returns ErrUnsafeBindingValue if value cannot
+// be encoded safely (see below).
 //
 // This is NOT the same escaping ordinary ClickHouse SQL text accepts.
 // ClickHouse's own syntax docs (https://clickhouse.com/docs/sql-reference/syntax)
@@ -88,14 +93,29 @@ func clickHouseStringArray(values []string) string {
 // parameter value: it rejects the backslash-preceded form outright with
 // "Cannot parse escape sequence" (CHAOS-4745, reproduced against
 // ClickHouse 25.1 and 26.7), so this package writes the quote twice
-// instead. A literal backslash is escaped by doubling it (which the same
-// parser does accept); strings.NewReplacer applies both substitutions in
-// a single left-to-right pass over the ORIGINAL text, so a backslash
-// immediately adjacent to a quote is not double-processed -- each input
-// byte is classified once, independent of what any other substitution
-// emitted. See integration_test.go's
-// TestIntegrationClient_binds_Array_String_values_byte_exact for the
-// executed round-trip proof against a real server.
-func clickHouseQuotedString(value string) string {
-	return strings.NewReplacer(`\`, `\\`, `'`, `''`).Replace(value)
+// instead. That part is safe on its own -- a value with a quote and no
+// backslash round-trips byte-exact (see integration_test.go's
+// TestIntegrationClient_binds_Array_String_values_byte_exact).
+//
+// A literal backslash cannot be encoded safely at all through this
+// mechanism. CHAOS-4745's own ticket assumed doubling it (\\) was already
+// correct and unaffected by the quote-escaping change; executed proof
+// against a real server disproves that for anything beyond a single
+// backslash surrounded by ordinary characters. A doubled-backslash
+// sequence placed next to another escape -- a second backslash, a doubled
+// quote, or specifically the letters ClickHouse's escape table also
+// recognizes on their own (e.g. \b, \n) -- decodes inconsistently: some
+// combinations silently drop bytes (a value round-trips shorter than sent,
+// with no error), others hard-error. Silent truncation is a worse failure
+// mode than a hard error (CHAOS-4745's own ticket makes the same point
+// about a hex-escape scheme it tried and rejected for exactly this
+// reason), so this package does not attempt to characterize which
+// backslash placements are "safe enough" -- it fails closed on any
+// backslash, the same posture CHAOS-4729 already takes for a value shape
+// this package cannot encode with a proven round-trip.
+func clickHouseQuotedString(value string) (string, error) {
+	if strings.ContainsRune(value, '\\') {
+		return "", fmt.Errorf("binding value: %w", ErrUnsafeBindingValue)
+	}
+	return strings.ReplaceAll(value, `'`, `''`), nil
 }

@@ -8,11 +8,12 @@ import (
 // TestClickHouseStringArray_escapes_quotes_as_doubled_not_backslash locks in
 // the CHAOS-4745 fix at the pure-encoding level: ClickHouse's native-protocol
 // parameter parser rejects \' outright (reproduced against ClickHouse 25.1
-// and 26.7 -- see clickhouse/integration_test.go's
+// -- see clickhouse/integration_test.go's
 // TestIntegrationClient_binds_Array_String_values_byte_exact for the
 // server-round-trip proof) but accepts SQL-standard doubled-quote escaping.
-// This test only pins the literal text this package emits; it cannot by
-// itself prove ClickHouse accepts it -- that is the integration test's job.
+// This test only pins the literal text this package emits for the values it
+// accepts; it cannot by itself prove ClickHouse accepts it -- that is the
+// integration test's job.
 func TestClickHouseStringArray_escapes_quotes_as_doubled_not_backslash(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -35,29 +36,9 @@ func TestClickHouseStringArray_escapes_quotes_as_doubled_not_backslash(t *testin
 			want:   "['O''Brien''s project']",
 		},
 		{
-			name:   "backslash is doubled",
-			values: []string{`back\slash`},
-			want:   `['back\\slash']`,
-		},
-		{
-			name:   "backslash directly adjacent to a quote",
-			values: []string{`a\'b`},
-			want:   `['a\\''b']`,
-		},
-		{
-			name:   "quote directly followed by backslash",
-			values: []string{`a'\b`},
-			want:   `['a''\\b']`,
-		},
-		{
 			name:   "run of only quotes",
 			values: []string{"''''"},
 			want:   "['''''''''']",
-		},
-		{
-			name:   "run of only backslashes",
-			values: []string{`\\\\`},
-			want:   `['\\\\\\\\']`,
 		},
 		{
 			name:   "multiple elements joined with a comma",
@@ -77,8 +58,43 @@ func TestClickHouseStringArray_escapes_quotes_as_doubled_not_backslash(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := clickHouseStringArray(tt.values); got != tt.want {
+			got, err := clickHouseStringArray(tt.values)
+			if err != nil {
+				t.Fatalf("clickHouseStringArray(%q) error = %v", tt.values, err)
+			}
+			if got != tt.want {
 				t.Errorf("clickHouseStringArray(%q) = %q, want %q", tt.values, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClickHouseStringArray_fails_closed_on_any_backslash covers the
+// CHAOS-4745 finding that a doubled-backslash escape (\\), though it
+// decodes correctly against ClickHouse's real parameter parser when
+// isolated, decodes INCONSISTENTLY -- sometimes silently dropping bytes,
+// sometimes hard-erroring -- when adjacent to another escape (a second
+// backslash, a doubled quote, or a letter ClickHouse's own escape table
+// also recognizes, e.g. \b, \n). Executed proof: clickhouse/bindings.go's
+// clickHouseQuotedString doc comment. Rather than characterize which
+// placements are safe, this package rejects any backslash outright --
+// never silently truncates a value.
+func TestClickHouseStringArray_fails_closed_on_any_backslash(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "single backslash", value: `back\slash`},
+		{name: "backslash directly followed by a quote", value: `a\'b`},
+		{name: "quote directly followed by a backslash", value: `a'\b`},
+		{name: "run of only backslashes", value: `\\\\`},
+		{name: "backslash followed by a named-escape letter", value: `a\b`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := clickHouseStringArray([]string{tt.value})
+			if !errors.Is(err, ErrUnsafeBindingValue) {
+				t.Fatalf("clickHouseStringArray([%q]) error = %v, want ErrUnsafeBindingValue", tt.value, err)
 			}
 		})
 	}
@@ -123,5 +139,15 @@ func TestTranslateBindings_ArrayString_uses_doubled_quote_escaping(t *testing.T)
 	}
 	if got, want := parameters["ids"], "['O''Brien']"; got != want {
 		t.Fatalf("ids parameter = %q, want %q", got, want)
+	}
+}
+
+func TestTranslateBindings_ArrayString_rejects_backslash(t *testing.T) {
+	bindings := []Binding{{Name: "ids", Value: []string{`back\slash`}}}
+
+	_, err := translateBindings(bindings)
+
+	if !errors.Is(err, ErrUnsafeBindingValue) {
+		t.Fatalf("translateBindings() error = %v, want ErrUnsafeBindingValue", err)
 	}
 }
