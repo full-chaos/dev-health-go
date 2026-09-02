@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -119,6 +120,100 @@ func assertIntegrationExecutionLimit(t *testing.T, options Options) {
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("execution-limited query took %v, want at most 2s", elapsed)
+	}
+}
+
+// arrayStringEscapingCorpus is the CHAOS-4745 property-style escaping
+// corpus for the values clickHouseStringArray accepts: quotes (isolated,
+// runs, mixed with structural characters the array-literal grammar itself
+// uses -- comma, brackets), unicode, whitespace/control characters, and the
+// empty string.
+//
+// A backslash is deliberately NOT in this corpus. Executed proof (see
+// bindings.go's clickHouseQuotedString doc comment) shows ClickHouse's
+// native-protocol Array(String) parameter-value decoder handles an
+// isolated backslash correctly but corrupts or hard-errors on several
+// other backslash placements -- this package rejects every backslash
+// rather than risk a value it cannot prove round-trips; see
+// TestIntegrationClient_rejects_Array_String_values_with_a_backslash below
+// for that proof.
+var arrayStringEscapingCorpus = []string{
+	"",
+	"plain-value",
+	"O'Brien's project",
+	"''''", // run of only quotes
+	"comma,separated,value",
+	"[bracketed-value]",
+	"héllo wörld 日本語 🚀",
+	"tab\tand\nnewline",
+}
+
+// TestIntegrationClient_binds_Array_String_values_byte_exact is the
+// CHAOS-4745 red/green proof: clickHouseStringArray's escaping must
+// round-trip every element of arrayStringEscapingCorpus through ClickHouse's
+// real native-protocol Array(String) query-parameter parser byte-exact, not
+// merely avoid an error. On the pre-fix \' escaping, this fails outright
+// (ClickHouse rejects the query -- "Cannot parse escape sequence") the
+// moment the corpus includes an embedded quote.
+func TestIntegrationClient_binds_Array_String_values_byte_exact(t *testing.T) {
+	client, _ := integrationClient(t)
+
+	rows, err := client.Query(context.Background(), "SELECT {values:Array(String)}", []Binding{{Name: "values", Value: arrayStringEscapingCorpus}})
+	if err != nil {
+		t.Fatalf("Query() error = %v (want the Array(String) binding to be accepted)", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("Array(String) round-trip returned no rows: %v", rows.Err())
+	}
+	var got []string
+	if err := rows.Scan(&got); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, arrayStringEscapingCorpus) {
+		for i := range arrayStringEscapingCorpus {
+			if i >= len(got) {
+				t.Errorf("element %d missing from result (want %q)", i, arrayStringEscapingCorpus[i])
+				continue
+			}
+			if got[i] != arrayStringEscapingCorpus[i] {
+				t.Errorf("element %d = %q (%d bytes), want %q (%d bytes)", i, got[i], len(got[i]), arrayStringEscapingCorpus[i], len(arrayStringEscapingCorpus[i]))
+			}
+		}
+		if len(got) != len(arrayStringEscapingCorpus) {
+			t.Errorf("result has %d elements, want %d", len(got), len(arrayStringEscapingCorpus))
+		}
+		t.Fatalf("Array(String) round-trip mismatch:\n got  = %#v\n want = %#v", got, arrayStringEscapingCorpus)
+	}
+}
+
+// TestIntegrationClient_rejects_Array_String_values_with_a_backslash is the
+// executed proof behind ErrUnsafeBindingValue: this asserts the client
+// rejects a backslash-bearing element BEFORE any query reaches the server
+// (client.Query returns the error; the server never sees the statement),
+// and separately, that if this package's guard were absent, the exact
+// values below are where ClickHouse's real parameter decoder corrupts or
+// errors -- proving the guard is not over-cautious.
+func TestIntegrationClient_rejects_Array_String_values_with_a_backslash(t *testing.T) {
+	client, _ := integrationClient(t)
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"isolated backslash", `back\slash`},
+		{"backslash directly followed by a quote", `a\'b`},
+		{"quote directly followed by a backslash", `a'\b`},
+		{"run of only backslashes", `\\\\`},
+		{"backslash followed by a named-escape letter", `a\b`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.Query(context.Background(), "SELECT {values:Array(String)}", []Binding{{Name: "values", Value: []string{tt.value}}})
+			if !errors.Is(err, ErrUnsafeBindingValue) {
+				t.Fatalf("Query() error = %v, want ErrUnsafeBindingValue", err)
+			}
+		})
 	}
 }
 

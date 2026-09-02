@@ -3,10 +3,13 @@ package readers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // recordingHandler is a minimal slog.Handler that captures every record
@@ -109,6 +112,52 @@ func TestSlogInstrumentation_EmitsErrorRecordOnFailure(t *testing.T) {
 // attribute key it might have leaked under.
 func containsSecret(s string) bool {
 	return strings.Contains(s, "hunter2")
+}
+
+func TestSlogInstrumentation_ClassifiesRejectedBindingsDistinctlyFromQueryErrors(t *testing.T) {
+	// CHAOS-4745/CHAOS-4729: a rejected Binding is a caller-side encoding
+	// problem, not a ClickHouse execution failure -- it must land in its own
+	// closed-vocabulary bucket(s), not the catch-all "query_error", and
+	// still never leak the underlying binding value.
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "unsupported binding value type",
+			err:  fmt.Errorf("binding value: %w", clickhouse.ErrUnsupportedBinding),
+			want: "unsupported_binding",
+		},
+		{
+			name: "unsafe binding value (e.g. a backslash in an Array(String) element)",
+			err:  fmt.Errorf("binding value: %w", clickhouse.ErrUnsafeBindingValue),
+			want: "unsafe_binding_value",
+		},
+		{
+			name: "invalid binding name",
+			err:  fmt.Errorf("binding name: %w", clickhouse.ErrInvalidBinding),
+			want: "invalid_binding",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &recordingHandler{}
+			instr := NewSlogInstrumentation(slog.New(handler), slog.LevelInfo)
+
+			_, finish := instr.StartQuery(context.Background(), "ReadRunStatus", true)
+			finish(tt.err)
+
+			records := handler.snapshot()
+			if len(records) != 1 {
+				t.Fatalf("expected exactly 1 record, got %d", len(records))
+			}
+			attrs := attrsOf(records[0])
+			if got := attrs["error_class"].String(); got != tt.want {
+				t.Errorf("error_class attr = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestSlogInstrumentation_NilLoggerFallsBackToDefault(t *testing.T) {

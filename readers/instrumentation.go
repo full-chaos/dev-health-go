@@ -3,6 +3,8 @@ package readers
 import (
 	"context"
 	"errors"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // Instrumentation is the store-level telemetry hook QueryOrgScoped -- the
@@ -95,6 +97,18 @@ func safeErrorClass(err error) string {
 		return "context_canceled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "context_deadline_exceeded"
+	// A rejected Binding (CHAOS-4745/CHAOS-4729) is a caller-side encoding
+	// problem, not a query-execution failure -- distinct buckets so a
+	// dashboard can tell "the statement/data this reader sent ClickHouse
+	// was malformed" apart from "ClickHouse rejected/failed a
+	// well-formed query", without either bucket ever carrying the raw
+	// (potentially data-bearing) error text.
+	case errors.Is(err, clickhouse.ErrUnsupportedBinding):
+		return "unsupported_binding"
+	case errors.Is(err, clickhouse.ErrUnsafeBindingValue):
+		return "unsafe_binding_value"
+	case errors.Is(err, clickhouse.ErrInvalidBinding):
+		return "invalid_binding"
 	default:
 		return "query_error"
 	}
