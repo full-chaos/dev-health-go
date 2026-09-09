@@ -13,9 +13,25 @@ type RepositoryIdentityRow struct {
 // repos.provider, the same table and columns
 // devhealthsource/tables.go's queryRepositories already reads.
 func ReadRepositoryIdentity(ctx context.Context, client QueryClient, orgID string, ids []string) ([]RepositoryIdentityRow, error) {
+	return ReadRepositoryIdentityWithRowLimit(ctx, client, orgID, ids, DefaultRowLimit)
+}
+
+// ReadRepositoryIdentityWithRowLimit is ReadRepositoryIdentity with a
+// caller-chosen row bound. See ReadWorkItemStatusWithRowLimit and
+// ProbeRowLimit for the limit+1 discipline this exists to serve.
+//
+// WHY THE REPOSITORY READERS NEED IT TOO (CHAOS-5474, found by adversarial
+// review of the work-item half). A consumer can hold repository-subject and
+// work-item-subject rows behind ONE result-level truncation flag -- acr's
+// IdentityProvider and MembershipProvider each OR both branches into a single
+// `Truncated`. Fixing only the work-item branch there leaves the shared flag
+// still reporting a full page as truncated whenever the REPOSITORY branch
+// reads exactly its bound, so the observable never actually became honest.
+// The boundary was not separable, because the observable is shared.
+func ReadRepositoryIdentityWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]RepositoryIdentityRow, error) {
 	statement := WithRowLimit(`SELECT toString(r.id), ifNull(r.repo, ''), ifNull(r.provider, '')
 FROM repos AS r FINAL
-WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`, DefaultRowLimit)
+WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`, limit)
 
 	var rows []RepositoryIdentityRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadRepositoryIdentity", statement, orgID, ids, func(row RowScanner) error {
@@ -80,9 +96,15 @@ type RepositoryIDRow struct {
 // organization a repository belongs to" needs no column beyond the id,
 // since membership itself is exactly the caller's own org.
 func ReadRepositoryIDs(ctx context.Context, client QueryClient, orgID string, ids []string) ([]RepositoryIDRow, error) {
+	return ReadRepositoryIDsWithRowLimit(ctx, client, orgID, ids, DefaultRowLimit)
+}
+
+// ReadRepositoryIDsWithRowLimit is ReadRepositoryIDs with a caller-chosen row
+// bound. See ReadRepositoryIdentityWithRowLimit.
+func ReadRepositoryIDsWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]RepositoryIDRow, error) {
 	statement := WithRowLimit(`SELECT toString(r.id)
 FROM repos AS r FINAL
-WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`, DefaultRowLimit)
+WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`, limit)
 
 	var rows []RepositoryIDRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadRepositoryIDs", statement, orgID, ids, func(row RowScanner) error {

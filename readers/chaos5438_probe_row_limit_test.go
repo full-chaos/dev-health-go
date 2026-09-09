@@ -97,7 +97,35 @@ func workItemReaderArms() []workItemReaderArm {
 			},
 		},
 		{
-			name: "repository", match: "INNER JOIN repos",
+			// CHAOS-5474: the two REPOSITORY-subject readers. They join the
+			// work-item ones here rather than in a table of their own
+			// because the property is the same one, and because a consumer
+			// can hold both behind ONE truncation flag -- which is exactly
+			// how fixing only the work-item half left the observable
+			// dishonest.
+			name: "repository_identity", match: "FROM repos",
+			readDefault: func(ctx context.Context, client readers.QueryClient, ids []string) (int, error) {
+				rows, err := readers.ReadRepositoryIdentity(ctx, client, "org-1", ids)
+				return len(rows), err
+			},
+			readWithLimit: func(ctx context.Context, client readers.QueryClient, ids []string, limit int) (int, error) {
+				rows, err := readers.ReadRepositoryIdentityWithRowLimit(ctx, client, "org-1", ids, limit)
+				return len(rows), err
+			},
+		},
+		{
+			name: "repository_ids", match: "FROM repos",
+			readDefault: func(ctx context.Context, client readers.QueryClient, ids []string) (int, error) {
+				rows, err := readers.ReadRepositoryIDs(ctx, client, "org-1", ids)
+				return len(rows), err
+			},
+			readWithLimit: func(ctx context.Context, client readers.QueryClient, ids []string, limit int) (int, error) {
+				rows, err := readers.ReadRepositoryIDsWithRowLimit(ctx, client, "org-1", ids, limit)
+				return len(rows), err
+			},
+		},
+		{
+			name: "work_item_repository", match: "INNER JOIN repos",
 			readDefault: func(ctx context.Context, client readers.QueryClient, ids []string) (int, error) {
 				rows, err := readers.ReadWorkItemRepository(ctx, client, "org-1", ids)
 				return len(rows), err
@@ -200,8 +228,12 @@ func probeRows(arm string, n int) [][]any {
 		switch arm {
 		case "completion":
 			rows[i] = []any{id, uint8(0), mustZeroTime(), "repo-1"}
-		case "repository":
+		case "work_item_repository":
 			rows[i] = []any{id, "repo-1", "acme/widget-service"}
+		case "repository_identity":
+			rows[i] = []any{"repo-" + strconv.Itoa(i), "acme/r" + strconv.Itoa(i), "github"}
+		case "repository_ids":
+			rows[i] = []any{"repo-" + strconv.Itoa(i)}
 		default:
 			// status, title and identity all scan (id, string, repo_id).
 			rows[i] = []any{id, "value", "repo-1"}
