@@ -43,9 +43,16 @@ type WorkItemIdentityRow struct {
 // same table and column devhealthsource/tables.go's queryWorkItems already
 // reads.
 func ReadWorkItemIdentity(ctx context.Context, client QueryClient, orgID string, ids []string) ([]WorkItemIdentityRow, error) {
+	return ReadWorkItemIdentityWithRowLimit(ctx, client, orgID, ids, DefaultRowLimit)
+}
+
+// ReadWorkItemIdentityWithRowLimit is ReadWorkItemIdentity with a
+// caller-chosen row bound. See ReadWorkItemStatusWithRowLimit and
+// ProbeRowLimit.
+func ReadWorkItemIdentityWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemIdentityRow, error) {
 	statement := WithRowLimit(`SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, limit)
 
 	var rows []WorkItemIdentityRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemIdentity", statement, orgID, ids, func(row RowScanner) error {
@@ -107,9 +114,16 @@ type WorkItemRepositoryRow struct {
 // documented no-op), so repository containment is the only membership
 // relationship this table pair can honestly support.
 func ReadWorkItemRepository(ctx context.Context, client QueryClient, orgID string, ids []string) ([]WorkItemRepositoryRow, error) {
+	return ReadWorkItemRepositoryWithRowLimit(ctx, client, orgID, ids, DefaultRowLimit)
+}
+
+// ReadWorkItemRepositoryWithRowLimit is ReadWorkItemRepository with a
+// caller-chosen row bound. See ReadWorkItemStatusWithRowLimit and
+// ProbeRowLimit.
+func ReadWorkItemRepositoryWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemRepositoryRow, error) {
 	statement := WithRowLimit(`SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, '')
 FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, limit)
 
 	var rows []WorkItemRepositoryRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemRepository", statement, orgID, ids, func(row RowScanner) error {
