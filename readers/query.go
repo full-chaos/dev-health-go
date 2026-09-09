@@ -117,3 +117,23 @@ const DefaultRowLimit = 200
 func WithRowLimit(statement string, limit int) string {
 	return statement + "\nLIMIT " + strconv.Itoa(limit)
 }
+
+// ProbeRowLimit is DefaultRowLimit PLUS ONE, and it exists because reading
+// exactly N rows under `LIMIT N` cannot distinguish "there were exactly N"
+// from "there were more and we stopped".
+//
+// A caller that bounds its OUTPUT at DefaultRowLimit and wants an honest
+// truncation flag must read one row MORE than it will ever serve: the extra
+// row is EVIDENCE, never content. Marking a full page truncated -- which is
+// what a caller-side `len(rows) >= DefaultRowLimit` check does under
+// `LIMIT DefaultRowLimit` -- degrades an answer that was in fact complete,
+// and is the defect acr CHAOS-5438 names.
+//
+// This is the same limit+1 discipline acr's own fact-scope expander already
+// applies one layer up (its FactScopeExpansionRequest.Limit doc comment:
+// "read up to Limit+1 rows and return ALL of them" so the caller can confirm
+// truncation from the extra row rather than trusting a flag).
+//
+// Readers keep DefaultRowLimit as their own default. A caller opts into the
+// probe explicitly, via the `...WithRowLimit` variant beside each reader.
+const ProbeRowLimit = DefaultRowLimit + 1

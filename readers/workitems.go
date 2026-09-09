@@ -18,9 +18,19 @@ type WorkItemStatusRow struct {
 // history column), so a caller only ever queries it on the current axis --
 // there is no TimeBound parameter here for that reason.
 func ReadWorkItemStatus(ctx context.Context, client QueryClient, orgID string, ids []string) ([]WorkItemStatusRow, error) {
+	return ReadWorkItemStatusWithRowLimit(ctx, client, orgID, ids, DefaultRowLimit)
+}
+
+// ReadWorkItemStatusWithRowLimit is ReadWorkItemStatus with a caller-chosen
+// row bound, for a caller that must distinguish a FULL page from a TRUNCATED
+// one. Pass ProbeRowLimit to read one row more than you will serve; the extra
+// row is the only truncation evidence there is. See ProbeRowLimit's own doc
+// comment. limit must be a caller-controlled constant, never a request value
+// -- WithRowLimit's own contract.
+func ReadWorkItemStatusWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemStatusRow, error) {
 	statement := WithRowLimit(`SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, limit)
 
 	var rows []WorkItemStatusRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemStatus", statement, orgID, ids, func(row RowScanner) error {
@@ -49,9 +59,15 @@ type WorkItemTitleRow struct {
 // Like status, title has no recorded history, so there is no TimeBound
 // parameter here.
 func ReadWorkItemTitle(ctx context.Context, client QueryClient, orgID string, ids []string) ([]WorkItemTitleRow, error) {
+	return ReadWorkItemTitleWithRowLimit(ctx, client, orgID, ids, DefaultRowLimit)
+}
+
+// ReadWorkItemTitleWithRowLimit is ReadWorkItemTitle with a caller-chosen row
+// bound. See ReadWorkItemStatusWithRowLimit and ProbeRowLimit.
+func ReadWorkItemTitleWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemTitleRow, error) {
 	statement := WithRowLimit(`SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, DefaultRowLimit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, limit)
 
 	var rows []WorkItemTitleRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemTitle", statement, orgID, ids, func(row RowScanner) error {
@@ -97,13 +113,20 @@ type WorkItemCompletionRow struct {
 // completed AFTER the requested time reads as not completed then, which is
 // what the row actually records.
 func ReadWorkItemCompletion(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound) ([]WorkItemCompletionRow, error) {
+	return ReadWorkItemCompletionWithRowLimit(ctx, client, orgID, ids, timeBound, DefaultRowLimit)
+}
+
+// ReadWorkItemCompletionWithRowLimit is ReadWorkItemCompletion with a
+// caller-chosen row bound. See ReadWorkItemStatusWithRowLimit and
+// ProbeRowLimit.
+func ReadWorkItemCompletionWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound, limit int) ([]WorkItemCompletionRow, error) {
 	completedExpression := "isNotNull(w.completed_at)"
 	if timeBound.Active {
 		completedExpression = "toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= " + timeBound.AsOfExpression() + ")"
 	}
 	statement := WithRowLimit(`SELECT w.work_item_id, `+completedExpression+`, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("w.created_at"), DefaultRowLimit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("w.created_at"), limit)
 
 	var rows []WorkItemCompletionRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemCompletion", statement, orgID, ids, func(row RowScanner) error {
