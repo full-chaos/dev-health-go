@@ -27,10 +27,32 @@ func ReadWorkItemStatus(ctx context.Context, client QueryClient, orgID string, i
 // row is the only truncation evidence there is. See ProbeRowLimit's own doc
 // comment. limit must be a caller-controlled constant, never a request value
 // -- WithRowLimit's own contract.
+//
+// Delegates to ReadWorkItemStatusWithScopeAndRowLimit with an allow-all
+// AuthorizationScope and no Settings, so its statement stays byte-identical
+// to what this function has always sent.
 func ReadWorkItemStatusWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemStatusRow, error) {
-	statement := WithRowLimit(`SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
+	return ReadWorkItemStatusWithScopeAndRowLimit(ctx, client, orgID, ids, AuthorizationScope{}, Settings{}, limit)
+}
+
+// ReadWorkItemStatusWithScope is ReadWorkItemStatus narrowed to scope and
+// bounded by settings. See AuthorizationScope and Settings for the
+// allow-all/no-ceiling zero values.
+func ReadWorkItemStatusWithScope(ctx context.Context, client QueryClient, orgID string, ids []string, scope AuthorizationScope, settings Settings) ([]WorkItemStatusRow, error) {
+	return ReadWorkItemStatusWithScopeAndRowLimit(ctx, client, orgID, ids, scope, settings, DefaultRowLimit)
+}
+
+// ReadWorkItemStatusWithScopeAndRowLimit is ReadWorkItemStatus with every
+// axis this package exposes: an authorization scope, per-statement
+// SETTINGS, and a caller-chosen row bound. See ReadWorkItemStatusWithRowLimit
+// for the limit+1 discipline, AuthorizationScope.predicate for the
+// work_items<->repos relation the scope predicate reuses, and Settings.Render
+// for the SETTINGS clause.
+func ReadWorkItemStatusWithScopeAndRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, scope AuthorizationScope, settings Settings, limit int) ([]WorkItemStatusRow, error) {
+	scopePredicate, scopeBindings := scope.predicate("w.repo_id")
+	statement := WithSettings(WithRowLimit(`SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, limit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`+scopePredicate, limit), settings)
 
 	var rows []WorkItemStatusRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemStatus", statement, orgID, ids, func(row RowScanner) error {
@@ -40,7 +62,7 @@ WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_ite
 		}
 		rows = append(rows, r)
 		return nil
-	})
+	}, scopeBindings...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,10 +86,29 @@ func ReadWorkItemTitle(ctx context.Context, client QueryClient, orgID string, id
 
 // ReadWorkItemTitleWithRowLimit is ReadWorkItemTitle with a caller-chosen row
 // bound. See ReadWorkItemStatusWithRowLimit and ProbeRowLimit.
+//
+// Delegates to ReadWorkItemTitleWithScopeAndRowLimit with an allow-all
+// AuthorizationScope and no Settings, so its statement stays byte-identical
+// to what this function has always sent.
 func ReadWorkItemTitleWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemTitleRow, error) {
-	statement := WithRowLimit(`SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
+	return ReadWorkItemTitleWithScopeAndRowLimit(ctx, client, orgID, ids, AuthorizationScope{}, Settings{}, limit)
+}
+
+// ReadWorkItemTitleWithScope is ReadWorkItemTitle narrowed to scope and
+// bounded by settings. See AuthorizationScope and Settings for the
+// allow-all/no-ceiling zero values.
+func ReadWorkItemTitleWithScope(ctx context.Context, client QueryClient, orgID string, ids []string, scope AuthorizationScope, settings Settings) ([]WorkItemTitleRow, error) {
+	return ReadWorkItemTitleWithScopeAndRowLimit(ctx, client, orgID, ids, scope, settings, DefaultRowLimit)
+}
+
+// ReadWorkItemTitleWithScopeAndRowLimit is ReadWorkItemTitle with every axis
+// this package exposes: an authorization scope, per-statement SETTINGS, and
+// a caller-chosen row bound. See ReadWorkItemStatusWithScopeAndRowLimit.
+func ReadWorkItemTitleWithScopeAndRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, scope AuthorizationScope, settings Settings, limit int) ([]WorkItemTitleRow, error) {
+	scopePredicate, scopeBindings := scope.predicate("w.repo_id")
+	statement := WithSettings(WithRowLimit(`SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`, limit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`+scopePredicate, limit), settings)
 
 	var rows []WorkItemTitleRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemTitle", statement, orgID, ids, func(row RowScanner) error {
@@ -77,7 +118,7 @@ WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_ite
 		}
 		rows = append(rows, r)
 		return nil
-	})
+	}, scopeBindings...)
 	if err != nil {
 		return nil, err
 	}
@@ -119,14 +160,34 @@ func ReadWorkItemCompletion(ctx context.Context, client QueryClient, orgID strin
 // ReadWorkItemCompletionWithRowLimit is ReadWorkItemCompletion with a
 // caller-chosen row bound. See ReadWorkItemStatusWithRowLimit and
 // ProbeRowLimit.
+//
+// Delegates to ReadWorkItemCompletionWithScopeAndRowLimit with an allow-all
+// AuthorizationScope and no Settings, so its statement stays byte-identical
+// to what this function has always sent.
 func ReadWorkItemCompletionWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound, limit int) ([]WorkItemCompletionRow, error) {
+	return ReadWorkItemCompletionWithScopeAndRowLimit(ctx, client, orgID, ids, timeBound, AuthorizationScope{}, Settings{}, limit)
+}
+
+// ReadWorkItemCompletionWithScope is ReadWorkItemCompletion narrowed to
+// scope and bounded by settings. See AuthorizationScope and Settings for
+// the allow-all/no-ceiling zero values.
+func ReadWorkItemCompletionWithScope(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound, scope AuthorizationScope, settings Settings) ([]WorkItemCompletionRow, error) {
+	return ReadWorkItemCompletionWithScopeAndRowLimit(ctx, client, orgID, ids, timeBound, scope, settings, DefaultRowLimit)
+}
+
+// ReadWorkItemCompletionWithScopeAndRowLimit is ReadWorkItemCompletion with
+// every axis this package exposes: an authorization scope, per-statement
+// SETTINGS, and a caller-chosen row bound. See
+// ReadWorkItemStatusWithScopeAndRowLimit.
+func ReadWorkItemCompletionWithScopeAndRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound, scope AuthorizationScope, settings Settings, limit int) ([]WorkItemCompletionRow, error) {
 	completedExpression := "isNotNull(w.completed_at)"
 	if timeBound.Active {
 		completedExpression = "toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= " + timeBound.AsOfExpression() + ")"
 	}
-	statement := WithRowLimit(`SELECT w.work_item_id, `+completedExpression+`, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
+	scopePredicate, scopeBindings := scope.predicate("w.repo_id")
+	statement := WithSettings(WithRowLimit(`SELECT w.work_item_id, `+completedExpression+`, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("w.created_at"), limit)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("w.created_at")+scopePredicate, limit), settings)
 
 	var rows []WorkItemCompletionRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemCompletion", statement, orgID, ids, func(row RowScanner) error {
@@ -136,7 +197,7 @@ WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_ite
 		}
 		rows = append(rows, r)
 		return nil
-	}, timeBound.Bindings()...)
+	}, append(timeBound.Bindings(), scopeBindings...)...)
 	if err != nil {
 		return nil, err
 	}
