@@ -33,3 +33,99 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
       - name: Build
         run: go build ./...
+
+  readers-integration:
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: ci_reader
+          CLICKHOUSE_PASSWORD: ci_reader_pw
+        ports:
+          - 8123:8123
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --query 'SELECT 1'"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      CH_USER: ci_reader
+      CH_PASSWORD: ci_reader_pw
+      CH_DATABASE: dev_health_go_readers_${{ github.run_id }}_${{ github.run_attempt }}
+      ACR_CLICKHOUSE_INTEGRATION_DSN: clickhouse://ci_reader:ci_reader_pw@localhost:9000/dev_health_go_readers_${{ github.run_id }}_${{ github.run_attempt }}
+      ACR_CLICKHOUSE_INTEGRATION_DATABASE: dev_health_go_readers_${{ github.run_id }}_${{ github.run_attempt }}
+      ACR_CLICKHOUSE_INTEGRATION_ISOLATED: "1"
+      ACR_CLICKHOUSE_INTEGRATION_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Seed isolated reader database
+        run: |
+          set -euo pipefail
+          case "$CH_DATABASE" in
+            dev_health_go_readers_[0-9]*_[0-9]*) ;;
+            *) echo "unexpected ClickHouse database name: $CH_DATABASE" >&2; exit 1 ;;
+          esac
+          ch_query() {
+            curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-connrefused \
+              --user "$CH_USER:$CH_PASSWORD" \
+              --data-binary "$1" http://127.0.0.1:8123/
+          }
+          ch_query "CREATE DATABASE IF NOT EXISTS $CH_DATABASE"
+          ch_query "CREATE TABLE $CH_DATABASE.repos (
+            id String,
+            org_id String,
+            repo String,
+            version UInt64
+          ) ENGINE = ReplacingMergeTree(version) ORDER BY (org_id, id)"
+          ch_query "INSERT INTO $CH_DATABASE.repos (id, org_id, repo, version) VALUES
+            ('repo-a', 'reader-scope-fixture-org', 'acme/one', 1),
+            ('repo-b', 'reader-scope-fixture-org', 'acme/tools', 1),
+            ('repo-c', 'reader-scope-fixture-org', 'other/three', 1),
+            ('repo-empty', 'reader-scope-fixture-org', '', 1),
+            ('repo-malformed', 'reader-scope-fixture-org', 'acme/not/real', 1),
+            ('repo-cross-org', 'other-org', 'acme/cross', 1)"
+          ch_query "CREATE TABLE $CH_DATABASE.work_items (
+            org_id String,
+            work_item_id String,
+            status Nullable(String),
+            title Nullable(String),
+            repo_id String,
+            completed_at Nullable(DateTime64(6, 'UTC')),
+            created_at DateTime64(6, 'UTC')
+          ) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, work_item_id)"
+          ch_query "INSERT INTO $CH_DATABASE.work_items
+            (org_id, work_item_id, status, title, repo_id, completed_at, created_at)
+          VALUES
+            ('reader-scope-fixture-org', 'WI-A', 'open', 'A only', 'repo-a', NULL, '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-B-EARLY', 'in_progress', 'B completed before the cutoff', 'repo-b', '2026-01-10 12:00:00', '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-B-LATE', 'done', 'B completed after the cutoff', 'repo-b', '2026-02-10 12:00:00', '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-B-NOT-YET', 'planned', 'B created after the cutoff', 'repo-b', '2026-02-02 12:00:00', '2026-02-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-C', 'open', 'C only', 'repo-c', NULL, '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-MISSING', 'open', 'missing repository metadata', 'repo-missing', NULL, '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-ZERO', 'open', 'zero repository sentinel', '00000000-0000-0000-0000-000000000000', NULL, '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-CROSS-ORG', 'open', 'cross organization repository', 'repo-cross-org', NULL, '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-EMPTY-METADATA', 'open', 'empty repository metadata', 'repo-empty', NULL, '2026-01-01 00:00:00'),
+            ('reader-scope-fixture-org', 'WI-MALFORMED-METADATA', 'open', 'malformed repository metadata', 'repo-malformed', NULL, '2026-01-01 00:00:00')"
+      - name: Vet integration-tagged readers
+        run: go vet -tags=integration ./readers
+      - name: Run required readers integration test
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          go test -tags=integration -count=1 -json \
+            -run '^TestIntegrationWorkItemReadersRespectScopeAndLimits$' ./readers \
+            | tee test-results/readers-integration.json
+      - name: Upload readers integration test JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readers-integration-test-json
+          path: test-results/readers-integration.json
+          if-no-files-found: error
