@@ -2,6 +2,7 @@ package readers_test
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -90,12 +91,12 @@ func TestAuthorizationScopePredicateMatrix(t *testing.T) {
 			name: "both set -- intersection, not either alone",
 			scope: readers.AuthorizationScope{
 				GrantedRepositoryIDs:   []string{"repo-1", "repo-2"},
-				RequestedRepositoryIDs: []string{"repo-2"},
+				RequestedRepositoryIDs: []string{"repo-2", "repo-3"},
 			},
 			wantAuthorized:    true,
 			wantAuthorizedIDs: []string{"repo-1", "repo-2"},
 			wantRequested:     true,
-			wantRequestedIDs:  []string{"repo-2"},
+			wantRequestedIDs:  []string{"repo-2", "repo-3"},
 		},
 		{
 			name: "both empty -- deny-all on both dimensions at once",
@@ -213,86 +214,167 @@ func TestReadWorkItemCompletionWithScopeAppliesThePredicate(t *testing.T) {
 	}
 }
 
-// TestDelegateStatementsStayByteIdentical is the compatibility pin: the
-// pre-existing reader, its WithRowLimit twin, and the new WithScope/
-// WithScopeAndRowLimit forms called with an allow-all AuthorizationScope and
-// no Settings must all render the SAME statement, character for character.
-// ops pins this module by go.mod and must see no behaviour change from the
-// new, additive surface.
-func TestDelegateStatementsStayByteIdentical(t *testing.T) {
+// TestLegacyReaderStatementsMatchBaseline compares every existing work-item
+// reader API with statements and bindings captured independently from the
+// exact old implementation at 27dfd43f9965c053ad80a9796dffa5a4873325d9.
+// The expected SQL is intentionally literal: comparing a legacy call to a
+// new builder only proves that both calls share the same builder.
+func TestLegacyReaderStatementsMatchBaseline(t *testing.T) {
 	t.Parallel()
+	const orgID = "org-1"
+	ids := []string{"repo-1:WIDGET-101"}
+	activeEnd := mustTime(t, "2026-01-01T00:00:00Z")
+	activeBound := readers.TimeBound{Active: true, End: activeEnd}
 
-	t.Run("status", func(t *testing.T) {
-		t.Parallel()
-		plain := &fakeClient{}
-		if _, err := readers.ReadWorkItemStatus(context.Background(), plain, "org-1", []string{"repo-1:WIDGET-101"}); err != nil {
-			t.Fatalf("ReadWorkItemStatus() error = %v", err)
-		}
-		withScope := &fakeClient{}
-		if _, err := readers.ReadWorkItemStatusWithScope(context.Background(), withScope, "org-1", []string{"repo-1:WIDGET-101"}, readers.AuthorizationScope{}, readers.Settings{}); err != nil {
-			t.Fatalf("ReadWorkItemStatusWithScope() error = %v", err)
-		}
-		withScopeAndLimit := &fakeClient{}
-		if _, err := readers.ReadWorkItemStatusWithScopeAndRowLimit(context.Background(), withScopeAndLimit, "org-1", []string{"repo-1:WIDGET-101"}, readers.AuthorizationScope{}, readers.Settings{}, readers.DefaultRowLimit); err != nil {
-			t.Fatalf("ReadWorkItemStatusWithScopeAndRowLimit() error = %v", err)
-		}
-		want := plain.queries[0].statement
-		if got := withScope.queries[0].statement; got != want {
-			t.Fatalf("WithScope statement = %q, want %q", got, want)
-		}
-		if got := withScopeAndLimit.queries[0].statement; got != want {
-			t.Fatalf("WithScopeAndRowLimit statement = %q, want %q", got, want)
-		}
-	})
+	tests := []struct {
+		name          string
+		read          func(*fakeClient) error
+		wantStatement string
+		wantBindings  []readers.Binding
+	}{
+		{
+			name: "status default row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemStatus(context.Background(), client, orgID, ids)
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+LIMIT 200`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+			},
+		},
+		{
+			name: "status custom row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemStatusWithRowLimit(context.Background(), client, orgID, ids, 7)
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+LIMIT 7`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+			},
+		},
+		{
+			name: "title default row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemTitle(context.Background(), client, orgID, ids)
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+LIMIT 200`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+			},
+		},
+		{
+			name: "title custom row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemTitleWithRowLimit(context.Background(), client, orgID, ids, 7)
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+LIMIT 7`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+			},
+		},
+		{
+			name: "completion inactive default row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemCompletion(context.Background(), client, orgID, ids, readers.TimeBound{})
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+LIMIT 200`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+			},
+		},
+		{
+			name: "completion inactive custom row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemCompletionWithRowLimit(context.Background(), client, orgID, ids, readers.TimeBound{}, 7)
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+LIMIT 7`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+			},
+		},
+		{
+			name: "completion active default row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemCompletion(context.Background(), client, orgID, ids, activeBound)
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= {time_end:DateTime64(6,'UTC')}), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)} AND w.created_at <= {time_end:DateTime64(6,'UTC')}
+LIMIT 200`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+				{Name: "time_end", Value: activeEnd},
+			},
+		},
+		{
+			name: "completion active custom row limit",
+			read: func(client *fakeClient) error {
+				_, err := readers.ReadWorkItemCompletionWithRowLimit(context.Background(), client, orgID, ids, activeBound, 7)
+				return err
+			},
+			wantStatement: `SELECT w.work_item_id, toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= {time_end:DateTime64(6,'UTC')}), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)} AND w.created_at <= {time_end:DateTime64(6,'UTC')}
+LIMIT 7`,
+			wantBindings: []readers.Binding{
+				{Name: "org_id", Value: orgID},
+				{Name: "ids", Value: ids},
+				{Name: "time_end", Value: activeEnd},
+			},
+		},
+	}
 
-	t.Run("title", func(t *testing.T) {
-		t.Parallel()
-		plain := &fakeClient{}
-		if _, err := readers.ReadWorkItemTitle(context.Background(), plain, "org-1", []string{"repo-1:WIDGET-101"}); err != nil {
-			t.Fatalf("ReadWorkItemTitle() error = %v", err)
-		}
-		withScope := &fakeClient{}
-		if _, err := readers.ReadWorkItemTitleWithScope(context.Background(), withScope, "org-1", []string{"repo-1:WIDGET-101"}, readers.AuthorizationScope{}, readers.Settings{}); err != nil {
-			t.Fatalf("ReadWorkItemTitleWithScope() error = %v", err)
-		}
-		if got, want := withScope.queries[0].statement, plain.queries[0].statement; got != want {
-			t.Fatalf("WithScope statement = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("completion, inactive TimeBound", func(t *testing.T) {
-		t.Parallel()
-		plain := &fakeClient{}
-		if _, err := readers.ReadWorkItemCompletion(context.Background(), plain, "org-1", []string{"repo-1:WIDGET-101"}, readers.TimeBound{}); err != nil {
-			t.Fatalf("ReadWorkItemCompletion() error = %v", err)
-		}
-		withScope := &fakeClient{}
-		if _, err := readers.ReadWorkItemCompletionWithScope(context.Background(), withScope, "org-1", []string{"repo-1:WIDGET-101"}, readers.TimeBound{}, readers.AuthorizationScope{}, readers.Settings{}); err != nil {
-			t.Fatalf("ReadWorkItemCompletionWithScope() error = %v", err)
-		}
-		if got, want := withScope.queries[0].statement, plain.queries[0].statement; got != want {
-			t.Fatalf("WithScope statement = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("completion, active TimeBound", func(t *testing.T) {
-		t.Parallel()
-		bound := readers.TimeBound{Active: true, End: mustTime(t, "2026-01-01T00:00:00Z")}
-		plain := &fakeClient{}
-		if _, err := readers.ReadWorkItemCompletion(context.Background(), plain, "org-1", []string{"repo-1:WIDGET-101"}, bound); err != nil {
-			t.Fatalf("ReadWorkItemCompletion() error = %v", err)
-		}
-		withScope := &fakeClient{}
-		if _, err := readers.ReadWorkItemCompletionWithScope(context.Background(), withScope, "org-1", []string{"repo-1:WIDGET-101"}, bound, readers.AuthorizationScope{}, readers.Settings{}); err != nil {
-			t.Fatalf("ReadWorkItemCompletionWithScope() error = %v", err)
-		}
-		if got, want := withScope.queries[0].statement, plain.queries[0].statement; got != want {
-			t.Fatalf("WithScope statement = %q, want %q", got, want)
-		}
-		if len(plain.queries[0].bindings) != len(withScope.queries[0].bindings) {
-			t.Fatalf("bindings: plain=%d withScope=%d, want equal counts for an allow-all scope", len(plain.queries[0].bindings), len(withScope.queries[0].bindings))
-		}
-	})
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeClient{}
+			if err := tt.read(client); err != nil {
+				t.Fatalf("legacy reader error = %v", err)
+			}
+			if len(client.queries) != 1 {
+				t.Fatalf("captured queries = %d, want 1", len(client.queries))
+			}
+			got := client.queries[0]
+			if got.statement != tt.wantStatement {
+				t.Fatalf("statement = %q, want baseline statement %q", got.statement, tt.wantStatement)
+			}
+			if !reflect.DeepEqual(got.bindings, tt.wantBindings) {
+				t.Fatalf("bindings = %#v, want baseline bindings %#v", got.bindings, tt.wantBindings)
+			}
+		})
+	}
 }
 
 // TestSettingsReachTheRenderedStatement confirms a non-zero Settings value
