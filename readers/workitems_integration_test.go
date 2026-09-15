@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,6 +158,16 @@ LIMIT 1`
 	}
 	t.Fatalf("query-log entry for query_id %q was not visible; last error: %v", queryID, lastErr)
 	return ""
+}
+
+type recordingQueryClient struct {
+	delegate   readers.QueryClient
+	statements []string
+}
+
+func (c *recordingQueryClient) Query(ctx context.Context, statement string, bindings []readers.Binding) (readers.RowScanner, error) {
+	c.statements = append(c.statements, statement)
+	return c.delegate.Query(ctx, statement, bindings)
 }
 
 func TestIntegrationWorkItemReadersRespectScopeAndLimits(t *testing.T) {
@@ -498,32 +509,56 @@ func TestIntegrationWorkItemReadersRespectScopeAndLimits(t *testing.T) {
 	})
 
 	t.Run("max_threads is applied by the public reader without changing facts", func(t *testing.T) {
+		recordedClient := &recordingQueryClient{delegate: client}
+
 		baselineQueryID := fmt.Sprintf("readers-max-threads-zero-%d", time.Now().UnixNano())
 		baselineContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(baselineQueryID))
-		baselineRows, err := readers.ReadWorkItemStatusWithScope(baselineContext, client, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{})
+		baselineRows, err := readers.ReadWorkItemStatusWithScope(baselineContext, recordedClient, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{})
 		if err != nil {
 			t.Fatalf("baseline status read error = %v", err)
 		}
-		baselineNative := integrationQueryLogMaxThreads(t, baselineQueryID)
 
 		positiveQueryID := fmt.Sprintf("readers-max-threads-one-%d", time.Now().UnixNano())
 		positiveContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(positiveQueryID))
-		positiveRows, err := readers.ReadWorkItemStatusWithScope(positiveContext, client, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{MaxThreads: 1})
+		positiveRows, err := readers.ReadWorkItemStatusWithScope(positiveContext, recordedClient, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{MaxThreads: 1})
 		if err != nil {
 			t.Fatalf("max_threads=1 status read error = %v", err)
 		}
+
+		secondPositiveQueryID := fmt.Sprintf("readers-max-threads-two-%d", time.Now().UnixNano())
+		secondPositiveContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(secondPositiveQueryID))
+		secondPositiveRows, err := readers.ReadWorkItemStatusWithScope(secondPositiveContext, recordedClient, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{MaxThreads: 2})
+		if err != nil {
+			t.Fatalf("max_threads=2 status read error = %v", err)
+		}
+
+		if len(recordedClient.statements) != 3 {
+			t.Fatalf("captured public reader statements = %d, want 3", len(recordedClient.statements))
+		}
+		if strings.Contains(recordedClient.statements[0], "max_threads") {
+			t.Fatalf("zero-valued public reader statement unexpectedly contains max_threads: %q", recordedClient.statements[0])
+		}
+		for index, want := range []string{"max_threads = 1", "max_threads = 2"} {
+			statement := recordedClient.statements[index+1]
+			if strings.Count(statement, "max_threads") != 1 || !strings.HasSuffix(statement, "SETTINGS "+want) {
+				t.Fatalf("positive public reader statement[%d] = %q, want one trailing %q", index+1, statement, want)
+			}
+		}
+
+		baselineNative := integrationQueryLogMaxThreads(t, baselineQueryID)
 		positiveNative := integrationQueryLogMaxThreads(t, positiveQueryID)
+		secondPositiveNative := integrationQueryLogMaxThreads(t, secondPositiveQueryID)
 
 		if positiveNative != "1" {
-			t.Fatalf("query-log max_threads for positive request = %q, want native value 1", positiveNative)
+			t.Fatalf("query-log max_threads for max_threads=1 request = %q, want native value 1", positiveNative)
 		}
-		if baselineNative == "1" {
-			t.Fatalf("query-log max_threads for zero request = %q, want the server's existing default rather than the positive request", baselineNative)
+		if secondPositiveNative != "2" {
+			t.Fatalf("query-log max_threads for max_threads=2 request = %q, want native value 2", secondPositiveNative)
 		}
-		if !reflect.DeepEqual(statusRowsByID(baselineRows), statusRowsByID(positiveRows)) {
-			t.Fatalf("facts changed when max_threads changed: zero=%#v, one=%#v", baselineRows, positiveRows)
+		if !reflect.DeepEqual(statusRowsByID(baselineRows), statusRowsByID(positiveRows)) || !reflect.DeepEqual(statusRowsByID(baselineRows), statusRowsByID(secondPositiveRows)) {
+			t.Fatalf("facts changed when max_threads changed: zero=%#v, one=%#v, two=%#v", baselineRows, positiveRows, secondPositiveRows)
 		}
-		t.Logf("query-log native max_threads: zero request=%q, positive request=%q; status facts unchanged", baselineNative, positiveNative)
+		t.Logf("query-log effective max_threads: zero request=%q, one=%q, two=%q; zero omitted SQL override and status facts were unchanged", baselineNative, positiveNative, secondPositiveNative)
 	})
 }
 
