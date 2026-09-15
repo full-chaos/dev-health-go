@@ -5,7 +5,10 @@ package readers_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +103,71 @@ func integrationExec(t *testing.T, statement string) {
 	if err := connection.Exec(context.Background(), statement); err != nil {
 		t.Fatalf("integration statement %q: %v", statement, err)
 	}
+}
+
+func integrationQueryLogMaxThreads(t *testing.T, queryID string) string {
+	t.Helper()
+
+	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
+	options, err := clickhousedriver.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("parse integration query-log DSN: %v", err)
+	}
+	connection, err := clickhousedriver.Open(options)
+	if err != nil {
+		t.Fatalf("open integration query-log connection: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+
+	const statement = `SELECT Settings['max_threads']
+FROM system.query_log
+WHERE query_id = {query_id:String} AND type = 'QueryFinish'
+ORDER BY event_time_microseconds DESC
+LIMIT 1`
+	var lastErr error
+	for attempt := 0; attempt < 40; attempt++ {
+		queryContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		queryContext = clickhousedriver.Context(queryContext, clickhousedriver.WithParameters(clickhousedriver.Parameters{
+			"query_id": queryID,
+		}))
+		rows, queryErr := connection.Query(queryContext, statement)
+		if queryErr != nil {
+			cancel()
+			lastErr = queryErr
+		} else {
+			var value string
+			if rows.Next() {
+				scanErr := rows.Scan(&value)
+				closeErr := rows.Close()
+				cancel()
+				if scanErr != nil {
+					t.Fatalf("scan query-log max_threads for %q: %v", queryID, scanErr)
+				}
+				if closeErr != nil {
+					t.Fatalf("close query-log max_threads for %q: %v", queryID, closeErr)
+				}
+				return value
+			}
+			lastErr = rows.Err()
+			if closeErr := rows.Close(); closeErr != nil && lastErr == nil {
+				lastErr = closeErr
+			}
+			cancel()
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("query-log entry for query_id %q was not visible; last error: %v", queryID, lastErr)
+	return ""
+}
+
+type recordingQueryClient struct {
+	delegate   readers.QueryClient
+	statements []string
+}
+
+func (c *recordingQueryClient) Query(ctx context.Context, statement string, bindings []readers.Binding) (readers.RowScanner, error) {
+	c.statements = append(c.statements, statement)
+	return c.delegate.Query(ctx, statement, bindings)
 }
 
 func TestIntegrationWorkItemReadersRespectScopeAndLimits(t *testing.T) {
@@ -439,4 +507,65 @@ func TestIntegrationWorkItemReadersRespectScopeAndLimits(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("max_threads is applied by the public reader without changing facts", func(t *testing.T) {
+		recordedClient := &recordingQueryClient{delegate: client}
+
+		baselineQueryID := fmt.Sprintf("readers-max-threads-zero-%d", time.Now().UnixNano())
+		baselineContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(baselineQueryID))
+		baselineRows, err := readers.ReadWorkItemStatusWithScope(baselineContext, recordedClient, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{})
+		if err != nil {
+			t.Fatalf("baseline status read error = %v", err)
+		}
+
+		positiveQueryID := fmt.Sprintf("readers-max-threads-one-%d", time.Now().UnixNano())
+		positiveContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(positiveQueryID))
+		positiveRows, err := readers.ReadWorkItemStatusWithScope(positiveContext, recordedClient, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{MaxThreads: 1})
+		if err != nil {
+			t.Fatalf("max_threads=1 status read error = %v", err)
+		}
+
+		secondPositiveQueryID := fmt.Sprintf("readers-max-threads-two-%d", time.Now().UnixNano())
+		secondPositiveContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(secondPositiveQueryID))
+		secondPositiveRows, err := readers.ReadWorkItemStatusWithScope(secondPositiveContext, recordedClient, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{MaxThreads: 2})
+		if err != nil {
+			t.Fatalf("max_threads=2 status read error = %v", err)
+		}
+
+		if len(recordedClient.statements) != 3 {
+			t.Fatalf("captured public reader statements = %d, want 3", len(recordedClient.statements))
+		}
+		if strings.Contains(recordedClient.statements[0], "max_threads") {
+			t.Fatalf("zero-valued public reader statement unexpectedly contains max_threads: %q", recordedClient.statements[0])
+		}
+		for index, want := range []string{"max_threads = 1", "max_threads = 2"} {
+			statement := recordedClient.statements[index+1]
+			if strings.Count(statement, "max_threads") != 1 || !strings.HasSuffix(statement, "SETTINGS "+want) {
+				t.Fatalf("positive public reader statement[%d] = %q, want one trailing %q", index+1, statement, want)
+			}
+		}
+
+		baselineNative := integrationQueryLogMaxThreads(t, baselineQueryID)
+		positiveNative := integrationQueryLogMaxThreads(t, positiveQueryID)
+		secondPositiveNative := integrationQueryLogMaxThreads(t, secondPositiveQueryID)
+
+		if positiveNative != "1" {
+			t.Fatalf("query-log max_threads for max_threads=1 request = %q, want native value 1", positiveNative)
+		}
+		if secondPositiveNative != "2" {
+			t.Fatalf("query-log max_threads for max_threads=2 request = %q, want native value 2", secondPositiveNative)
+		}
+		if !reflect.DeepEqual(statusRowsByID(baselineRows), statusRowsByID(positiveRows)) || !reflect.DeepEqual(statusRowsByID(baselineRows), statusRowsByID(secondPositiveRows)) {
+			t.Fatalf("facts changed when max_threads changed: zero=%#v, one=%#v, two=%#v", baselineRows, positiveRows, secondPositiveRows)
+		}
+		t.Logf("query-log effective max_threads: zero request=%q, one=%q, two=%q; zero omitted SQL override and status facts were unchanged", baselineNative, positiveNative, secondPositiveNative)
+	})
+}
+
+func statusRowsByID(rows []readers.WorkItemStatusRow) map[string]readers.WorkItemStatusRow {
+	byID := make(map[string]readers.WorkItemStatusRow, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	return byID
 }

@@ -383,7 +383,7 @@ LIMIT 7`,
 func TestSettingsReachTheRenderedStatement(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{}
-	settings := readers.Settings{MaxExecutionTimeSeconds: 5, MaxResultRows: 201}
+	settings := readers.Settings{MaxExecutionTimeSeconds: 5, MaxThreads: 1, MaxResultRows: 201}
 	if _, err := readers.ReadWorkItemStatusWithScope(context.Background(), client, "org-1", []string{"repo-1:WIDGET-101"}, readers.AuthorizationScope{}, settings); err != nil {
 		t.Fatalf("ReadWorkItemStatusWithScope() error = %v", err)
 	}
