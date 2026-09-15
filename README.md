@@ -117,6 +117,30 @@ PR merges.
 
 ### Release notes
 
+**v0.8.0 — optional query thread control and Settings source migration.**
+
+`readers.Settings.MaxThreads` requests a per-statement ClickHouse thread
+setting. Zero omits `max_threads` and preserves prior query behavior. The
+setting does not promise an exact worker count.
+
+This pre-v1 release changes the `Settings` struct shape: four-value positional
+literals from v0.7.0 no longer compile. Use named fields. Existing keyed
+literals need no change unless they opt into a thread limit:
+
+```go
+// Replace readers.Settings{seconds, rows, memory, resultRows} with:
+readers.Settings{
+	MaxExecutionTimeSeconds: seconds,
+	MaxRowsToRead:           rows,
+	MaxMemoryUsage:          memory,
+	MaxResultRows:           resultRows,
+}
+```
+
+This form works before and after the release. Omit `MaxThreads` to retain
+prior behavior. Do not append a fifth positional zero: `MaxThreads` precedes
+`MaxResultRows`, so that can assign the old result limit to the thread setting.
+
 **v0.5.4 — do not pin. Superseded by v0.5.5.**
 
 It regresses ambiguous-key attribution, and the failure is a

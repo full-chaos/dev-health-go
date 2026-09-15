@@ -19,6 +19,8 @@ import "strconv"
 // budget breach always throws.
 // MaxThreads is a positive per-statement ClickHouse thread setting; it records
 // the requested server setting and does not promise a particular worker count.
+// Use named fields when constructing Settings so new optional fields do not
+// break the construction or change the meaning of existing values.
 type Settings struct {
 	MaxExecutionTimeSeconds uint64
 	MaxRowsToRead           uint64
