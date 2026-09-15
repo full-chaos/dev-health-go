@@ -5,7 +5,9 @@ package readers_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -100,6 +102,61 @@ func integrationExec(t *testing.T, statement string) {
 	if err := connection.Exec(context.Background(), statement); err != nil {
 		t.Fatalf("integration statement %q: %v", statement, err)
 	}
+}
+
+func integrationQueryLogMaxThreads(t *testing.T, queryID string) string {
+	t.Helper()
+
+	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
+	options, err := clickhousedriver.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("parse integration query-log DSN: %v", err)
+	}
+	connection, err := clickhousedriver.Open(options)
+	if err != nil {
+		t.Fatalf("open integration query-log connection: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+
+	const statement = `SELECT Settings['max_threads']
+FROM system.query_log
+WHERE query_id = {query_id:String} AND type = 'QueryFinish'
+ORDER BY event_time_microseconds DESC
+LIMIT 1`
+	var lastErr error
+	for attempt := 0; attempt < 40; attempt++ {
+		queryContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		queryContext = clickhousedriver.Context(queryContext, clickhousedriver.WithParameters(clickhousedriver.Parameters{
+			"query_id": queryID,
+		}))
+		rows, queryErr := connection.Query(queryContext, statement)
+		if queryErr != nil {
+			cancel()
+			lastErr = queryErr
+		} else {
+			var value string
+			if rows.Next() {
+				scanErr := rows.Scan(&value)
+				closeErr := rows.Close()
+				cancel()
+				if scanErr != nil {
+					t.Fatalf("scan query-log max_threads for %q: %v", queryID, scanErr)
+				}
+				if closeErr != nil {
+					t.Fatalf("close query-log max_threads for %q: %v", queryID, closeErr)
+				}
+				return value
+			}
+			lastErr = rows.Err()
+			if closeErr := rows.Close(); closeErr != nil && lastErr == nil {
+				lastErr = closeErr
+			}
+			cancel()
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("query-log entry for query_id %q was not visible; last error: %v", queryID, lastErr)
+	return ""
 }
 
 func TestIntegrationWorkItemReadersRespectScopeAndLimits(t *testing.T) {
@@ -439,4 +496,41 @@ func TestIntegrationWorkItemReadersRespectScopeAndLimits(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("max_threads is applied by the public reader without changing facts", func(t *testing.T) {
+		baselineQueryID := fmt.Sprintf("readers-max-threads-zero-%d", time.Now().UnixNano())
+		baselineContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(baselineQueryID))
+		baselineRows, err := readers.ReadWorkItemStatusWithScope(baselineContext, client, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{})
+		if err != nil {
+			t.Fatalf("baseline status read error = %v", err)
+		}
+		baselineNative := integrationQueryLogMaxThreads(t, baselineQueryID)
+
+		positiveQueryID := fmt.Sprintf("readers-max-threads-one-%d", time.Now().UnixNano())
+		positiveContext := clickhousedriver.Context(context.Background(), clickhousedriver.WithQueryID(positiveQueryID))
+		positiveRows, err := readers.ReadWorkItemStatusWithScope(positiveContext, client, integrationWorkItemOrg, integrationWorkItemIDs, readers.AuthorizationScope{}, readers.Settings{MaxThreads: 1})
+		if err != nil {
+			t.Fatalf("max_threads=1 status read error = %v", err)
+		}
+		positiveNative := integrationQueryLogMaxThreads(t, positiveQueryID)
+
+		if positiveNative != "1" {
+			t.Fatalf("query-log max_threads for positive request = %q, want native value 1", positiveNative)
+		}
+		if baselineNative == "1" {
+			t.Fatalf("query-log max_threads for zero request = %q, want the server's existing default rather than the positive request", baselineNative)
+		}
+		if !reflect.DeepEqual(statusRowsByID(baselineRows), statusRowsByID(positiveRows)) {
+			t.Fatalf("facts changed when max_threads changed: zero=%#v, one=%#v", baselineRows, positiveRows)
+		}
+		t.Logf("query-log native max_threads: zero request=%q, positive request=%q; status facts unchanged", baselineNative, positiveNative)
+	})
+}
+
+func statusRowsByID(rows []readers.WorkItemStatusRow) map[string]readers.WorkItemStatusRow {
+	byID := make(map[string]readers.WorkItemStatusRow, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	return byID
 }

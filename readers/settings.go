@@ -17,17 +17,20 @@ import "strconv"
 // result that looks complete. MaxMemoryUsage carries no overflow-mode
 // setting of its own -- ClickHouse has none to configure for it, a memory
 // budget breach always throws.
+// MaxThreads is a positive per-statement ClickHouse thread setting; it records
+// the requested server setting and does not promise a particular worker count.
 type Settings struct {
 	MaxExecutionTimeSeconds uint64
 	MaxRowsToRead           uint64
 	MaxMemoryUsage          uint64
+	MaxThreads              uint64
 	MaxResultRows           uint64
 }
 
 // Render returns the trailing " SETTINGS ..." clause for s, or "" when s is
 // the zero value. Field order is fixed (MaxExecutionTimeSeconds,
-// MaxRowsToRead, MaxMemoryUsage, MaxResultRows) so two calls with the same
-// Settings value always render byte-identical text.
+// MaxRowsToRead, MaxMemoryUsage, MaxThreads, MaxResultRows) so two calls with
+// the same Settings value always render byte-identical text.
 func (s Settings) Render() string {
 	var parts []string
 	if s.MaxExecutionTimeSeconds != 0 {
@@ -43,6 +46,10 @@ func (s Settings) Render() string {
 	if s.MaxMemoryUsage != 0 {
 		parts = append(parts,
 			"max_memory_usage = "+strconv.FormatUint(s.MaxMemoryUsage, 10))
+	}
+	if s.MaxThreads != 0 {
+		parts = append(parts,
+			"max_threads = "+strconv.FormatUint(s.MaxThreads, 10))
 	}
 	if s.MaxResultRows != 0 {
 		parts = append(parts,
