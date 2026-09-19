@@ -574,6 +574,7 @@ func TestIntegrationWorkItemAuthorizationPaths(t *testing.T) {
 	if want := len(cases) * len(items); executed != want {
 		t.Fatalf("executed %d cells, want %d", executed, want)
 	}
+	t.Logf("executed %d cells: %d items x %d scopes, each through the provenance statement and the three readers", executed, len(items), len(cases))
 }
 
 func statusIDs(rows []readers.WorkItemStatusRow) []string {
