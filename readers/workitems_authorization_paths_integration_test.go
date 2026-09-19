@@ -5,6 +5,7 @@ package readers_test
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"sort"
@@ -390,7 +391,7 @@ func authzDatabase(t *testing.T, items []authzItem) *clickhouse.Client {
 	if err != nil {
 		t.Fatalf("parse integration DSN: %v", err)
 	}
-	database := fmt.Sprintf("authz_paths_%d", time.Now().UnixNano())
+	database := fmt.Sprintf("authz_paths_%d", rand.Uint64())
 	options, err := clickhousedriver.ParseDSN(dsn)
 	if err != nil {
 		t.Fatalf("parse integration DSN options: %v", err)
