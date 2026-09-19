@@ -25,8 +25,16 @@ func TestWorkItemScopeSQLSelectorRendering(t *testing.T) {
 	}
 
 	rendered := readers.WorkItemScopeSQL(scope)
-	if got, want := rendered.JoinSQL, "LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id"; got != want {
-		t.Fatalf("JoinSQL = %q, want %q", got, want)
+	if got, want := rendered.JoinSQL, "LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id LEFT JOIN ("; !strings.HasPrefix(got, want) {
+		t.Fatalf("JoinSQL = %q, want prefix %q", got, want)
+	}
+	for _, want := range []string{
+		") AS wia_project_auth ON wia_project_auth.wia_project_provider = w.provider AND wia_project_auth.wia_project_scope = w.project_id LEFT JOIN (",
+		") AS wia_link_auth ON wia_link_auth.wia_link_work_item_id = w.work_item_id",
+	} {
+		if !strings.Contains(rendered.JoinSQL, want) {
+			t.Fatalf("JoinSQL = %q, want substring %q", rendered.JoinSQL, want)
+		}
 	}
 	for _, want := range []string{
 		"toString(w.repo_id) IN {authorized_repo_ids:Array(String)}",
@@ -218,5 +226,82 @@ func TestWorkItemScopeSQLZeroAndRequestedWildcardBindings(t *testing.T) {
 	}
 	if !strings.Contains(rendered.AuthorizationExpr, "toString(w.repo_id) != '00000000-0000-0000-0000-000000000000'") {
 		t.Fatalf("AuthorizationExpr = %q, explicit requested wildcard must reject zero repo IDs", rendered.AuthorizationExpr)
+	}
+}
+
+func TestWorkItemScopeSQLProvenanceNamesEveryPathInOrder(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []readers.AuthorizationScope{
+		{},
+		{GrantedRepositoryIDs: []string{"repo-a"}},
+		{RequestedRepositoryIDs: []string{}},
+	} {
+		if got := readers.WorkItemScopeSQL(scope).Provenance; got != nil {
+			t.Fatalf("WorkItemScopeSQL(%#v).Provenance = %#v, want nil outside selector mode", scope, got)
+		}
+	}
+
+	requested := readers.RepositorySelectorSet{ExactSlugs: []string{"acme/widgets"}}
+	scope := readers.AuthorizationScope{
+		GrantedRepositoryIDs: []string{"repo-a"},
+		RepositorySelectors: &readers.RepositorySelectorScope{
+			Granted:   readers.RepositorySelectorSet{ExactSlugs: []string{"acme/one'--"}, Owners: []string{"acme"}},
+			Requested: &requested,
+		},
+	}
+	rendered := readers.WorkItemScopeSQL(scope)
+	want := []string{"organization_grant", "direct_repo", "project_ownership", "pr_link"}
+	if got := readers.WorkItemAuthorizationPaths(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("WorkItemAuthorizationPaths() = %v, want %v", got, want)
+	}
+	if len(rendered.Provenance) != len(want) {
+		t.Fatalf("Provenance = %#v, want %d paths", rendered.Provenance, len(want))
+	}
+	for i, path := range rendered.Provenance {
+		if path.Path != want[i] {
+			t.Fatalf("Provenance[%d].Path = %q, want %q", i, path.Path, want[i])
+		}
+		// Every path carries the ID dimension and the requested selector,
+		// so a true path can never name a row the request excludes.
+		for _, restriction := range []string{"{authorized_repo_ids:Array(String)}", "{requested_repo_all:UInt8}"} {
+			if !strings.Contains(path.Expr, restriction) {
+				t.Fatalf("Provenance[%s].Expr lacks restriction %q: %s", path.Path, restriction, path.Expr)
+			}
+		}
+		if strings.Contains(path.Expr, "acme/one") || strings.Contains(path.Expr, "'--") {
+			t.Fatalf("Provenance[%s].Expr interpolates a selector value: %s", path.Path, path.Expr)
+		}
+	}
+	for _, path := range rendered.Provenance {
+		if !strings.Contains(rendered.AuthorizationExpr, strings.SplitN(path.Expr, " AND toString(w.repo_id) IN", 2)[0]) {
+			t.Fatalf("AuthorizationExpr does not consult path %s", path.Path)
+		}
+		if want := "if(" + path.Expr + ", "; !strings.HasPrefix(path.RepositoriesExpr, want) {
+			t.Fatalf("Provenance[%s].RepositoriesExpr = %q, want it gated on the path expression", path.Path, path.RepositoriesExpr)
+		}
+	}
+	// Every relation the two aggregates read is organization-scoped:
+	// each FROM of a stored table is followed by the org binding before
+	// the next FROM.
+	if !strings.Contains(rendered.JoinSQL, "FROM work_graph_issue_pr AS wia_link FINAL ") || !strings.Contains(rendered.JoinSQL, "WHERE wia_link.org_id = {org_id:String} AND ") {
+		t.Fatalf("JoinSQL reads work_graph_issue_pr without the org binding: %s", rendered.JoinSQL)
+	}
+	for _, table := range []string{"projects FINAL", "team_project_ownership FINAL", "team_repo_ownership FINAL", "repos FINAL WHERE"} {
+		rest := rendered.JoinSQL
+		for {
+			at := strings.Index(rest, "FROM "+table)
+			if at < 0 {
+				break
+			}
+			rest = rest[at+len("FROM "+table):]
+			next := strings.Index(rest, "FROM ")
+			scoped := rest
+			if next >= 0 {
+				scoped = rest[:next]
+			}
+			if !strings.Contains(scoped, "org_id = {org_id:String}") {
+				t.Fatalf("JoinSQL reads %s without the org binding: %s", table, scoped)
+			}
+		}
 	}
 }

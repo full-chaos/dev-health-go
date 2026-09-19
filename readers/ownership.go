@@ -70,6 +70,30 @@ func OwnershipValidityPredicate(bound TimeBound) string {
 // team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
 // which IS projects.project_key for that row).
 func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
+	return projectOwnershipJoinOver(ProjectIdentityJoinSQL(), ownershipPredicate)
+}
+
+// TeamRepositoryOwnershipSQL is the team -> repository hop one step past
+// ProjectOwnershipJoinSQL: one row per (team_id, repo_id) the team owns
+// under ownershipPredicate (OwnershipValidityPredicate), organization-scoped
+// through the caller's {org_id} binding. Rows with no repository id (a
+// pattern row not yet resolved to a repository, or the zero UUID) are
+// dropped: they name no repository to reach. Alias it in the caller's FROM.
+func TeamRepositoryOwnershipSQL(ownershipPredicate string) string {
+	return "(SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND " + keyPresentSQL("repo_id", uuidKey) + ownershipPredicate + " GROUP BY team_id, repo_id)"
+}
+
+// ProjectOwnershipCatalogJoinSQL is ProjectOwnershipJoinSQL over the whole
+// organization's project catalog instead of a requested subject list. It
+// binds no `ids` parameter, for a caller that has no project subjects to
+// name -- the work-item authorization relation, which asks "which projects
+// does any team own" once per statement. Both forms share one body, so the
+// identity match and the ownership-row union cannot drift between them.
+func ProjectOwnershipCatalogJoinSQL(ownershipPredicate string) string {
+	return projectOwnershipJoinOver(ProjectIdentityCatalogSQL(), ownershipPredicate)
+}
+
+func projectOwnershipJoinOver(projects, ownershipPredicate string) string {
 	// ONE join against ONE copy of the identity expansion (CHAOS-4552).
 	//
 	// Before this, two arms each embedded a full copy of ProjectIdentityJoinSQL's
@@ -129,7 +153,6 @@ func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 	// the answer. Collapsing at the grain the caller consumes, (provider,
 	// resolved project id, team), removes both at once -- unchanged from
 	// before this change.
-	projects := ProjectIdentityJoinSQL()
 	ownership := `(
 		SELECT provider, ` + ProjectOwnershipJoinColumn + ` AS scope_value, team_id, '' AS required_scope_kind
 		FROM team_project_ownership FINAL
