@@ -98,8 +98,29 @@ jobs:
             title Nullable(String),
             repo_id String,
             completed_at Nullable(DateTime64(6, 'UTC')),
-            created_at DateTime64(6, 'UTC')
+            created_at DateTime64(6, 'UTC'),
+            provider String,
+            project_id String
           ) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, work_item_id)"
+          # The work-item authorization relation also reads the project
+          # ownership chain and the issue-to-pull-request links. Every
+          # fixture item carries its own repository or none, so these stay
+          # empty here; readers-integration's authorization-path test seeds
+          # them in its own database from the production DDL.
+          ch_query "CREATE TABLE $CH_DATABASE.projects (
+            id String, org_id String, provider String, project_key Nullable(String), updated_at DateTime64(3, 'UTC')
+          ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id)"
+          ch_query "CREATE TABLE $CH_DATABASE.team_project_ownership (
+            org_id String, provider String, team_id String, project_id String, project_key Nullable(String),
+            valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')), updated_at DateTime64(3, 'UTC')
+          ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, valid_from)"
+          ch_query "CREATE TABLE $CH_DATABASE.team_repo_ownership (
+            org_id String, provider String, team_id String, repo_id Nullable(String), repo_full_name String,
+            valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')), updated_at DateTime64(3, 'UTC')
+          ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, valid_from) SETTINGS allow_nullable_key = 1"
+          ch_query "CREATE TABLE $CH_DATABASE.work_graph_issue_pr (
+            repo_id String, work_item_id String, pr_number UInt32, provenance String, last_synced DateTime64(3, 'UTC'), org_id String
+          ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, pr_number)"
           ch_query "INSERT INTO $CH_DATABASE.work_items
             (org_id, work_item_id, status, title, repo_id, completed_at, created_at)
           VALUES
@@ -120,7 +141,7 @@ jobs:
           set -o pipefail
           mkdir -p test-results
           go test -tags=integration -count=1 -json \
-            -run '^TestIntegrationWorkItemReadersRespectScopeAndLimits$' ./readers \
+            -run '^(TestIntegrationWorkItemReadersRespectScopeAndLimits|TestIntegrationWorkItemAuthorizationPaths)$' ./readers \
             | tee test-results/readers-integration.json
       - name: Upload readers integration test JSON
         if: always()

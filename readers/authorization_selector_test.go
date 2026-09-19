@@ -220,3 +220,56 @@ func TestWorkItemScopeSQLZeroAndRequestedWildcardBindings(t *testing.T) {
 		t.Fatalf("AuthorizationExpr = %q, explicit requested wildcard must reject zero repo IDs", rendered.AuthorizationExpr)
 	}
 }
+
+func TestWorkItemScopeSQLProvenanceNamesEveryPathInOrder(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []readers.AuthorizationScope{
+		{},
+		{GrantedRepositoryIDs: []string{"repo-a"}},
+		{RequestedRepositoryIDs: []string{}},
+	} {
+		if got := readers.WorkItemScopeSQL(scope).Provenance; got != nil {
+			t.Fatalf("WorkItemScopeSQL(%#v).Provenance = %#v, want nil outside selector mode", scope, got)
+		}
+	}
+
+	requested := readers.RepositorySelectorSet{ExactSlugs: []string{"acme/widgets"}}
+	scope := readers.AuthorizationScope{
+		GrantedRepositoryIDs: []string{"repo-a"},
+		RepositorySelectors: &readers.RepositorySelectorScope{
+			Granted:   readers.RepositorySelectorSet{ExactSlugs: []string{"acme/one'--"}, Owners: []string{"acme"}},
+			Requested: &requested,
+		},
+	}
+	rendered := readers.WorkItemScopeSQL(scope)
+	want := []string{"organization_grant", "direct_repo", "project_ownership", "pr_link"}
+	if got := readers.WorkItemAuthorizationPaths(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("WorkItemAuthorizationPaths() = %v, want %v", got, want)
+	}
+	if len(rendered.Provenance) != len(want) {
+		t.Fatalf("Provenance = %#v, want %d paths", rendered.Provenance, len(want))
+	}
+	for i, path := range rendered.Provenance {
+		if path.Path != want[i] {
+			t.Fatalf("Provenance[%d].Path = %q, want %q", i, path.Path, want[i])
+		}
+		// Every path carries the ID dimension and the requested selector,
+		// so a true path can never name a row the request excludes.
+		for _, restriction := range []string{"{authorized_repo_ids:Array(String)}", "{requested_repo_all:UInt8}"} {
+			if !strings.Contains(path.Expr, restriction) {
+				t.Fatalf("Provenance[%s].Expr lacks restriction %q: %s", path.Path, restriction, path.Expr)
+			}
+		}
+		if strings.Contains(path.Expr, "acme/one") || strings.Contains(path.Expr, "'--") {
+			t.Fatalf("Provenance[%s].Expr interpolates a selector value: %s", path.Path, path.Expr)
+		}
+	}
+	for _, path := range rendered.Provenance[2:] {
+		if !strings.Contains(path.Expr, "{org_id:String}") {
+			t.Fatalf("Provenance[%s].Expr reads a relation outside the org binding: %s", path.Path, path.Expr)
+		}
+		if !strings.Contains(rendered.AuthorizationExpr, strings.SplitN(path.Expr, " AND toString(w.repo_id) IN", 2)[0]) {
+			t.Fatalf("AuthorizationExpr does not consult path %s", path.Path)
+		}
+	}
+}

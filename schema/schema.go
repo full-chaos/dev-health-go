@@ -369,6 +369,22 @@ var ProductionColumns = map[string][]Column{
 		{Name: "org_id", Type: "String"},
 		{Name: "provider", Type: "String"},
 	},
+	// work_graph_issue_pr is read by the work-item authorization relation's
+	// link path (readers.WorkItemScopeSQL). Read live off the trial
+	// ClickHouse (system.columns + SHOW CREATE, 2026-09-19): version_rank is
+	// MATERIALIZED from provenance and last_synced, and it is the
+	// ReplacingMergeTree version, so FINAL keeps the strongest provenance.
+	"work_graph_issue_pr": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "work_item_id", Type: "String"},
+		{Name: "pr_number", Type: "UInt32"},
+		{Name: "confidence", Type: "Float32"},
+		{Name: "provenance", Type: "String"},
+		{Name: "evidence", Type: "String"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
+		{Name: "org_id", Type: "String DEFAULT 'default'"},
+		{Name: "version_rank", Type: "UInt64 MATERIALIZED ((multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, provenance = 'heuristic', 1, 0) + 1) * 1125899906842624) + toUnixTimestamp64Milli(last_synced)"},
+	},
 	"work_graph_deployment_incident_edges": {
 		{Name: "edge_id", Type: "String"},
 		{Name: "org_id", Type: "UUID"},
@@ -633,6 +649,7 @@ var EngineFull = map[string]string{
 	"team_project_ownership":               "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"team_repo_ownership":                  "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"work_graph_issue_pr":                  "ReplacingMergeTree(version_rank) ORDER BY (org_id, repo_id, work_item_id, pr_number) SETTINGS index_granularity = 8192",
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",

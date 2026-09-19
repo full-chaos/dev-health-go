@@ -51,8 +51,11 @@ type AuthorizationScope struct {
 	// RepositorySelectors is the optional slug/owner selector mode used by
 	// the canonical work-item path. When nil, the ID-only predicate below is
 	// used and legacy statement text stays byte-identical. When non-nil, its
-	// selector predicate is evaluated against the fixed work_items↔repos
-	// relation in WorkItemScopeSQL and is ANDed with either ID predicate.
+	// selector predicate is evaluated in WorkItemScopeSQL against the fixed
+	// work_items↔repos relation and, for an item with no repository,
+	// against its project's owned repositories and its linked pull
+	// requests' repositories (see WorkItemAuthorizationPaths), and is ANDed
+	// with either ID predicate.
 	RepositorySelectors *RepositorySelectorScope
 }
 
@@ -72,6 +75,59 @@ type WorkItemScopeSQLResult struct {
 	JoinSQL           string
 	AuthorizationExpr string
 	Bindings          []Binding
+
+	// Provenance names every path that can authorize a row, in the fixed
+	// order of WorkItemAuthorizationPaths, each with a boolean expression
+	// over the same aliases and bindings as AuthorizationExpr. A row's
+	// AuthorizationExpr is true exactly when at least one path expression
+	// is true: every path expression already carries the request's own
+	// restrictions, so a true path never names a row the request excludes.
+	// More than one path can be true for one row; a caller discloses each.
+	//
+	// Populated in selector mode only. The legacy ID-only and zero-value
+	// modes have no path to name and leave it nil.
+	Provenance []WorkItemAuthorizationPathSQL
+}
+
+// WorkItemAuthorizationPathSQL is one authorization path of a work-item
+// row: its closed-vocabulary name and its boolean SQL expression.
+type WorkItemAuthorizationPathSQL struct {
+	Path string
+	Expr string
+}
+
+// The closed vocabulary of work-item authorization paths.
+//
+//   - organization_grant: the principal holds the organization-wide grant.
+//   - direct_repo: the item carries a real repository whose same-org
+//     metadata matches the grant. An item with a real repository is decided
+//     by this path alone among the repository paths.
+//   - project_ownership: the item carries no repository, and a team that
+//     owns the item's project owns a repository that matches the grant
+//     (projects -> team_project_ownership -> team_repo_ownership -> repos,
+//     current ownership only).
+//   - pr_link: the item carries no repository, and an issue-to-pull-request
+//     link row names the item and a repository that matches the grant. Only
+//     a link the provider recorded or the pull request text names counts;
+//     a time-window guess never authorizes.
+//
+// A repo-less item with neither a project path nor a link path stays
+// denied for every principal without the organization-wide grant.
+const (
+	WorkItemAuthorizationOrganizationGrant = "organization_grant"
+	WorkItemAuthorizationDirectRepository  = "direct_repo"
+	WorkItemAuthorizationProjectOwnership  = "project_ownership"
+	WorkItemAuthorizationPullRequestLink   = "pr_link"
+)
+
+// WorkItemAuthorizationPaths is the fixed order of Provenance entries.
+func WorkItemAuthorizationPaths() []string {
+	return []string{
+		WorkItemAuthorizationOrganizationGrant,
+		WorkItemAuthorizationDirectRepository,
+		WorkItemAuthorizationProjectOwnership,
+		WorkItemAuthorizationPullRequestLink,
+	}
 }
 
 const (
@@ -88,10 +144,98 @@ const (
 	// This is the same repository-part grammar as acr/internal/auth. The
 	// match guard is needed before owner extraction: a malformed value such
 	// as owner/not-a-slug/extra must never match owner/* by its prefix.
-	workItemRepoSlugValid = "match(" + workItemRepoSlug + ", '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$')"
-	workItemRepoPresent   = "toString(w.repo_id) != '' AND toString(w.repo_id) != '00000000-0000-0000-0000-000000000000'"
-	workItemRepoNamed     = workItemRepoSlug + " != ''"
+	workItemRepoSlugGrammar = ", '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$')"
+	workItemRepoSlugValid   = "match(" + workItemRepoSlug + workItemRepoSlugGrammar
+	workItemRepoNamed       = workItemRepoSlug + " != ''"
+
+	zeroUUID = "00000000-0000-0000-0000-000000000000"
 )
+
+// workItemRepoPresent is the one spelling of "this work item carries a real
+// repository", shared by the direct path and the two repo-less paths so
+// the paths cannot overlap or leave a gap between them.
+var workItemRepoPresent = keyPresentSQL("w.repo_id", uuidKey)
+
+// keyKind names the storage shape of a key column for keyPresentSQL.
+type keyKind uint8
+
+const (
+	// uuidKey is a non-Nullable UUID column; the zero UUID is absent.
+	uuidKey keyKind = iota + 1
+	// nullableUUIDKey is a Nullable(UUID) column; NULL and the zero UUID
+	// are absent.
+	nullableUUIDKey
+	// stringKey is a non-Nullable String column; the empty string is
+	// absent.
+	stringKey
+)
+
+// keyPresentSQL is the shared predicate for "this key column carries a
+// value" across the key shapes this package joins on. Every presence test
+// in the work-item authorization relation goes through it, so NULL, the
+// empty string and the zero UUID mean "absent" in one place rather than
+// per clause. column is an internal Go string literal at every call site,
+// never caller-supplied.
+func keyPresentSQL(column string, kind keyKind) string {
+	switch kind {
+	case uuidKey:
+		return "toString(" + column + ") != '' AND toString(" + column + ") != '" + zeroUUID + "'"
+	case nullableUUIDKey:
+		return column + " IS NOT NULL AND toString(" + column + ") != '' AND toString(" + column + ") != '" + zeroUUID + "'"
+	case stringKey:
+		return column + " != ''"
+	}
+	panic("readers: unknown key kind")
+}
+
+// repositorySlugSQL is workItemRepoSlug over another repository-name
+// column: the same trim, case fold and producer-preimage mapping, so a
+// repository reached through ownership or a link row is compared under the
+// exact normalization the direct path uses.
+func repositorySlugSQL(column string) string {
+	return strings.Replace(workItemRepoSlug, "ifNull(r.repo, '')", "ifNull("+column+", '')", 1)
+}
+
+// grantedRepositoryMatchSQL is the principal-grant test for one repository
+// name column: grammar first, then exact slug or owner membership.
+func grantedRepositoryMatchSQL(prefix, column string) string {
+	slug := repositorySlugSQL(column)
+	return "match(" + slug + workItemRepoSlugGrammar + " = 1 AND " + repositorySelectorMatchOver(prefix, slug)
+}
+
+// workItemAuthorizingLinkProvenances are the link provenances that
+// authorize. work_graph_issue_pr also carries 'heuristic' rows (a pull
+// request near an issue in time), which are a guess rather than a link and
+// never authorize.
+const workItemAuthorizingLinkProvenances = "'native', 'explicit_text'"
+
+// workItemProjectOwnershipSQL is true when the item's project (matched on
+// provider and any identity value the project answers to) is owned by a
+// team that currently owns a repository the grant matches. Every relation
+// is read organization-scoped through the caller's {org_id} binding; the
+// grant arrays are the same bindings the direct path reads.
+func workItemProjectOwnershipSQL(prefix string) string {
+	current := OwnershipValidityPredicate(TimeBound{})
+	return "(w.provider, w.project_id) IN (" +
+		"SELECT wia_scope.provider, wia_scope.scope FROM (SELECT provider, id, scope FROM " + ProjectIdentityCatalogSQL() + ") AS wia_scope " +
+		"WHERE (wia_scope.provider, wia_scope.id) IN (" +
+		"SELECT wia_owned.provider, wia_owned.id FROM (SELECT provider, id, team_id FROM " + ProjectOwnershipCatalogJoinSQL(current) + ") AS wia_owned " +
+		"INNER JOIN (SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND " + keyPresentSQL("repo_id", nullableUUIDKey) + current + " GROUP BY team_id, repo_id) AS wia_team_repo ON wia_team_repo.team_id = wia_owned.team_id " +
+		"INNER JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS wia_owned_repo ON wia_owned_repo.id = wia_team_repo.repo_id " +
+		"WHERE " + grantedRepositoryMatchSQL(prefix, "wia_owned_repo.repo") + "))"
+}
+
+// workItemPullRequestLinkSQL is true when an authorizing issue-to-pull-
+// request link row names the item and a same-org repository the grant
+// matches.
+func workItemPullRequestLinkSQL(prefix string) string {
+	return "w.work_item_id IN (" +
+		"SELECT wia_link.work_item_id FROM work_graph_issue_pr AS wia_link FINAL " +
+		"INNER JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS wia_link_repo ON wia_link_repo.id = wia_link.repo_id " +
+		"WHERE wia_link.org_id = {org_id:String} AND wia_link.provenance IN (" + workItemAuthorizingLinkProvenances + ") AND " +
+		keyPresentSQL("wia_link.work_item_id", stringKey) + " AND " + keyPresentSQL("wia_link.repo_id", uuidKey) + " AND " +
+		grantedRepositoryMatchSQL(prefix, "wia_link_repo.repo") + ")"
+}
 
 var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
 
@@ -99,6 +243,12 @@ var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-
 // expression. It is intentionally a function over AuthorizationScope, with
 // no caller-provided SQL or alias parameters, so S1 and every content reader
 // cannot accidentally use different repository semantics.
+//
+// In selector mode the expression also reads projects,
+// team_project_ownership, team_repo_ownership, work_graph_issue_pr and
+// repos through uncorrelated subqueries, each filtered by the caller's
+// {org_id} binding. A caller that caps rows read with Settings must budget
+// for those relations as well as work_items.
 func WorkItemScopeSQL(scope AuthorizationScope) WorkItemScopeSQLResult {
 	result := WorkItemScopeSQLResult{}
 	var expressions []string
@@ -113,13 +263,23 @@ func WorkItemScopeSQL(scope AuthorizationScope) WorkItemScopeSQLResult {
 
 	if scope.RepositorySelectors != nil {
 		result.JoinSQL = workItemRepositoryJoin
-		grantedExpr, grantedBindings := renderRepositorySelectorSet(scope.RepositorySelectors.Granted, "authorized")
+		// Every path expression carries the ID dimensions and the requested
+		// selector, so a true path always implies an authorized row.
+		restrictions := append([]string(nil), expressions...)
+		grantedExpr, grantedBindings, paths := renderRepositorySelectorSet(scope.RepositorySelectors.Granted, "authorized")
 		expressions = append(expressions, grantedExpr)
 		result.Bindings = append(result.Bindings, grantedBindings...)
 		if scope.RepositorySelectors.Requested != nil {
 			requestedExpr, requestedBindings := renderRequestedRepositorySelectorSet(*scope.RepositorySelectors.Requested)
 			expressions = append(expressions, requestedExpr)
+			restrictions = append(restrictions, requestedExpr)
 			result.Bindings = append(result.Bindings, requestedBindings...)
+		}
+		for _, path := range paths {
+			result.Provenance = append(result.Provenance, WorkItemAuthorizationPathSQL{
+				Path: path.Path,
+				Expr: strings.Join(append([]string{path.Expr}, restrictions...), " AND "),
+			})
 		}
 	}
 
@@ -134,7 +294,7 @@ func WorkItemScopeSQL(scope AuthorizationScope) WorkItemScopeSQLResult {
 	return result
 }
 
-func renderRepositorySelectorSet(set RepositorySelectorSet, prefix string) (string, []Binding) {
+func renderRepositorySelectorSet(set RepositorySelectorSet, prefix string) (string, []Binding, []WorkItemAuthorizationPathSQL) {
 	exactSlugs := normalizeRepositorySlugs(set.ExactSlugs)
 	owners := normalizeRepositoryOwners(set.Owners)
 	bindings := []Binding{
@@ -146,9 +306,25 @@ func renderRepositorySelectorSet(set RepositorySelectorSet, prefix string) (stri
 	// The global grant wildcard intentionally short-circuits metadata
 	// matching. This is what permits repo-less and orphan work items for an
 	// organization-wide principal when there is no requested selector.
-	metadataMatch := repositorySelectorMatch(prefix)
-	match := "({" + prefix + "_repo_all:UInt8} = 1 OR (" + workItemRepoPresent + " AND " + workItemRepoSlugValid + " = 1 AND " + metadataMatch + "))"
-	return match, bindings
+	//
+	// A repo-less item has two further paths, both through the grant's own
+	// repositories: its project's owning teams, and its linked pull
+	// requests. A repo-less item with neither stays denied. An item with a
+	// real repository never takes either further path: its own repository
+	// decides.
+	organization := "{" + prefix + "_repo_all:UInt8} = 1"
+	direct := "(" + workItemRepoPresent + " AND " + workItemRepoSlugValid + " = 1 AND " + repositorySelectorMatch(prefix) + ")"
+	repoLess := "NOT (" + workItemRepoPresent + ")"
+	project := "(" + repoLess + " AND " + keyPresentSQL("w.project_id", stringKey) + " AND " + workItemProjectOwnershipSQL(prefix) + ")"
+	link := "(" + repoLess + " AND " + workItemPullRequestLinkSQL(prefix) + ")"
+	paths := []WorkItemAuthorizationPathSQL{
+		{Path: WorkItemAuthorizationOrganizationGrant, Expr: "(" + organization + ")"},
+		{Path: WorkItemAuthorizationDirectRepository, Expr: direct},
+		{Path: WorkItemAuthorizationProjectOwnership, Expr: project},
+		{Path: WorkItemAuthorizationPullRequestLink, Expr: link},
+	}
+	match := "(" + organization + " OR " + direct + " OR " + project + " OR " + link + ")"
+	return match, bindings, paths
 }
 
 func renderRequestedRepositorySelectorSet(set RepositorySelectorSet) (string, []Binding) {
@@ -172,7 +348,11 @@ func renderRequestedRepositorySelectorSet(set RepositorySelectorSet) (string, []
 }
 
 func repositorySelectorMatch(prefix string) string {
-	return "(has({" + prefix + "_repo_slugs:Array(String)}, " + workItemRepoSlug + ") OR has({" + prefix + "_repo_owners:Array(String)}, arrayElement(splitByChar('/', " + workItemRepoSlug + "), 1)))"
+	return repositorySelectorMatchOver(prefix, workItemRepoSlug)
+}
+
+func repositorySelectorMatchOver(prefix, slug string) string {
+	return "(has({" + prefix + "_repo_slugs:Array(String)}, " + slug + ") OR has({" + prefix + "_repo_owners:Array(String)}, arrayElement(splitByChar('/', " + slug + "), 1)))"
 }
 
 func boolToFlag(value bool) uint8 {
