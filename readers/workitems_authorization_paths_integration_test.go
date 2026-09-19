@@ -53,14 +53,14 @@ var (
 type authzProject struct {
 	id, key  string
 	provider string
-	owned    *authzRepo
+	owned    []authzRepo
 }
 
 var (
-	authzProjectOwned    = authzProject{id: "proj-owned", provider: "linear", owned: &authzRepoGranted}
-	authzProjectNonOwned = authzProject{id: "proj-nongranted", provider: "linear", owned: &authzRepoNonGranted}
+	authzProjectOwned    = authzProject{id: "proj-owned", provider: "linear", owned: []authzRepo{authzRepoGranted}}
+	authzProjectNonOwned = authzProject{id: "proj-nongranted", provider: "linear", owned: []authzRepo{authzRepoNonGranted}}
 	// Answers to its unambiguous key as well as its id.
-	authzProjectKeyed = authzProject{id: "proj-keyed", key: "KEYED", provider: "linear", owned: &authzRepoGranted}
+	authzProjectKeyed = authzProject{id: "proj-keyed", key: "KEYED", provider: "linear", owned: []authzRepo{authzRepoGranted}}
 	// Owned by the granted team only through an expired ownership window.
 	authzProjectExpired = authzProject{id: "proj-expired", provider: "linear"}
 	// A project no team owns.
@@ -78,7 +78,12 @@ var (
 	// Owned by a team owning a malformed repository name.
 	authzProjectMalformed = authzProject{id: "proj-malformed-repo", provider: "linear"}
 	// Owned by a team owning a repository stored with case and padding.
-	authzProjectUpper = authzProject{id: "proj-upper-repo", provider: "linear", owned: &authzRepoUpper}
+	authzProjectUpper = authzProject{id: "proj-upper-repo", provider: "linear", owned: []authzRepo{authzRepoUpper}}
+	// Owned by a team owning two granted repositories and a non-granted one.
+	authzProjectTwoRepos = authzProject{id: "proj-two-repos", provider: "linear", owned: []authzRepo{authzRepoUpper, authzRepoGranted, authzRepoNonGranted}}
+	// The same id under two providers; only the linear project is owned.
+	authzProjectDupLinear = authzProject{id: "proj-dup", provider: "linear", owned: []authzRepo{authzRepoGranted}}
+	authzProjectDupJira   = authzProject{id: "proj-dup", provider: "jira"}
 	// A project row whose id is empty, owned via the granted repository.
 	authzProjectEmptyID = authzProject{id: "", provider: "linear"}
 )
@@ -157,9 +162,17 @@ func authzOracle(item authzItem, granted readers.RepositorySelectorSet, requeste
 			evidence[readers.WorkItemAuthorizationDirectRepository] = []string{normalized(*item.repo)}
 		}
 	} else {
-		if item.project != nil && item.project.owned != nil && item.project.provider == item.provider && authzGrantMatches(granted, *item.project.owned) {
-			paths[readers.WorkItemAuthorizationProjectOwnership] = true
-			evidence[readers.WorkItemAuthorizationProjectOwnership] = []string{normalized(*item.project.owned)}
+		if item.project != nil && item.project.provider == item.provider {
+			var owned []string
+			for _, repo := range item.project.owned {
+				if authzGrantMatches(granted, repo) {
+					owned = append(owned, normalized(repo))
+				}
+			}
+			if len(owned) > 0 {
+				paths[readers.WorkItemAuthorizationProjectOwnership] = true
+				evidence[readers.WorkItemAuthorizationProjectOwnership] = authzSortedUnique(owned)
+			}
 		}
 		for _, link := range item.links {
 			if link.org != authzOrg || (link.provenance != "native" && link.provenance != "explicit_text") {
@@ -274,6 +287,12 @@ func authzItems() []authzItem {
 		authzItem{id: "linear:norepo-projzerorepo", provider: "linear", projectID: authzProjectZeroRepo.id, project: &authzProjectZeroRepo},
 		authzItem{id: "linear:norepo-projmalformed", provider: "linear", projectID: authzProjectMalformed.id, project: &authzProjectMalformed},
 		authzItem{id: "linear:norepo-projupper", provider: "linear", projectID: authzProjectUpper.id, project: &authzProjectUpper},
+		authzItem{id: "linear:norepo-projtworepos", provider: "linear", projectID: authzProjectTwoRepos.id, project: &authzProjectTwoRepos},
+		authzItem{id: "linear:norepo-projdup", provider: "linear", projectID: authzProjectDupLinear.id, project: &authzProjectDupLinear},
+		authzItem{id: "jira:norepo-projdup", provider: "jira", projectID: authzProjectDupJira.id, project: &authzProjectDupJira},
+		// A real repository stored with case and padding: the direct path's
+		// evidence is the normalized slug.
+		authzItem{id: "linear:upperrepo-direct", provider: "linear", repo: &authzRepoUpper},
 		// An item with no project_id beside a project whose id is empty.
 		authzItem{id: "linear:norepo-noproject-beside-emptyid-project", provider: "linear"},
 		// A link row whose work_item_id is empty, beside an item whose id is.
@@ -297,7 +316,8 @@ func authzSeedStatements(items []authzItem) []string {
 		stmts = append(stmts, fmt.Sprintf("INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES ('%s', '%s', %s, %s, '%s', 'github')", repo.id, repo.slug, at, at, repo.org))
 	}
 	for _, project := range []authzProject{authzProjectOwned, authzProjectNonOwned, authzProjectKeyed, authzProjectExpired, authzProjectUnowned, authzProjectNullRepo, authzProjectOtherOrg,
-		authzProjectTeamRepoOtherOrg, authzProjectForeignRepo, authzProjectZeroRepo, authzProjectMalformed, authzProjectUpper, authzProjectEmptyID} {
+		authzProjectTeamRepoOtherOrg, authzProjectForeignRepo, authzProjectZeroRepo, authzProjectMalformed, authzProjectUpper, authzProjectEmptyID,
+		authzProjectTwoRepos, authzProjectDupLinear, authzProjectDupJira} {
 		key := "NULL"
 		if project.key != "" {
 			key = "'" + project.key + "'"
@@ -334,6 +354,11 @@ func authzSeedStatements(items []authzItem) []string {
 		tpo(authzOrg, "team-upper", authzProjectUpper.id, "NULL"),
 		tro(authzOrg, "team-upper", "'"+authzRepoUpper.id+"'", authzRepoUpper.slug, "NULL"),
 		tpo(authzOrg, "team-granted", authzProjectEmptyID.id, "NULL"),
+		tpo(authzOrg, "team-two", authzProjectTwoRepos.id, "NULL"),
+		tro(authzOrg, "team-two", "'"+authzRepoUpper.id+"'", authzRepoUpper.slug, "NULL"),
+		tro(authzOrg, "team-two", "'"+authzRepoGranted.id+"'", authzRepoGranted.slug, "NULL"),
+		tro(authzOrg, "team-two", "'"+authzRepoNonGranted.id+"'", authzRepoNonGranted.slug, "NULL"),
+		tpo(authzOrg, "team-granted", authzProjectDupLinear.id, "NULL"),
 		fmt.Sprintf("INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES ('%s', '', 9999, 1, 'native', 'fixture', %s, '%s')", authzRepoGranted.id, at, authzOrg),
 	)
 	pr := uint32(1)
