@@ -160,11 +160,10 @@ var workItemRepoPresent = keyPresentSQL("w.repo_id", uuidKey)
 type keyKind uint8
 
 const (
-	// uuidKey is a non-Nullable UUID column; the zero UUID is absent.
+	// uuidKey is a UUID column; the empty string and the zero UUID are
+	// absent. On a Nullable(UUID) column a NULL fails both comparisons, so
+	// NULL is absent too.
 	uuidKey keyKind = iota + 1
-	// nullableUUIDKey is a Nullable(UUID) column; NULL and the zero UUID
-	// are absent.
-	nullableUUIDKey
 	// stringKey is a non-Nullable String column; the empty string is
 	// absent.
 	stringKey
@@ -180,8 +179,6 @@ func keyPresentSQL(column string, kind keyKind) string {
 	switch kind {
 	case uuidKey:
 		return "toString(" + column + ") != '' AND toString(" + column + ") != '" + zeroUUID + "'"
-	case nullableUUIDKey:
-		return column + " IS NOT NULL AND toString(" + column + ") != '' AND toString(" + column + ") != '" + zeroUUID + "'"
 	case stringKey:
 		return column + " != ''"
 	}
@@ -220,7 +217,7 @@ func workItemProjectOwnershipSQL(prefix string) string {
 		"SELECT wia_scope.provider, wia_scope.scope FROM (SELECT provider, id, scope FROM " + ProjectIdentityCatalogSQL() + ") AS wia_scope " +
 		"WHERE (wia_scope.provider, wia_scope.id) IN (" +
 		"SELECT wia_owned.provider, wia_owned.id FROM (SELECT provider, id, team_id FROM " + ProjectOwnershipCatalogJoinSQL(current) + ") AS wia_owned " +
-		"INNER JOIN (SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND " + keyPresentSQL("repo_id", nullableUUIDKey) + current + " GROUP BY team_id, repo_id) AS wia_team_repo ON wia_team_repo.team_id = wia_owned.team_id " +
+		"INNER JOIN (SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND " + keyPresentSQL("repo_id", uuidKey) + current + " GROUP BY team_id, repo_id) AS wia_team_repo ON wia_team_repo.team_id = wia_owned.team_id " +
 		"INNER JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS wia_owned_repo ON wia_owned_repo.id = wia_team_repo.repo_id " +
 		"WHERE " + grantedRepositoryMatchSQL(prefix, "wia_owned_repo.repo") + "))"
 }
