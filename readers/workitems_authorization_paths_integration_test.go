@@ -145,15 +145,21 @@ func authzGrantMatches(set readers.RepositorySelectorSet, repo authzRepo) bool {
 // item is admitted by its project's owned repository or by an authorizing
 // link, each matched against the grant; the request's selector narrows
 // every path.
-func authzOracle(item authzItem, granted readers.RepositorySelectorSet, requested *readers.RepositorySelectorSet) map[string]bool {
+func authzOracle(item authzItem, granted readers.RepositorySelectorSet, requested *readers.RepositorySelectorSet) (map[string]bool, map[string][]string) {
 	paths := map[string]bool{
 		readers.WorkItemAuthorizationOrganizationGrant: granted.All,
 	}
+	evidence := map[string][]string{}
+	normalized := func(repo authzRepo) string { return strings.ToLower(strings.TrimSpace(repo.slug)) }
 	if item.repo != nil {
-		paths[readers.WorkItemAuthorizationDirectRepository] = authzGrantMatches(granted, *item.repo)
+		if authzGrantMatches(granted, *item.repo) {
+			paths[readers.WorkItemAuthorizationDirectRepository] = true
+			evidence[readers.WorkItemAuthorizationDirectRepository] = []string{normalized(*item.repo)}
+		}
 	} else {
-		if item.project != nil && item.project.owned != nil && item.project.provider == item.provider {
-			paths[readers.WorkItemAuthorizationProjectOwnership] = authzGrantMatches(granted, *item.project.owned)
+		if item.project != nil && item.project.owned != nil && item.project.provider == item.provider && authzGrantMatches(granted, *item.project.owned) {
+			paths[readers.WorkItemAuthorizationProjectOwnership] = true
+			evidence[readers.WorkItemAuthorizationProjectOwnership] = []string{normalized(*item.project.owned)}
 		}
 		for _, link := range item.links {
 			if link.org != authzOrg || (link.provenance != "native" && link.provenance != "explicit_text") {
@@ -161,16 +167,37 @@ func authzOracle(item authzItem, granted readers.RepositorySelectorSet, requeste
 			}
 			if authzGrantMatches(granted, link.repo) {
 				paths[readers.WorkItemAuthorizationPullRequestLink] = true
+				evidence[readers.WorkItemAuthorizationPullRequestLink] = append(evidence[readers.WorkItemAuthorizationPullRequestLink], normalized(link.repo))
 			}
 		}
+		evidence[readers.WorkItemAuthorizationPullRequestLink] = authzSortedUnique(evidence[readers.WorkItemAuthorizationPullRequestLink])
 	}
 	if requested != nil {
 		requestedOK := item.repo != nil && (requested.All || authzGrantMatches(*requested, *item.repo))
-		for path := range paths {
-			paths[path] = paths[path] && requestedOK
+		if !requestedOK {
+			for path := range paths {
+				paths[path] = false
+				delete(evidence, path)
+			}
 		}
 	}
-	return paths
+	return paths, evidence
+}
+
+func authzSortedUnique(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func authzAuthorized(paths map[string]bool) bool {
@@ -236,6 +263,12 @@ func authzItems() []authzItem {
 		authzItem{id: "linear:norepo-orphan-link-zerorepo", provider: "linear", links: []authzLink{{authzRepoZero, "native", authzOrg}}},
 		authzItem{id: "linear:norepo-orphan-link-malformed", provider: "linear", links: []authzLink{{authzRepoMalformed, "native", authzOrg}}},
 		authzItem{id: "linear:norepo-orphan-link-upper", provider: "linear", links: []authzLink{{authzRepoUpper, "native", authzOrg}}},
+		// Several links: the evidence is every granted repository, once each,
+		// sorted; a non-granted and a heuristic link add nothing.
+		authzItem{id: "linear:norepo-orphan-multilink", provider: "linear", links: []authzLink{
+			{authzRepoUpper, "native", authzOrg}, {authzRepoGranted, "explicit_text", authzOrg}, {authzRepoGranted, "native", authzOrg},
+			{authzRepoNonGranted, "native", authzOrg}, {authzRepoMalformed, "heuristic", authzOrg},
+		}},
 		authzItem{id: "linear:norepo-projteamrepootherorg", provider: "linear", projectID: authzProjectTeamRepoOtherOrg.id, project: &authzProjectTeamRepoOtherOrg},
 		authzItem{id: "linear:norepo-projforeignrepo", provider: "linear", projectID: authzProjectForeignRepo.id, project: &authzProjectForeignRepo},
 		authzItem{id: "linear:norepo-projzerorepo", provider: "linear", projectID: authzProjectZeroRepo.id, project: &authzProjectZeroRepo},
@@ -383,6 +416,7 @@ func authzIDs(items []authzItem) []string {
 type authzReadRow struct {
 	authorized bool
 	paths      map[string]bool
+	evidence   map[string][]string
 }
 
 // authzReadProvenance runs AuthorizationExpr and every Provenance
@@ -399,7 +433,7 @@ func authzReadProvenance(t *testing.T, client *clickhouse.Client, scope readers.
 		if path.Path != readers.WorkItemAuthorizationPaths()[i] {
 			t.Fatalf("Provenance[%d].Path = %q, want %q", i, path.Path, readers.WorkItemAuthorizationPaths()[i])
 		}
-		columns = append(columns, "toUInt8("+path.Expr+")")
+		columns = append(columns, "toUInt8("+path.Expr+")", path.RepositoriesExpr)
 	}
 	statement := "SELECT " + strings.Join(columns, ", ") + "\nFROM work_items AS w FINAL " + rendered.JoinSQL +
 		"\nWHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}"
@@ -408,16 +442,20 @@ func authzReadProvenance(t *testing.T, client *clickhouse.Client, scope readers.
 		var id string
 		var authorized uint8
 		flags := make([]uint8, len(rendered.Provenance))
+		repositories := make([][]string, len(rendered.Provenance))
 		dest := []any{&id, &authorized}
 		for i := range flags {
-			dest = append(dest, &flags[i])
+			dest = append(dest, &flags[i], &repositories[i])
 		}
 		if err := row.Scan(dest...); err != nil {
 			return err
 		}
-		read := authzReadRow{authorized: authorized == 1, paths: map[string]bool{}}
+		read := authzReadRow{authorized: authorized == 1, paths: map[string]bool{}, evidence: map[string][]string{}}
 		for i, path := range rendered.Provenance {
 			read.paths[path.Path] = flags[i] == 1
+			if len(repositories[i]) > 0 {
+				read.evidence[path.Path] = repositories[i]
+			}
 		}
 		got[id] = read
 		return nil
@@ -454,9 +492,10 @@ func TestIntegrationWorkItemAuthorizationPaths(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			scope := readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: tc.granted, Requested: tc.requested}}
 			want := map[string]map[string]bool{}
+			wantEvidence := map[string]map[string][]string{}
 			var wantAuthorized []string
 			for _, item := range items {
-				want[item.id] = authzOracle(item, tc.granted, tc.requested)
+				want[item.id], wantEvidence[item.id] = authzOracle(item, tc.granted, tc.requested)
 				if authzAuthorized(want[item.id]) {
 					wantAuthorized = append(wantAuthorized, item.id)
 				}
@@ -472,6 +511,9 @@ func TestIntegrationWorkItemAuthorizationPaths(t *testing.T) {
 				for _, path := range readers.WorkItemAuthorizationPaths() {
 					if read.paths[path] != want[item.id][path] {
 						t.Errorf("%s path %s = %v, want %v", item.id, path, read.paths[path], want[item.id][path])
+					}
+					if strings.Join(read.evidence[path], ",") != strings.Join(wantEvidence[item.id][path], ",") {
+						t.Errorf("%s path %s repositories = %v, want %v", item.id, path, read.evidence[path], wantEvidence[item.id][path])
 					}
 				}
 				if read.authorized != authzAuthorized(want[item.id]) {
