@@ -79,6 +79,7 @@ func ptmItems() []ptmItem {
 		{id: "linear:MULTI-1", org: ptmOrg, project: ""},
 		// The same item id under two repositories, in two projects: ambiguous,
 		// so it attributes to neither.
+		{id: "linear:AMBC-1", org: ptmOrg, project: "proj-amb-a"},
 		{id: "linear:AMB-1", org: ptmOrg, project: "proj-amb-a", repo: ptmRepoB},
 		{id: "linear:AMB-1", org: ptmOrg, project: "proj-amb-b", repo: ptmRepoC},
 		{id: "linear:K-1", org: ptmOrg, project: "proj-keyed"},
@@ -86,7 +87,29 @@ func ptmItems() []ptmItem {
 	}
 }
 
+// ptmVersioned returns several units, each written twice, in alternating part
+// order, so a read that does not take the latest version is caught whichever
+// version the server happens to return first.
+func ptmVersioned() []ptmUnit {
+	var out []ptmUnit
+	for i := 0; i < 8; i++ {
+		id := fmt.Sprintf("u-versioned-%d", i)
+		live := ptmUnit{id: id, org: ptmOrg, effort: float64(2 + i), themes: ptmTheme("feature_delivery"), issues: []string{"linear:B-1"}, version: 2}
+		stale := ptmUnit{id: id, org: ptmOrg, effort: float64(500 + i), themes: ptmTheme("risk"), issues: []string{"linear:B-1"}, version: 1}
+		if i%2 == 0 {
+			out = append(out, live, stale)
+		} else {
+			out = append(out, stale, live)
+		}
+	}
+	return out
+}
+
 func ptmUnits() []ptmUnit {
+	return append(ptmVersioned(), ptmBaseUnits()...)
+}
+
+func ptmBaseUnits() []ptmUnit {
 	return []ptmUnit{
 		// Superseded versions must never be read, whichever order the parts
 		// were written in: one unit has its live version first, one last.
@@ -100,7 +123,15 @@ func ptmUnits() []ptmUnit {
 		{id: "u-negative", org: ptmOrg, effort: -30, themes: map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}, bugfix: 1, issues: []string{"linear:B-1"}, version: 1},
 		{id: "u-multi", org: ptmOrg, effort: 12, themes: ptmTheme("maintenance"), issues: []string{"linear:MULTI-1"}, version: 1},
 		// Evidence naming an item id that sits under two repositories.
-		{id: "u-ambiguous", org: ptmOrg, effort: 15, themes: ptmTheme("risk"), issues: []string{"linear:AMB-1"}, version: 1},
+		{id: "u-ambiguous", org: ptmOrg, effort: 15, themes: map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}, bugfix: 0.5, issues: []string{"linear:AMB-1"}, version: 1},
+		// Two clean projects plus an ambiguous item: the ambiguous candidates are
+		// excluded and are never reported as spanning.
+		{id: "u-amb-mixed", org: ptmOrg, effort: 8, themes: ptmTheme("quality"), issues: []string{"linear:A-1", "linear:B-1", "linear:AMB-1"}, version: 1},
+		// One clean project plus an ambiguous item: not a spanning unit.
+		{id: "u-amb-solo", org: ptmOrg, effort: 6, themes: ptmTheme("operational"), issues: []string{"linear:A-2", "linear:AMB-1"}, version: 1},
+		// A candidate project that is also reached through a clean item keeps
+		// the unit as clean.
+		{id: "u-amb-clean-too", org: ptmOrg, effort: 4, themes: ptmTheme("maintenance"), issues: []string{"linear:AMB-1", "linear:AMBC-1"}, version: 1},
 		// One item id shared by two providers' projects: a unit in each, spanning.
 		{id: "u-dup", org: ptmOrg, effort: 25, themes: ptmTheme("operational"), issues: []string{"linear:D-1"}, version: 1},
 		// One project reached under both its id and its key: one unit, one project.
@@ -125,9 +156,9 @@ func ptmUnits() []ptmUnit {
 }
 
 type ptmWant struct {
-	sums                             map[string]float64
-	bugfix                           float64
-	workUnits, effortUnits, spanning uint64
+	sums                                        map[string]float64
+	bugfix                                      float64
+	workUnits, effortUnits, spanning, ambiguous uint64
 }
 
 // ptmOracle models the attribution rule over the fixture only.
@@ -140,6 +171,12 @@ func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 				repos[item.id] = map[string]bool{}
 			}
 			repos[item.id][item.repo] = true
+		}
+	}
+	ambiguousProject := map[string][]string{}
+	for _, item := range items {
+		if item.org == ptmOrg && len(repos[item.id]) > 1 && item.project != "" {
+			ambiguousProject[item.id] = append(ambiguousProject[item.id], "linear:"+item.project)
 		}
 	}
 	for _, item := range items {
@@ -185,6 +222,23 @@ func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 		}
 	}
 	want := map[string]ptmWant{}
+	// A unit whose only evidence for a project is an ambiguous item counts
+	// as ambiguous for it, and carries no weight.
+	for id, unit := range latest {
+		for _, issue := range unit.issues {
+			for _, project := range ambiguousProject[issue] {
+				if unitProjects[id][project] {
+					continue
+				}
+				w, ok := want[project]
+				if !ok {
+					w = ptmWant{sums: map[string]float64{}}
+				}
+				w.ambiguous++
+				want[project] = w
+			}
+		}
+	}
 	for id, projects := range unitProjects {
 		unit := latest[id]
 		for project := range projects {
@@ -364,8 +418,8 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 		if !ptmClose(row.BugfixWeighted, w.bugfix) {
 			t.Errorf("%s bugfix = %v, want %v", project, row.BugfixWeighted, w.bugfix)
 		}
-		if row.WorkUnits != w.workUnits || row.EffortUnits != w.effortUnits || row.SpanningUnits != w.spanning {
-			t.Errorf("%s population = (%d,%d,%d), want (%d,%d,%d)", project, row.WorkUnits, row.EffortUnits, row.SpanningUnits, w.workUnits, w.effortUnits, w.spanning)
+		if row.WorkUnits != w.workUnits || row.EffortUnits != w.effortUnits || row.SpanningUnits != w.spanning || row.AmbiguousUnits != w.ambiguous {
+			t.Errorf("%s population = (%d,%d,%d,%d), want (%d,%d,%d,%d)", project, row.WorkUnits, row.EffortUnits, row.SpanningUnits, row.AmbiguousUnits, w.workUnits, w.effortUnits, w.spanning, w.ambiguous)
 		}
 	}
 	// Named absences: a project with no units, a project whose only unit
@@ -382,8 +436,15 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 		t.Errorf("zero-effort project row = %#v", zero)
 	}
 	// Spanning is disclosed for both projects it touches.
-	if got["linear:proj-a"].SpanningUnits != 1 || got["linear:proj-b"].SpanningUnits != 1 {
-		t.Errorf("spanning = (%d,%d), want (1,1)", got["linear:proj-a"].SpanningUnits, got["linear:proj-b"].SpanningUnits)
+	if got["linear:proj-a"].SpanningUnits != 2 || got["linear:proj-b"].SpanningUnits != 2 {
+		t.Errorf("spanning = (%d,%d), want (2,2): u-span and u-amb-mixed; an ambiguous candidate never adds one", got["linear:proj-a"].SpanningUnits, got["linear:proj-b"].SpanningUnits)
+	}
+	// Ambiguous evidence carries no weight and is disclosed on both candidates.
+	for _, project := range []string{"linear:proj-amb-a", "linear:proj-amb-b"} {
+		row := got[project]
+		if row.AmbiguousUnits < 1 {
+			t.Errorf("%s = %#v, want ambiguous units disclosed", project, row)
+		}
 	}
 	// The shared id resolves under both providers, each with its own row.
 	if got["linear:proj-dup"].WorkUnits != 1 || got["jira:proj-dup"].WorkUnits != 1 || got["jira:proj-dup"].SpanningUnits != 1 {
@@ -391,8 +452,8 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 	}
 	// Spanning counts every project in the organization, not only the requested ones.
 	subset, err := readers.ReadProjectThemeMix(context.Background(), client, ptmOrg, []string{"linear:proj-a"}, readers.TimeBound{})
-	if err != nil || len(subset) != 1 || subset[0].SpanningUnits != 1 {
-		t.Errorf("subset rows = %#v, err = %v, want proj-a alone with spanning 1", subset, err)
+	if err != nil || len(subset) != 1 || subset[0].SpanningUnits != want["linear:proj-a"].spanning {
+		t.Errorf("subset rows = %#v, err = %v, want proj-a alone with the spanning count the whole organization gives it", subset, err)
 	}
 	// The superseded version's weight never appears.
 	if got["linear:proj-a"].Risk > 10.0+1e-9 {

@@ -15,13 +15,13 @@ func TestReadProjectThemeMix(t *testing.T) {
 	t.Run("scans one row per project", func(t *testing.T) {
 		t.Parallel()
 		client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-			{"linear:proj-1", 1.0, 2.0, 3.0, 4.0, 5.0, 0.5, uint64(9), uint64(7), uint64(2)},
+			{"linear:proj-1", 1.0, 2.0, 3.0, 4.0, 5.0, 0.5, uint64(9), uint64(7), uint64(2), uint64(4)},
 		}}}}
 		rows, err := readers.ReadProjectThemeMix(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 		if err != nil {
 			t.Fatalf("ReadProjectThemeMix() error = %v", err)
 		}
-		want := readers.ProjectThemeMixRow{ProjectSubjectKey: "linear:proj-1", FeatureDelivery: 1, Operational: 2, Maintenance: 3, Quality: 4, Risk: 5, BugfixWeighted: 0.5, WorkUnits: 9, EffortUnits: 7, SpanningUnits: 2}
+		want := readers.ProjectThemeMixRow{ProjectSubjectKey: "linear:proj-1", FeatureDelivery: 1, Operational: 2, Maintenance: 3, Quality: 4, Risk: 5, BugfixWeighted: 0.5, WorkUnits: 9, EffortUnits: 7, SpanningUnits: 2, AmbiguousUnits: 4}
 		if len(rows) != 1 || rows[0] != want {
 			t.Fatalf("rows = %#v, want %#v", rows, want)
 		}
