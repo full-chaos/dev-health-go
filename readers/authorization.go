@@ -87,6 +87,14 @@ type WorkItemScopeSQLResult struct {
 	// Populated in selector mode only. The legacy ID-only and zero-value
 	// modes have no path to name and leave it nil.
 	Provenance []WorkItemAuthorizationPathSQL
+
+	// ExcludedLinkProvenancesExpr is an Array(String) expression, selector
+	// mode only: for a row with no repository, the sorted provenances
+	// ('explicit_text', 'heuristic', ...) of issue-to-pull-request link rows
+	// that name a granted repository for it but do not authorize; empty for
+	// every other row. It discloses the population a native-only link rule
+	// leaves out, whatever else authorized the row.
+	ExcludedLinkProvenancesExpr string
 }
 
 // WorkItemAuthorizationPathSQL is one authorization path of a work-item
@@ -115,8 +123,9 @@ type WorkItemAuthorizationPathSQL struct {
 //     current ownership only).
 //   - pr_link: the item carries no repository, and an issue-to-pull-request
 //     link row names the item and a repository that matches the grant. Only
-//     a link the provider recorded or the pull request text names counts;
-//     a time-window guess never authorizes.
+//     a link the provider itself recorded (provenance 'native') counts; an
+//     issue key found in pull-request text and a time-window guess are
+//     evidence, never a grant.
 //
 // A repo-less item with neither a project path nor a link path stays
 // denied for every principal without the organization-wide grant.
@@ -207,11 +216,13 @@ func grantedRepositoryMatchSQL(prefix, column string) string {
 	return "match(" + slug + workItemRepoSlugGrammar + " = 1 AND " + repositorySelectorMatchOver(prefix, slug)
 }
 
-// workItemAuthorizingLinkProvenances are the link provenances that
-// authorize. work_graph_issue_pr also carries 'heuristic' rows (a pull
-// request near an issue in time), which are a guess rather than a link and
-// never authorize.
-const workItemAuthorizingLinkProvenances = "'native', 'explicit_text'"
+// workItemAuthorizingLinkProvenance is the one link provenance that
+// authorizes: a link the provider itself recorded between the issue and the
+// pull request. work_graph_issue_pr also carries 'explicit_text' rows (an
+// issue key found in pull-request text) and 'heuristic' rows (a pull
+// request near an issue in time); both are evidence, never a grant, and are
+// only disclosed (see ExcludedLinkProvenancesExpr).
+const workItemAuthorizingLinkProvenance = "native"
 
 // workItemProjectAuthorizationJoinSQL joins, per (provider, project
 // identity value), the sorted normalized slugs of every granted repository
@@ -225,7 +236,7 @@ func workItemProjectAuthorizationJoinSQL(prefix string) string {
 	current := OwnershipValidityPredicate(TimeBound{})
 	owned := "SELECT wia_owned_project.provider AS wia_owned_provider, wia_owned_project.id AS wia_owned_id, " + repositorySlugSQL("wia_owned_repo.repo") + " AS wia_owned_repository " +
 		"FROM (SELECT provider, id, team_id FROM " + ProjectOwnershipCatalogJoinSQL(current) + ") AS wia_owned_project " +
-		"INNER JOIN (SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND " + keyPresentSQL("repo_id", uuidKey) + current + " GROUP BY team_id, repo_id) AS wia_team_repo ON wia_team_repo.team_id = wia_owned_project.team_id " +
+		"INNER JOIN " + TeamRepositoryOwnershipSQL(current) + " AS wia_team_repo ON wia_team_repo.team_id = wia_owned_project.team_id " +
 		"INNER JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS wia_owned_repo ON wia_owned_repo.id = wia_team_repo.repo_id " +
 		"WHERE " + grantedRepositoryMatchSQL(prefix, "wia_owned_repo.repo")
 	return "LEFT JOIN (SELECT wia_scope.provider AS wia_project_provider, wia_scope.scope AS wia_project_scope, arraySort(groupUniqArray(wia_owned.wia_owned_repository)) AS wia_project_repositories " +
@@ -235,14 +246,18 @@ func workItemProjectAuthorizationJoinSQL(prefix string) string {
 }
 
 // workItemPullRequestLinkJoinSQL joins, per work item, the sorted
-// normalized slugs of every granted same-org repository an authorizing
-// issue-to-pull-request link row names for it; an item with no such link
-// gets the empty array.
+// normalized slugs of every granted same-org repository a native
+// issue-to-pull-request link row names for it, and the sorted provenances
+// of the non-authorizing link rows that name a granted repository for it;
+// an item with no such link gets two empty arrays.
 func workItemPullRequestLinkJoinSQL(prefix string) string {
-	return "LEFT JOIN (SELECT wia_link.work_item_id AS wia_link_work_item_id, arraySort(groupUniqArray(" + repositorySlugSQL("wia_link_repo.repo") + ")) AS wia_link_repositories " +
+	authorizing := "wia_link.provenance = '" + workItemAuthorizingLinkProvenance + "'"
+	return "LEFT JOIN (SELECT wia_link.work_item_id AS wia_link_work_item_id, " +
+		"arraySort(groupUniqArrayIf(" + repositorySlugSQL("wia_link_repo.repo") + ", " + authorizing + ")) AS wia_link_repositories, " +
+		"arraySort(groupUniqArrayIf(wia_link.provenance, NOT (" + authorizing + "))) AS wia_link_excluded_provenances " +
 		"FROM work_graph_issue_pr AS wia_link FINAL " +
 		"INNER JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS wia_link_repo ON wia_link_repo.id = wia_link.repo_id " +
-		"WHERE wia_link.org_id = {org_id:String} AND wia_link.provenance IN (" + workItemAuthorizingLinkProvenances + ") AND " +
+		"WHERE wia_link.org_id = {org_id:String} AND " +
 		keyPresentSQL("wia_link.work_item_id", stringKey) + " AND " + keyPresentSQL("wia_link.repo_id", uuidKey) + " AND " +
 		grantedRepositoryMatchSQL(prefix, "wia_link_repo.repo") + " " +
 		"GROUP BY wia_link.work_item_id) AS wia_link_auth ON wia_link_auth.wia_link_work_item_id = w.work_item_id"
@@ -290,6 +305,7 @@ func WorkItemScopeSQL(scope AuthorizationScope) WorkItemScopeSQLResult {
 			restrictions = append(restrictions, requestedExpr)
 			result.Bindings = append(result.Bindings, requestedBindings...)
 		}
+		result.ExcludedLinkProvenancesExpr = "if(NOT (" + workItemRepoPresent + "), wia_link_auth.wia_link_excluded_provenances, " + emptyRepositories + ")"
 		for _, path := range paths {
 			expr := strings.Join(append([]string{path.Expr}, restrictions...), " AND ")
 			result.Provenance = append(result.Provenance, WorkItemAuthorizationPathSQL{

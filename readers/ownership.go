@@ -73,6 +73,16 @@ func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
 	return projectOwnershipJoinOver(ProjectIdentityJoinSQL(), ownershipPredicate)
 }
 
+// TeamRepositoryOwnershipSQL is the team -> repository hop one step past
+// ProjectOwnershipJoinSQL: one row per (team_id, repo_id) the team owns
+// under ownershipPredicate (OwnershipValidityPredicate), organization-scoped
+// through the caller's {org_id} binding. Rows with no repository id (a
+// pattern row not yet resolved to a repository, or the zero UUID) are
+// dropped: they name no repository to reach. Alias it in the caller's FROM.
+func TeamRepositoryOwnershipSQL(ownershipPredicate string) string {
+	return "(SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND " + keyPresentSQL("repo_id", uuidKey) + ownershipPredicate + " GROUP BY team_id, repo_id)"
+}
+
 // ProjectOwnershipCatalogJoinSQL is ProjectOwnershipJoinSQL over the whole
 // organization's project catalog instead of a requested subject list. It
 // binds no `ids` parameter, for a caller that has no project subjects to

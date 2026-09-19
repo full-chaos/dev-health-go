@@ -176,7 +176,7 @@ func authzOracle(item authzItem, granted readers.RepositorySelectorSet, requeste
 			}
 		}
 		for _, link := range item.links {
-			if link.org != authzOrg || (link.provenance != "native" && link.provenance != "explicit_text") {
+			if link.org != authzOrg || link.provenance != "native" {
 				continue
 			}
 			if authzGrantMatches(granted, link.repo) {
@@ -212,6 +212,21 @@ func authzSortedUnique(values []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// authzExcludedOracle is the disclosure of record: for a repo-less item,
+// the provenances of its non-native links that name a granted repository.
+func authzExcludedOracle(item authzItem, granted readers.RepositorySelectorSet) []string {
+	if item.repo != nil {
+		return nil
+	}
+	var kinds []string
+	for _, link := range item.links {
+		if link.org == authzOrg && link.provenance != "native" && authzGrantMatches(granted, link.repo) {
+			kinds = append(kinds, link.provenance)
+		}
+	}
+	return authzSortedUnique(kinds)
 }
 
 func authzAuthorized(paths map[string]bool) bool {
@@ -443,6 +458,7 @@ type authzReadRow struct {
 	authorized bool
 	paths      map[string]bool
 	evidence   map[string][]string
+	excluded   []string
 }
 
 // authzReadProvenance runs AuthorizationExpr and every Provenance
@@ -461,6 +477,7 @@ func authzReadProvenance(t *testing.T, client *clickhouse.Client, scope readers.
 		}
 		columns = append(columns, "toUInt8("+path.Expr+")", path.RepositoriesExpr)
 	}
+	columns = append(columns, rendered.ExcludedLinkProvenancesExpr)
 	statement := "SELECT " + strings.Join(columns, ", ") + "\nFROM work_items AS w FINAL " + rendered.JoinSQL +
 		"\nWHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}"
 	got := map[string]authzReadRow{}
@@ -473,10 +490,12 @@ func authzReadProvenance(t *testing.T, client *clickhouse.Client, scope readers.
 		for i := range flags {
 			dest = append(dest, &flags[i], &repositories[i])
 		}
+		var excluded []string
+		dest = append(dest, &excluded)
 		if err := row.Scan(dest...); err != nil {
 			return err
 		}
-		read := authzReadRow{authorized: authorized == 1, paths: map[string]bool{}, evidence: map[string][]string{}}
+		read := authzReadRow{authorized: authorized == 1, paths: map[string]bool{}, evidence: map[string][]string{}, excluded: excluded}
 		for i, path := range rendered.Provenance {
 			read.paths[path.Path] = flags[i] == 1
 			if len(repositories[i]) > 0 {
@@ -541,6 +560,9 @@ func TestIntegrationWorkItemAuthorizationPaths(t *testing.T) {
 					if strings.Join(read.evidence[path], ",") != strings.Join(wantEvidence[item.id][path], ",") {
 						t.Errorf("%s path %s repositories = %v, want %v", item.id, path, read.evidence[path], wantEvidence[item.id][path])
 					}
+				}
+				if got, want := strings.Join(read.excluded, ","), strings.Join(authzExcludedOracle(item, tc.granted), ","); got != want {
+					t.Errorf("%s excluded link provenances = %q, want %q", item.id, got, want)
 				}
 				if read.authorized != authzAuthorized(want[item.id]) {
 					t.Errorf("%s AuthorizationExpr = %v, want %v", item.id, read.authorized, authzAuthorized(want[item.id]))
