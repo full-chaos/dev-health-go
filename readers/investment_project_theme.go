@@ -33,6 +33,14 @@ type ProjectThemeMixRow struct {
 	WorkUnits         uint64
 	EffortUnits       uint64
 	SpanningUnits     uint64
+	// AmbiguousUnits counts work units whose only evidence naming this
+	// project names a work item id that project membership places under more
+	// than one repository. Such an id attributes to no project, so these
+	// units carry no weight here; the count distinguishes a project whose mix
+	// is empty because its evidence was ambiguous from one with no work. A
+	// project whose only evidence is ambiguous still gets a row, with zero
+	// WorkUnits.
+	AmbiguousUnits uint64
 }
 
 // ReadProjectThemeMix reads the canonical investment theme distribution
@@ -74,7 +82,7 @@ func ReadProjectThemeMixWithRowLimit(ctx context.Context, client QueryClient, or
 		return nil, nil
 	}
 	statement := WithRowLimit(`
-SELECT project_key, feature_delivery, operational, maintenance, quality, risk, bugfix_weighted, work_units, effort_units, spanning_units FROM (
+SELECT project_key, feature_delivery, operational, maintenance, quality, risk, bugfix_weighted, work_units, effort_units, spanning_units, ambiguous_units FROM (
 WITH latest AS (
     SELECT
         work_unit_id,
@@ -97,49 +105,54 @@ unit_issue AS (
     ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_ref
 ),
 item_project AS (
-    SELECT DISTINCT work_item_id, project_id
+    SELECT DISTINCT work_item_id, project_id, toUInt8(repo_count > 1) AS ambiguous
     FROM (
         SELECT subject_id AS work_item_id, project_id,
             uniqExact(repo_id) OVER (PARTITION BY subject_id) AS repo_count
         FROM project_membership_presence
         WHERE org_id = {org_id:String} AND subject_kind = 'work_item'
     )
-    WHERE repo_count = 1
 ),
 unit_project AS (
-    SELECT ui.work_unit_id AS work_unit_id, ip.project_id AS project_id
+    SELECT ui.work_unit_id AS work_unit_id, ip.project_id AS project_id, ip.ambiguous AS ambiguous
     FROM unit_issue AS ui
     INNER JOIN item_project AS ip ON ip.work_item_id = ui.issue_ref
 ),
 resolved AS (
-    SELECT DISTINCT p.provider AS project_provider, p.id AS project_id, up.work_unit_id AS work_unit_id
-    FROM `+ProjectIdentityCatalogSQL()+`
-    INNER JOIN unit_project AS up ON up.project_id = p.scope
+    SELECT project_provider, project_id, work_unit_id, min(ambiguous) AS ambiguous
+    FROM (
+        SELECT p.provider AS project_provider, p.id AS project_id, up.work_unit_id AS work_unit_id, up.ambiguous AS ambiguous
+        FROM `+ProjectIdentityCatalogSQL()+`
+        INNER JOIN unit_project AS up ON up.project_id = p.scope
+    )
+    GROUP BY project_provider, project_id, work_unit_id
 ),
 unit_span AS (
     SELECT work_unit_id, uniqExact(project_provider, project_id) AS project_count
     FROM resolved
+    WHERE ambiguous = 0
     GROUP BY work_unit_id
 ),
 attributed AS (
-    SELECT project_provider, project_id, work_unit_id
+    SELECT project_provider, project_id, work_unit_id, ambiguous
     FROM resolved
     WHERE concat(project_provider, ':', project_id) IN {ids:Array(String)}
 )
 SELECT
     concat(a.project_provider, ':', a.project_id) AS project_key,
-    sumIf(w.theme_distribution_json['feature_delivery'] * w.effort_value, w.effort_value > 0) AS feature_delivery,
-    sumIf(w.theme_distribution_json['operational'] * w.effort_value, w.effort_value > 0) AS operational,
-    sumIf(w.theme_distribution_json['maintenance'] * w.effort_value, w.effort_value > 0) AS maintenance,
-    sumIf(w.theme_distribution_json['quality'] * w.effort_value, w.effort_value > 0) AS quality,
-    sumIf(w.theme_distribution_json['risk'] * w.effort_value, w.effort_value > 0) AS risk,
-    sumIf(ifNull(w.subcategory_distribution_json[{bugfix_key:String}], 0.0) * w.effort_value, w.effort_value > 0) AS bugfix_weighted,
-    count() AS work_units,
-    countIf(w.effort_value > 0) AS effort_units,
-    countIf(s.project_count > 1) AS spanning_units
+    sumIf(w.theme_distribution_json['feature_delivery'] * w.effort_value, a.ambiguous = 0 AND w.effort_value > 0) AS feature_delivery,
+    sumIf(w.theme_distribution_json['operational'] * w.effort_value, a.ambiguous = 0 AND w.effort_value > 0) AS operational,
+    sumIf(w.theme_distribution_json['maintenance'] * w.effort_value, a.ambiguous = 0 AND w.effort_value > 0) AS maintenance,
+    sumIf(w.theme_distribution_json['quality'] * w.effort_value, a.ambiguous = 0 AND w.effort_value > 0) AS quality,
+    sumIf(w.theme_distribution_json['risk'] * w.effort_value, a.ambiguous = 0 AND w.effort_value > 0) AS risk,
+    sumIf(ifNull(w.subcategory_distribution_json[{bugfix_key:String}], 0.0) * w.effort_value, a.ambiguous = 0 AND w.effort_value > 0) AS bugfix_weighted,
+    countIf(a.ambiguous = 0) AS work_units,
+    countIf(a.ambiguous = 0 AND w.effort_value > 0) AS effort_units,
+    countIf(a.ambiguous = 0 AND s.project_count > 1) AS spanning_units,
+    countIf(a.ambiguous = 1) AS ambiguous_units
 FROM attributed AS a
 INNER JOIN windowed AS w ON w.work_unit_id = a.work_unit_id
-INNER JOIN unit_span AS s ON s.work_unit_id = a.work_unit_id
+LEFT JOIN unit_span AS s ON s.work_unit_id = a.work_unit_id
 GROUP BY a.project_provider, a.project_id
 ORDER BY project_key
 )`, rowLimit)
@@ -148,7 +161,7 @@ ORDER BY project_key
 	var rows []ProjectThemeMixRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMix", statement, orgID, ids, func(row RowScanner) error {
 		var r ProjectThemeMixRow
-		if scanErr := row.Scan(&r.ProjectSubjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.BugfixWeighted, &r.WorkUnits, &r.EffortUnits, &r.SpanningUnits); scanErr != nil {
+		if scanErr := row.Scan(&r.ProjectSubjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.BugfixWeighted, &r.WorkUnits, &r.EffortUnits, &r.SpanningUnits, &r.AmbiguousUnits); scanErr != nil {
 			return scanErr
 		}
 		rows = append(rows, r)
