@@ -42,6 +42,10 @@ type ProjectThemeMixRow struct {
 // project when one of its structural_evidence_json `issues` refs is a work
 // item that project_membership_presence places in that project.
 //
+// An issue ref carries a project only when its work item id is unambiguous:
+// an id that project_membership_presence places under more than one
+// repository names no single item, so it attributes to no project.
+//
 // Only issue refs carry a project. A `prs` ref names a pull request, which
 // has no project of its own, so a work unit whose evidence is pull requests
 // only is not attributed to any project here.
@@ -93,9 +97,14 @@ unit_issue AS (
     ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_ref
 ),
 item_project AS (
-    SELECT DISTINCT subject_id AS work_item_id, project_id
-    FROM project_membership_presence
-    WHERE org_id = {org_id:String} AND subject_kind = 'work_item'
+    SELECT DISTINCT work_item_id, project_id
+    FROM (
+        SELECT subject_id AS work_item_id, project_id,
+            uniqExact(repo_id) OVER (PARTITION BY subject_id) AS repo_count
+        FROM project_membership_presence
+        WHERE org_id = {org_id:String} AND subject_kind = 'work_item'
+    )
+    WHERE repo_count = 1
 ),
 unit_project AS (
     SELECT ui.work_unit_id AS work_unit_id, ip.project_id AS project_id

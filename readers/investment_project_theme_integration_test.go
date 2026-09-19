@@ -30,6 +30,8 @@ const (
 	ptmOrg      = "ptm-org"
 	ptmOtherOrg = "ptm-other-org"
 	ptmRepo     = "22222222-2222-4222-8222-000000000001"
+	ptmRepoB    = "22222222-2222-4222-8222-000000000002"
+	ptmRepoC    = "22222222-2222-4222-8222-000000000003"
 )
 
 type ptmUnit struct {
@@ -47,6 +49,7 @@ type ptmItem struct {
 	id      string
 	org     string
 	project string // "" = a project-less item
+	repo    string // "" = the default repository
 }
 
 var ptmThemeKeys = []string{"feature_delivery", "operational", "maintenance", "quality", "risk"}
@@ -60,19 +63,26 @@ func ptmTheme(key string) map[string]float64 {
 	return out
 }
 
-var ptmProjects = []string{"proj-a", "proj-b", "proj-zero-effort", "proj-no-units", "proj-keyed", "proj-dup"}
+var ptmProjects = []string{"proj-a", "proj-b", "proj-zero-effort", "proj-no-units", "proj-keyed", "proj-dup", "proj-amb-a", "proj-amb-b", "proj-multi-a", "proj-multi-b"}
 
 func ptmItems() []ptmItem {
 	return []ptmItem{
-		{"linear:A-1", ptmOrg, "proj-a"},
-		{"linear:A-2", ptmOrg, "proj-a"},
-		{"linear:B-1", ptmOrg, "proj-b"},
-		{"linear:Z-1", ptmOrg, "proj-zero-effort"},
-		{"linear:NOPROJ-1", ptmOrg, ""},
-		{"linear:O-1", ptmOtherOrg, "proj-a"},
-		{"linear:D-1", ptmOrg, "proj-dup"},
-		{"linear:K-1", ptmOrg, "proj-keyed"},
-		{"linear:K-2", ptmOrg, "KEYED"},
+		{id: "linear:A-1", org: ptmOrg, project: "proj-a"},
+		{id: "linear:A-2", org: ptmOrg, project: "proj-a"},
+		{id: "linear:B-1", org: ptmOrg, project: "proj-b"},
+		{id: "linear:Z-1", org: ptmOrg, project: "proj-zero-effort"},
+		{id: "linear:NOPROJ-1", org: ptmOrg, project: ""},
+		{id: "linear:O-1", org: ptmOtherOrg, project: "proj-a"},
+		{id: "linear:D-1", org: ptmOrg, project: "proj-dup"},
+		// One item, one repository, an inconsistent move history that leaves it
+		// in two projects: unambiguous as an item, so it counts for both.
+		{id: "linear:MULTI-1", org: ptmOrg, project: ""},
+		// The same item id under two repositories, in two projects: ambiguous,
+		// so it attributes to neither.
+		{id: "linear:AMB-1", org: ptmOrg, project: "proj-amb-a", repo: ptmRepoB},
+		{id: "linear:AMB-1", org: ptmOrg, project: "proj-amb-b", repo: ptmRepoC},
+		{id: "linear:K-1", org: ptmOrg, project: "proj-keyed"},
+		{id: "linear:K-2", org: ptmOrg, project: "KEYED"},
 	}
 }
 
@@ -88,6 +98,9 @@ func ptmUnits() []ptmUnit {
 		{id: "u-dup-ref", org: ptmOrg, effort: 5, themes: ptmTheme("feature_delivery"), issues: []string{"linear:A-2", "linear:A-2"}, version: 1},
 		// Negative effort is not weight: it is reported and adds nothing.
 		{id: "u-negative", org: ptmOrg, effort: -30, themes: map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}, bugfix: 1, issues: []string{"linear:B-1"}, version: 1},
+		{id: "u-multi", org: ptmOrg, effort: 12, themes: ptmTheme("maintenance"), issues: []string{"linear:MULTI-1"}, version: 1},
+		// Evidence naming an item id that sits under two repositories.
+		{id: "u-ambiguous", org: ptmOrg, effort: 15, themes: ptmTheme("risk"), issues: []string{"linear:AMB-1"}, version: 1},
 		// One item id shared by two providers' projects: a unit in each, spanning.
 		{id: "u-dup", org: ptmOrg, effort: 25, themes: ptmTheme("operational"), issues: []string{"linear:D-1"}, version: 1},
 		// One project reached under both its id and its key: one unit, one project.
@@ -120,14 +133,30 @@ type ptmWant struct {
 // ptmOracle models the attribution rule over the fixture only.
 func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 	itemProject := map[string][]string{}
+	repos := map[string]map[string]bool{}
 	for _, item := range items {
-		if item.org != ptmOrg || item.project == "" {
+		if item.org == ptmOrg {
+			if repos[item.id] == nil {
+				repos[item.id] = map[string]bool{}
+			}
+			repos[item.id][item.repo] = true
+		}
+	}
+	for _, item := range items {
+		if len(repos[item.id]) > 1 {
+			continue
+		}
+		if item.org != ptmOrg || (item.project == "" && item.id != "linear:MULTI-1") {
 			continue
 		}
 		// A project answers to its id and, when it has one, its key.
 		switch item.project {
 		case "KEYED":
 			itemProject[item.id] = []string{"linear:proj-keyed"}
+		case "":
+			if item.id == "linear:MULTI-1" {
+				itemProject[item.id] = []string{"linear:proj-multi-a", "linear:proj-multi-b"}
+			}
 		case "proj-dup":
 			// The same id under two providers: membership does not compare provider.
 			itemProject[item.id] = []string{"jira:proj-dup", "linear:proj-dup"}
@@ -180,6 +209,13 @@ func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 	return want
 }
 
+func ptmItemRepo(item ptmItem) string {
+	if item.repo != "" {
+		return item.repo
+	}
+	return ptmRepo
+}
+
 func ptmSeed(items []ptmItem, units []ptmUnit) []string {
 	const at = "'2026-03-01 00:00:00'"
 	var stmts []string
@@ -192,9 +228,17 @@ func ptmSeed(items []ptmItem, units []ptmUnit) []string {
 		stmts = append(stmts, fmt.Sprintf("INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('%s', '%s', 'linear', %s, '%s', 1, 'started', '', %s)", id, ptmOrg, key, id, at))
 	}
 	stmts = append(stmts, fmt.Sprintf("INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('proj-a', '%s', 'linear', NULL, 'other', 1, 'started', '', %s)", ptmOtherOrg, at))
+	transition := func(event, from, to, occurred string) string {
+		return fmt.Sprintf("INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES ('%s', NULL, '%s', 'work_item', 'linear:MULTI-1', 'linear', '%s', '%s', '', '', 'test', '%s', %s, '%s')",
+			ptmOrg, ptmRepo, from, to, occurred, at, event)
+	}
+	stmts = append(stmts,
+		transition("e1", "proj-multi-a", "proj-multi-b", "2026-02-01 00:00:00"),
+		transition("e2", "proj-multi-c", "proj-multi-a", "2026-02-02 00:00:00"),
+	)
 	for _, item := range items {
 		stmts = append(stmts, fmt.Sprintf("INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES ('%s', '%s', 'linear', 'title', 'issue', 'open', '', '%s', '', '', %s, %s, NULL, '', '', %s, '%s')",
-			ptmRepo, item.id, item.project, at, at, at, item.org))
+			ptmItemRepo(item), item.id, item.project, at, at, at, item.org))
 	}
 	for _, unit := range units {
 		refs := func(values []string) string {
