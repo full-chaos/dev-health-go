@@ -21,7 +21,7 @@ func TestReadProjectThemeMix(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadProjectThemeMix() error = %v", err)
 		}
-		want := readers.ProjectThemeMixRow{ProjectSubjectKey: "linear:proj-1", FeatureDelivery: 1, Operational: 2, Maintenance: 3, Quality: 4, Risk: 5, BugfixWeighted: 0.5, WorkUnits: 9, EffortUnits: 7, SpanningUnits: 2, AmbiguousUnits: 4}
+		want := readers.ProjectThemeMixRow{ProjectSubjectKey: "linear:proj-1", FeatureDelivery: 1, Operational: 2, Maintenance: 3, Quality: 4, Risk: 5, BugfixWeighted: 0.5, WorkUnits: 9, EffortUnits: 7, SpanningUnits: 2, MultiPlacedUnits: 4}
 		if len(rows) != 1 || rows[0] != want {
 			t.Fatalf("rows = %#v, want %#v", rows, want)
 		}

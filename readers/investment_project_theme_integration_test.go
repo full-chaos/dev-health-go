@@ -75,10 +75,10 @@ func ptmItems() []ptmItem {
 		{id: "linear:O-1", org: ptmOtherOrg, project: "proj-a"},
 		{id: "linear:D-1", org: ptmOrg, project: "proj-dup"},
 		// One item, one repository, an inconsistent move history that leaves it
-		// in two projects: unambiguous as an item, so it counts for both.
+		// in two projects: it counts for both.
 		{id: "linear:MULTI-1", org: ptmOrg, project: ""},
-		// The same item id under two repositories, in two projects: ambiguous,
-		// so it attributes to neither.
+		// The same item id under two repositories, in two projects: it counts
+		// for both and is disclosed as multi-placed.
 		{id: "linear:AMBC-1", org: ptmOrg, project: "proj-amb-a"},
 		{id: "linear:AMB-1", org: ptmOrg, project: "proj-amb-a", repo: ptmRepoB},
 		{id: "linear:AMB-1", org: ptmOrg, project: "proj-amb-b", repo: ptmRepoC},
@@ -124,13 +124,12 @@ func ptmBaseUnits() []ptmUnit {
 		{id: "u-multi", org: ptmOrg, effort: 12, themes: ptmTheme("maintenance"), issues: []string{"linear:MULTI-1"}, version: 1},
 		// Evidence naming an item id that sits under two repositories.
 		{id: "u-ambiguous", org: ptmOrg, effort: 15, themes: map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}, bugfix: 0.5, issues: []string{"linear:AMB-1"}, version: 1},
-		// Two clean projects plus an ambiguous item: the ambiguous candidates are
-		// excluded and are never reported as spanning.
+		// Two single-placement projects plus a multi-placed item: spans four projects.
 		{id: "u-amb-mixed", org: ptmOrg, effort: 8, themes: ptmTheme("quality"), issues: []string{"linear:A-1", "linear:B-1", "linear:AMB-1"}, version: 1},
-		// One clean project plus an ambiguous item: not a spanning unit.
+		// One single-placement project plus a multi-placed item: spans three projects.
 		{id: "u-amb-solo", org: ptmOrg, effort: 6, themes: ptmTheme("operational"), issues: []string{"linear:A-2", "linear:AMB-1"}, version: 1},
-		// A candidate project that is also reached through a clean item keeps
-		// the unit as clean.
+		// A project reached through a multi-placed and a single-placement item
+		// counts the unit once.
 		{id: "u-amb-clean-too", org: ptmOrg, effort: 4, themes: ptmTheme("maintenance"), issues: []string{"linear:AMB-1", "linear:AMBC-1"}, version: 1},
 		// One item id shared by two providers' projects: a unit in each, spanning.
 		{id: "u-dup", org: ptmOrg, effort: 25, themes: ptmTheme("operational"), issues: []string{"linear:D-1"}, version: 1},
@@ -156,9 +155,9 @@ func ptmBaseUnits() []ptmUnit {
 }
 
 type ptmWant struct {
-	sums                                        map[string]float64
-	bugfix                                      float64
-	workUnits, effortUnits, spanning, ambiguous uint64
+	sums                                          map[string]float64
+	bugfix                                        float64
+	workUnits, effortUnits, spanning, multiPlaced uint64
 }
 
 // ptmOracle models the attribution rule over the fixture only.
@@ -173,33 +172,24 @@ func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 			repos[item.id][item.repo] = true
 		}
 	}
-	ambiguousProject := map[string][]string{}
 	for _, item := range items {
-		if item.org == ptmOrg && len(repos[item.id]) > 1 && item.project != "" {
-			ambiguousProject[item.id] = append(ambiguousProject[item.id], "linear:"+item.project)
-		}
-	}
-	for _, item := range items {
-		if len(repos[item.id]) > 1 {
-			continue
-		}
 		if item.org != ptmOrg || (item.project == "" && item.id != "linear:MULTI-1") {
 			continue
 		}
 		// A project answers to its id and, when it has one, its key.
+		var projects []string
 		switch item.project {
 		case "KEYED":
-			itemProject[item.id] = []string{"linear:proj-keyed"}
+			projects = []string{"linear:proj-keyed"}
 		case "":
-			if item.id == "linear:MULTI-1" {
-				itemProject[item.id] = []string{"linear:proj-multi-a", "linear:proj-multi-b"}
-			}
+			projects = []string{"linear:proj-multi-a", "linear:proj-multi-b"}
 		case "proj-dup":
 			// The same id under two providers: membership does not compare provider.
-			itemProject[item.id] = []string{"jira:proj-dup", "linear:proj-dup"}
+			projects = []string{"jira:proj-dup", "linear:proj-dup"}
 		default:
-			itemProject[item.id] = []string{"linear:" + item.project}
+			projects = []string{"linear:" + item.project}
 		}
+		itemProject[item.id] = append(itemProject[item.id], projects...)
 	}
 	latest := map[string]ptmUnit{}
 	for _, unit := range units {
@@ -211,34 +201,22 @@ func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 		}
 	}
 	unitProjects := map[string]map[string]bool{}
+	multiPlaced := map[string]map[string]bool{}
 	for id, unit := range latest {
 		for _, issue := range unit.issues {
 			for _, project := range itemProject[issue] {
 				if unitProjects[id] == nil {
 					unitProjects[id] = map[string]bool{}
+					multiPlaced[id] = map[string]bool{}
 				}
 				unitProjects[id][project] = true
+				if len(repos[issue]) > 1 {
+					multiPlaced[id][project] = true
+				}
 			}
 		}
 	}
 	want := map[string]ptmWant{}
-	// A unit whose only evidence for a project is an ambiguous item counts
-	// as ambiguous for it, and carries no weight.
-	for id, unit := range latest {
-		for _, issue := range unit.issues {
-			for _, project := range ambiguousProject[issue] {
-				if unitProjects[id][project] {
-					continue
-				}
-				w, ok := want[project]
-				if !ok {
-					w = ptmWant{sums: map[string]float64{}}
-				}
-				w.ambiguous++
-				want[project] = w
-			}
-		}
-	}
 	for id, projects := range unitProjects {
 		unit := latest[id]
 		for project := range projects {
@@ -256,6 +234,9 @@ func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 			}
 			if len(projects) > 1 {
 				w.spanning++
+			}
+			if multiPlaced[id][project] {
+				w.multiPlaced++
 			}
 			want[project] = w
 		}
@@ -418,8 +399,8 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 		if !ptmClose(row.BugfixWeighted, w.bugfix) {
 			t.Errorf("%s bugfix = %v, want %v", project, row.BugfixWeighted, w.bugfix)
 		}
-		if row.WorkUnits != w.workUnits || row.EffortUnits != w.effortUnits || row.SpanningUnits != w.spanning || row.AmbiguousUnits != w.ambiguous {
-			t.Errorf("%s population = (%d,%d,%d,%d), want (%d,%d,%d,%d)", project, row.WorkUnits, row.EffortUnits, row.SpanningUnits, row.AmbiguousUnits, w.workUnits, w.effortUnits, w.spanning, w.ambiguous)
+		if row.WorkUnits != w.workUnits || row.EffortUnits != w.effortUnits || row.SpanningUnits != w.spanning || row.MultiPlacedUnits != w.multiPlaced {
+			t.Errorf("%s population = (%d,%d,%d,%d), want (%d,%d,%d,%d)", project, row.WorkUnits, row.EffortUnits, row.SpanningUnits, row.MultiPlacedUnits, w.workUnits, w.effortUnits, w.spanning, w.multiPlaced)
 		}
 	}
 	// Named absences: a project with no units, a project whose only unit
@@ -435,16 +416,25 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 	if zero.WorkUnits != 1 || zero.EffortUnits != 0 || zero.FeatureDelivery != 0 {
 		t.Errorf("zero-effort project row = %#v", zero)
 	}
-	// Spanning is disclosed for both projects it touches.
-	if got["linear:proj-a"].SpanningUnits != 2 || got["linear:proj-b"].SpanningUnits != 2 {
-		t.Errorf("spanning = (%d,%d), want (2,2): u-span and u-amb-mixed; an ambiguous candidate never adds one", got["linear:proj-a"].SpanningUnits, got["linear:proj-b"].SpanningUnits)
-	}
-	// Ambiguous evidence carries no weight and is disclosed on both candidates.
+	// A multi-placed item's units count in full for every placement and the
+	// count is disclosed on each. u-ambiguous, u-amb-mixed, u-amb-solo and
+	// u-amb-clean-too all name AMB-1, placed in proj-amb-a and proj-amb-b.
 	for _, project := range []string{"linear:proj-amb-a", "linear:proj-amb-b"} {
 		row := got[project]
-		if row.AmbiguousUnits < 1 {
-			t.Errorf("%s = %#v, want ambiguous units disclosed", project, row)
+		if row.MultiPlacedUnits != want[project].multiPlaced || row.MultiPlacedUnits < 1 || row.WorkUnits < row.MultiPlacedUnits {
+			t.Errorf("%s = %#v, want multi-placed units disclosed and counted", project, row)
 		}
+	}
+	if got["linear:proj-amb-b"].WorkUnits != 4 || got["linear:proj-amb-b"].MultiPlacedUnits != 4 || got["linear:proj-amb-b"].EffortUnits != 4 {
+		t.Errorf("proj-amb-b = %#v, want the 4 units naming the multi-placed item, all counted", got["linear:proj-amb-b"])
+	}
+	// A project that only shares a unit with a multi-placed item's placements
+	// is not itself a placement of that item: it discloses none.
+	if got["linear:proj-a"].MultiPlacedUnits != 0 || got["linear:proj-b"].MultiPlacedUnits != 0 {
+		t.Errorf("proj-a/proj-b multi-placed = %d/%d, want 0/0", got["linear:proj-a"].MultiPlacedUnits, got["linear:proj-b"].MultiPlacedUnits)
+	}
+	if got["linear:proj-dup"].MultiPlacedUnits != 0 || got["linear:proj-keyed"].MultiPlacedUnits != 0 {
+		t.Errorf("single-placement projects report multi-placed units: %#v %#v", got["linear:proj-dup"], got["linear:proj-keyed"])
 	}
 	// The shared id resolves under both providers, each with its own row.
 	if got["linear:proj-dup"].WorkUnits != 1 || got["jira:proj-dup"].WorkUnits != 1 || got["jira:proj-dup"].SpanningUnits != 1 {
