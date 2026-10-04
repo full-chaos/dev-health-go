@@ -38,7 +38,7 @@ func TestChaos4521b_ProjectReadersCarryUnattributedRowsAndOrderTotally(t *testin
 			name:        "readiness",
 			sourceTable: "FROM estimate_coverage_metrics_daily",
 			// (scope, provider, team) is unique per project after rn = 1.
-			orderBy: "ORDER BY p.id, ec.work_scope_id, ec.provider, ec.team_key",
+			orderBy: "ORDER BY p.id, p.provider, ec.work_scope_id, ec.provider, ec.team_key",
 			read: func(client *fakeClient) error {
 				_, err := readers.ReadProjectReadiness(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 				return err
@@ -49,7 +49,7 @@ func TestChaos4521b_ProjectReadersCarryUnattributedRowsAndOrderTotally(t *testin
 			sourceTable: "FROM capacity_forecasts",
 			// capacity_forecasts has no provider column; (scope, team) is
 			// unique per project after rn = 1.
-			orderBy: "ORDER BY p.id, cf.work_scope_id, cf.team_key",
+			orderBy: "ORDER BY p.id, p.provider, cf.work_scope_id, cf.has_team, cf.team_key",
 			read: func(client *fakeClient) error {
 				_, err := readers.ReadProjectWorkload(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 				return err

@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -236,7 +237,7 @@ func orderedLimitReads(t *testing.T) map[string][]orderedLimitRead {
 		_, err := readers.ReadTeamMetrics(ctx, c, org, ids, tb)
 		return err
 	})
-	addBounded("ReadProjectMetricsBreakdown", "p.id, tm.team_id", func(c *fakeClient, tb readers.TimeBound) error {
+	addBounded("ReadProjectMetricsBreakdown", "p.id, p.provider, tm.team_id", func(c *fakeClient, tb readers.TimeBound) error {
 		_, err := readers.ReadProjectMetricsBreakdown(ctx, c, org, ids, tb)
 		return err
 	})
@@ -244,7 +245,7 @@ func orderedLimitReads(t *testing.T) map[string][]orderedLimitRead {
 		_, err := readers.ReadPullRequestState(ctx, c, org, ids, tb)
 		return err
 	})
-	addBounded("ReadPullRequestReviews", "r.submitted_at DESC, r.repo_id, r.review_id", func(c *fakeClient, tb readers.TimeBound) error {
+	addBounded("ReadPullRequestReviews", "r.submitted_at DESC, r.repo_id, r.number, r.review_id", func(c *fakeClient, tb readers.TimeBound) error {
 		_, err := readers.ReadPullRequestReviews(ctx, c, org, ids, tb)
 		return err
 	})
@@ -252,7 +253,7 @@ func orderedLimitReads(t *testing.T) map[string][]orderedLimitRead {
 		_, err := readers.ReadTeamReadiness(ctx, c, org, ids, tb)
 		return err
 	})
-	addBounded("ReadProjectReadiness", "p.id, ec.work_scope_id, ec.provider, ec.team_key", func(c *fakeClient, tb readers.TimeBound) error {
+	addBounded("ReadProjectReadiness", "p.id, p.provider, ec.work_scope_id, ec.provider, ec.team_key", func(c *fakeClient, tb readers.TimeBound) error {
 		_, err := readers.ReadProjectReadiness(ctx, c, org, ids, tb)
 		return err
 	})
@@ -264,7 +265,7 @@ func orderedLimitReads(t *testing.T) map[string][]orderedLimitRead {
 		_, err := readers.ReadTeamWorkload(ctx, c, org, ids, tb)
 		return err
 	})
-	addBounded("ReadProjectWorkload", "p.id, cf.work_scope_id, cf.team_key", func(c *fakeClient, tb readers.TimeBound) error {
+	addBounded("ReadProjectWorkload", "p.id, p.provider, cf.work_scope_id, cf.has_team, cf.team_key", func(c *fakeClient, tb readers.TimeBound) error {
 		_, err := readers.ReadProjectWorkload(ctx, c, org, ids, tb)
 		return err
 	})
@@ -272,7 +273,7 @@ func orderedLimitReads(t *testing.T) map[string][]orderedLimitRead {
 		_, err := readers.ReadTeamInvestment(ctx, c, org, ids, tb)
 		return err
 	})
-	addBounded("ReadProjectInvestment", "p.id, p.team_id, im.investment_area, im.project_stream", func(c *fakeClient, tb readers.TimeBound) error {
+	addBounded("ReadProjectInvestment", "p.id, p.provider, p.team_id, im.investment_area, im.project_stream", func(c *fakeClient, tb readers.TimeBound) error {
 		_, err := readers.ReadProjectInvestment(ctx, c, org, ids, tb)
 		return err
 	})
@@ -441,6 +442,73 @@ func staleEntries(found []string, reads map[string][]orderedLimitRead) []string 
 	}
 	sort.Strings(out)
 	return out
+}
+
+// literalLimitSites returns the functions that put a LIMIT keyword in a string
+// literal. WithRowLimit is the one place allowed to; a reader that writes its
+// own LIMIT would bypass both the function scan and this order guard.
+func literalLimitSites(dir string) ([]string, error) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, dir, func(info fs.FileInfo) bool {
+		return !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse readers source: %w", err)
+	}
+	pkg, ok := pkgs["readers"]
+	if !ok {
+		return nil, fmt.Errorf("package readers not found in the source directory; found %d packages", len(pkgs))
+	}
+	found := map[string]bool{}
+	for _, file := range pkg.Files {
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			if !isFunc || fn.Body == nil || fn.Name.Name == "WithRowLimit" {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				lit, isLit := n.(*ast.BasicLit)
+				if isLit && limitKeyword.MatchString(lit.Value) {
+					found[fn.Name.Name] = true
+				}
+				return true
+			})
+		}
+	}
+	names := make([]string, 0, len(found))
+	for name := range found {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+var limitKeyword = regexp.MustCompile(`(?i)\bLIMIT\b`)
+
+func TestNoReaderWritesItsOwnLimitLiteral(t *testing.T) {
+	t.Parallel()
+	got, err := literalLimitSites(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("functions with a LIMIT string literal outside WithRowLimit: %q; use WithRowLimit so the order guard sees the statement", got)
+	}
+	dir := t.TempDir()
+	planted := "package readers\n\nfunc ReadSneaky() string {\n\treturn \"SELECT 1 LIMIT 5\"\n}\n\nfunc WithRowLimit() string { return \"LIMIT \" }\n\nfunc Quiet() string { return \"limits\" }\n"
+	if err := os.WriteFile(filepath.Join(dir, "sneaky.go"), []byte(planted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sneaky_test.go"), []byte("package readers\n\nfunc InTest() string { return \"LIMIT 1\" }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planted2, err := literalLimitSites(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(planted2, ",") != "ReadSneaky" {
+		t.Fatalf("planted scan = %q, want only ReadSneaky", planted2)
+	}
 }
 
 func TestLimitBuilderScanSeesAPlantedUnlistedReader(t *testing.T) {

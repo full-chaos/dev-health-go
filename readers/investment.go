@@ -107,7 +107,7 @@ INNER JOIN (
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
 ) AS im ON im.team_id = p.team_id AND im.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = p.team_id
-ORDER BY p.id, p.team_id, im.investment_area, im.project_stream`, DefaultRowLimit)
+ORDER BY p.id, p.provider, p.team_id, im.investment_area, im.project_stream`, DefaultRowLimit)
 	var rows []InvestmentProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectInvestment", statement, orgID, ids, func(row RowScanner) error {
 		var r InvestmentProjectRow

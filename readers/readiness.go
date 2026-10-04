@@ -152,7 +152,7 @@ INNER JOIN (
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
 ) AS ec ON `+ProjectIdentityMatchSQL("ec", "work_scope_id")+` AND ec.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ec.team_key
-ORDER BY p.id, ec.work_scope_id, ec.provider, ec.team_key`, DefaultRowLimit)
+ORDER BY p.id, p.provider, ec.work_scope_id, ec.provider, ec.team_key`, DefaultRowLimit)
 	var rows []ReadinessProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectReadiness", statement, orgID, ids, func(row RowScanner) error {
 		var r ReadinessProjectRow

@@ -139,7 +139,7 @@ INNER JOIN (
 	FROM team_metrics_daily
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
 ) AS tm ON tm.team_id = p.team_id AND tm.rn = 1
-ORDER BY p.id, tm.team_id`, DefaultRowLimit)
+ORDER BY p.id, p.provider, tm.team_id`, DefaultRowLimit)
 	var rows []ProjectTeamMetricsRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectMetricsBreakdown", statement, orgID, projectKeys, func(row RowScanner) error {
 		var r ProjectTeamMetricsRow

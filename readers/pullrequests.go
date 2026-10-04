@@ -79,7 +79,7 @@ func ReadPullRequestReviews(ctx context.Context, client QueryClient, orgID strin
 	statement := WithRowLimit(`SELECT r.review_id, ifNull(r.state, ''), toString(r.repo_id)
 FROM git_pull_request_reviews AS r FINAL
 WHERE r.org_id = {org_id:String} AND concat(toString(r.repo_id), ':', r.review_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("r.submitted_at")+`
-ORDER BY r.submitted_at DESC, r.repo_id, r.review_id`, DefaultRowLimit)
+ORDER BY r.submitted_at DESC, r.repo_id, r.number, r.review_id`, DefaultRowLimit)
 
 	var rows []PullRequestReviewRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadPullRequestReviews", statement, orgID, ids, func(row RowScanner) error {
