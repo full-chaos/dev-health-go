@@ -211,7 +211,7 @@ const workItemKeyOrder = "w.repo_id, w.work_item_id"
 // statement shape. With no typed selector it appends the existing ID
 // predicate exactly as before. Selector mode adds the package-owned JOIN and
 // uses the same WorkItemScopeSQL expression that a census mask can consume.
-func workItemReadStatement(selectSQL, extraWhere, orderBy string, scope AuthorizationScope, settings Settings, limit int) (string, []Binding) {
+func workItemReadStatement(selectSQL, extraWhere, _ string, scope AuthorizationScope, settings Settings, limit int) (string, []Binding) {
 	from := `FROM work_items AS w FINAL`
 	where := `w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}` + extraWhere
 	var scopeBindings []Binding
@@ -225,6 +225,6 @@ func workItemReadStatement(selectSQL, extraWhere, orderBy string, scope Authoriz
 		where += " AND (" + rendered.AuthorizationExpr + ")"
 		scopeBindings = rendered.Bindings
 	}
-	statement := "SELECT " + selectSQL + "\n" + from + "\nWHERE " + where + "\nORDER BY " + orderBy
+	statement := "SELECT " + selectSQL + "\n" + from + "\nWHERE " + where
 	return WithSettings(WithRowLimit(statement, limit), settings), scopeBindings
 }
