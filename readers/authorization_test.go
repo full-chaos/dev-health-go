@@ -241,6 +241,7 @@ func TestLegacyReaderStatementsMatchBaseline(t *testing.T) {
 			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id), ifNull(w.provider, '')
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+ORDER BY w.repo_id, w.work_item_id
 LIMIT 200`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},
@@ -256,6 +257,7 @@ LIMIT 200`,
 			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id), ifNull(w.provider, '')
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+ORDER BY w.repo_id, w.work_item_id
 LIMIT 7`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},
@@ -271,6 +273,7 @@ LIMIT 7`,
 			wantStatement: `SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+ORDER BY w.repo_id, w.work_item_id
 LIMIT 200`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},
@@ -286,6 +289,7 @@ LIMIT 200`,
 			wantStatement: `SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+ORDER BY w.repo_id, w.work_item_id
 LIMIT 7`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},
@@ -301,6 +305,7 @@ LIMIT 7`,
 			wantStatement: `SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+ORDER BY w.created_at DESC, w.repo_id, w.work_item_id
 LIMIT 200`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},
@@ -316,6 +321,7 @@ LIMIT 200`,
 			wantStatement: `SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
+ORDER BY w.created_at DESC, w.repo_id, w.work_item_id
 LIMIT 7`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},
@@ -331,6 +337,7 @@ LIMIT 7`,
 			wantStatement: `SELECT w.work_item_id, toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= {time_end:DateTime64(6,'UTC')}), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)} AND w.created_at <= {time_end:DateTime64(6,'UTC')}
+ORDER BY w.created_at DESC, w.repo_id, w.work_item_id
 LIMIT 200`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},
@@ -347,6 +354,7 @@ LIMIT 200`,
 			wantStatement: `SELECT w.work_item_id, toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= {time_end:DateTime64(6,'UTC')}), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)} AND w.created_at <= {time_end:DateTime64(6,'UTC')}
+ORDER BY w.created_at DESC, w.repo_id, w.work_item_id
 LIMIT 7`,
 			wantBindings: []readers.Binding{
 				{Name: "org_id", Value: orgID},

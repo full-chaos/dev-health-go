@@ -52,7 +52,7 @@ func ReadWorkItemStatusWithScope(ctx context.Context, client QueryClient, orgID 
 // work_items<->repos relation the scope predicate reuses, and Settings.Render
 // for the SETTINGS clause.
 func ReadWorkItemStatusWithScopeAndRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, scope AuthorizationScope, settings Settings, limit int) ([]WorkItemStatusRow, error) {
-	statement, scopeBindings := workItemReadStatement(`w.work_item_id, ifNull(w.status, ''), toString(w.repo_id), ifNull(w.provider, '')`, "", scope, settings, limit)
+	statement, scopeBindings := workItemReadStatement(`w.work_item_id, ifNull(w.status, ''), toString(w.repo_id), ifNull(w.provider, '')`, "", workItemKeyOrder, scope, settings, limit)
 
 	var rows []WorkItemStatusRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemStatus", statement, orgID, ids, func(row RowScanner) error {
@@ -106,7 +106,7 @@ func ReadWorkItemTitleWithScope(ctx context.Context, client QueryClient, orgID s
 // this package exposes: an authorization scope, per-statement SETTINGS, and
 // a caller-chosen row bound. See ReadWorkItemStatusWithScopeAndRowLimit.
 func ReadWorkItemTitleWithScopeAndRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, scope AuthorizationScope, settings Settings, limit int) ([]WorkItemTitleRow, error) {
-	statement, scopeBindings := workItemReadStatement(`w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)`, "", scope, settings, limit)
+	statement, scopeBindings := workItemReadStatement(`w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)`, "", workItemKeyOrder, scope, settings, limit)
 
 	var rows []WorkItemTitleRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemTitle", statement, orgID, ids, func(row RowScanner) error {
@@ -183,7 +183,7 @@ func ReadWorkItemCompletionWithScopeAndRowLimit(ctx context.Context, client Quer
 	if timeBound.Active {
 		completedExpression = "toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= " + timeBound.AsOfExpression() + ")"
 	}
-	statement, scopeBindings := workItemReadStatement(`w.work_item_id, `+completedExpression+`, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)`, timeBound.ExistencePredicate("w.created_at"), scope, settings, limit)
+	statement, scopeBindings := workItemReadStatement(`w.work_item_id, `+completedExpression+`, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)`, timeBound.ExistencePredicate("w.created_at"), "w.created_at DESC, "+workItemKeyOrder, scope, settings, limit)
 
 	var rows []WorkItemCompletionRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemCompletion", statement, orgID, ids, func(row RowScanner) error {
@@ -200,11 +200,18 @@ func ReadWorkItemCompletionWithScopeAndRowLimit(ctx context.Context, client Quer
 	return rows, nil
 }
 
+// workItemKeyOrder is the natural key of a FINAL-collapsed work_items row
+// (the table's sort key after org_id). It is the whole order for the readers
+// that are not about a time column, and the tie-break behind created_at for
+// the one that is, so no two rows compare equal and the LIMIT cut is the
+// same rows on every call.
+const workItemKeyOrder = "w.repo_id, w.work_item_id"
+
 // workItemReadStatement renders the three content readers from one closed
 // statement shape. With no typed selector it appends the existing ID
 // predicate exactly as before. Selector mode adds the package-owned JOIN and
 // uses the same WorkItemScopeSQL expression that a census mask can consume.
-func workItemReadStatement(selectSQL, extraWhere string, scope AuthorizationScope, settings Settings, limit int) (string, []Binding) {
+func workItemReadStatement(selectSQL, extraWhere, orderBy string, scope AuthorizationScope, settings Settings, limit int) (string, []Binding) {
 	from := `FROM work_items AS w FINAL`
 	where := `w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}` + extraWhere
 	var scopeBindings []Binding
@@ -218,6 +225,6 @@ func workItemReadStatement(selectSQL, extraWhere string, scope AuthorizationScop
 		where += " AND (" + rendered.AuthorizationExpr + ")"
 		scopeBindings = rendered.Bindings
 	}
-	statement := "SELECT " + selectSQL + "\n" + from + "\nWHERE " + where
+	statement := "SELECT " + selectSQL + "\n" + from + "\nWHERE " + where + "\nORDER BY " + orderBy
 	return WithSettings(WithRowLimit(statement, limit), settings), scopeBindings
 }

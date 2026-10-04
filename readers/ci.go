@@ -29,7 +29,8 @@ func ReadRunStatus(ctx context.Context, client QueryClient, orgID string, ids []
 	}
 	statement := WithRowLimit(`SELECT c.run_id, `+statusExpression+`, toString(c.repo_id)
 FROM ci_pipeline_runs AS c FINAL
-WHERE c.org_id = {org_id:String} AND concat(toString(c.repo_id), ':', c.run_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("c.started_at"), DefaultRowLimit)
+WHERE c.org_id = {org_id:String} AND concat(toString(c.repo_id), ':', c.run_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("c.started_at")+`
+ORDER BY c.started_at DESC, c.repo_id, c.run_id`, DefaultRowLimit)
 
 	var rows []CIPipelineRunStatusRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadRunStatus", statement, orgID, ids, func(row RowScanner) error {
@@ -91,7 +92,8 @@ FROM (
 	FROM cicd_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY day DESC, repo_id`, DefaultRowLimit)
 
 	var rows []CICDMetricsDailyRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadCICDMetricsDaily", statement, orgID, ids, func(row RowScanner) error {

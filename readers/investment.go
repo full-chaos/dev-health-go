@@ -46,7 +46,8 @@ FROM (
 	FROM investment_metrics_daily
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY day DESC, team_id, investment_area, project_stream`, DefaultRowLimit)
 	var rows []InvestmentDailyRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamInvestment", statement, orgID, ids, func(row RowScanner) error {
 		var r InvestmentDailyRow

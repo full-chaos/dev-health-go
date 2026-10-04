@@ -28,7 +28,8 @@ func ReadDeploymentStatus(ctx context.Context, client QueryClient, orgID string,
 	}
 	statement := WithRowLimit(`SELECT d.deployment_id, `+statusExpression+`, ifNull(d.environment, ''), toString(d.repo_id)
 FROM deployments AS d FINAL
-WHERE d.org_id = {org_id:String} AND concat(toString(d.repo_id), ':', d.deployment_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("coalesce(d.started_at, d.deployed_at)"), DefaultRowLimit)
+WHERE d.org_id = {org_id:String} AND concat(toString(d.repo_id), ':', d.deployment_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("coalesce(d.started_at, d.deployed_at)")+`
+ORDER BY coalesce(d.started_at, d.deployed_at) DESC, d.repo_id, d.deployment_id`, DefaultRowLimit)
 
 	var rows []DeploymentStatusRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadDeploymentStatus", statement, orgID, ids, func(row RowScanner) error {
@@ -79,7 +80,8 @@ FROM (
 	FROM deploy_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY day DESC, repo_id`, DefaultRowLimit)
 
 	var rows []DeployMetricsDailyRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadDeployMetricsDaily", statement, orgID, ids, func(row RowScanner) error {

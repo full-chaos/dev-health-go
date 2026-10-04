@@ -51,7 +51,8 @@ FROM (
 	FROM estimate_coverage_metrics_daily FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY day DESC, team_id, work_scope_id, provider`, DefaultRowLimit)
 	var rows []ReadinessCoverageRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamReadiness", statement, orgID, ids, func(row RowScanner) error {
 		var r ReadinessCoverageRow

@@ -154,7 +154,8 @@ INNER JOIN windowed AS w ON w.work_unit_id = a.work_unit_id
 LEFT JOIN unit_span AS s ON s.work_unit_id = a.work_unit_id
 GROUP BY a.project_provider, a.project_id
 ORDER BY project_key
-)`, rowLimit)
+)
+ORDER BY project_key`, rowLimit)
 
 	extra := append(append([]Binding{}, timeBound.Bindings()...), Binding{Name: "bugfix_key", Value: BugfixSubcategoryKey})
 	var rows []ProjectThemeMixRow

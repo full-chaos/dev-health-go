@@ -48,7 +48,8 @@ FROM (
 	FROM capacity_forecasts FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}`+timeBound.TimestampPredicate("computed_at")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY computed_at DESC, team_id, work_scope_id`, DefaultRowLimit)
 	var rows []WorkloadForecastRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamWorkload", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkloadForecastRow

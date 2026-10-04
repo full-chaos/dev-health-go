@@ -44,7 +44,8 @@ func ReadPullRequestState(ctx context.Context, client QueryClient, orgID string,
 	}
 	statement := WithRowLimit(`SELECT toString(p.repo_id), p.number, `+stateExpression+`
 FROM git_pull_requests AS p FINAL
-WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}`+timeBound.ExistencePredicate("p.created_at"), DefaultRowLimit)
+WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}`+timeBound.ExistencePredicate("p.created_at")+`
+ORDER BY p.created_at DESC, p.repo_id, p.number`, DefaultRowLimit)
 
 	var rows []PullRequestStateRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadPullRequestState", statement, orgID, ids, func(row RowScanner) error {
@@ -77,7 +78,8 @@ type PullRequestReviewRow struct {
 func ReadPullRequestReviews(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound) ([]PullRequestReviewRow, error) {
 	statement := WithRowLimit(`SELECT r.review_id, ifNull(r.state, ''), toString(r.repo_id)
 FROM git_pull_request_reviews AS r FINAL
-WHERE r.org_id = {org_id:String} AND concat(toString(r.repo_id), ':', r.review_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("r.submitted_at"), DefaultRowLimit)
+WHERE r.org_id = {org_id:String} AND concat(toString(r.repo_id), ':', r.review_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("r.submitted_at")+`
+ORDER BY r.submitted_at DESC, r.repo_id, r.review_id`, DefaultRowLimit)
 
 	var rows []PullRequestReviewRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadPullRequestReviews", statement, orgID, ids, func(row RowScanner) error {
