@@ -23,13 +23,30 @@ func TestReadWorkItemStatus(t *testing.T) {
 	t.Parallel()
 	t.Run("happy path", func(t *testing.T) {
 		t.Parallel()
-		client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1"}}}}}
+		client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1", "jira"}}}}}
 		rows, err := readers.ReadWorkItemStatus(context.Background(), client, "org-1", []string{"repo-1:WIDGET-101"})
 		if err != nil {
 			t.Fatalf("ReadWorkItemStatus() error = %v", err)
 		}
-		if len(rows) != 1 || rows[0] != (readers.WorkItemStatusRow{ID: "WIDGET-101", Status: "in_progress", RepoID: "repo-1"}) {
+		if len(rows) != 1 || rows[0] != (readers.WorkItemStatusRow{ID: "WIDGET-101", Status: "in_progress", RepoID: "repo-1", Provider: "jira"}) {
 			t.Fatalf("rows = %#v", rows)
+		}
+	})
+
+	t.Run("provider is selected and empty provider decodes", func(t *testing.T) {
+		t.Parallel()
+		for _, provider := range []string{"jira", "gitlab", "github", "linear", ""} {
+			client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{{"W-1", "open", "repo-1", provider}}}}}
+			rows, err := readers.ReadWorkItemStatus(context.Background(), client, "org-1", []string{"repo-1:W-1"})
+			if err != nil {
+				t.Fatalf("ReadWorkItemStatus() error = %v", err)
+			}
+			if len(rows) != 1 || rows[0].Provider != provider {
+				t.Fatalf("provider %q: rows = %#v", provider, rows)
+			}
+			if !strings.Contains(client.queries[0].statement, "ifNull(w.provider, '')") {
+				t.Fatalf("statement does not select the provider: %s", client.queries[0].statement)
+			}
 		}
 	})
 

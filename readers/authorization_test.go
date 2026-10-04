@@ -238,7 +238,7 @@ func TestLegacyReaderStatementsMatchBaseline(t *testing.T) {
 				_, err := readers.ReadWorkItemStatus(context.Background(), client, orgID, ids)
 				return err
 			},
-			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
+			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id), ifNull(w.provider, '')
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
 LIMIT 200`,
@@ -253,7 +253,7 @@ LIMIT 200`,
 				_, err := readers.ReadWorkItemStatusWithRowLimit(context.Background(), client, orgID, ids, 7)
 				return err
 			},
-			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
+			wantStatement: `SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id), ifNull(w.provider, '')
 FROM work_items AS w FINAL
 WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}
 LIMIT 7`,
