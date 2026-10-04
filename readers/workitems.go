@@ -31,8 +31,9 @@ func ReadWorkItemStatus(ctx context.Context, client QueryClient, orgID string, i
 // -- WithRowLimit's own contract.
 //
 // Delegates to ReadWorkItemStatusWithScopeAndRowLimit with an allow-all
-// AuthorizationScope and no Settings, so its statement stays byte-identical
-// to what this function has always sent.
+// AuthorizationScope and no Settings, so its statement differs from the
+// earlier one only by the trailing provider projection; its predicate, order
+// and limit are unchanged.
 func ReadWorkItemStatusWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemStatusRow, error) {
 	return ReadWorkItemStatusWithScopeAndRowLimit(ctx, client, orgID, ids, AuthorizationScope{}, Settings{}, limit)
 }
@@ -87,8 +88,9 @@ func ReadWorkItemTitle(ctx context.Context, client QueryClient, orgID string, id
 // bound. See ReadWorkItemStatusWithRowLimit and ProbeRowLimit.
 //
 // Delegates to ReadWorkItemTitleWithScopeAndRowLimit with an allow-all
-// AuthorizationScope and no Settings, so its statement stays byte-identical
-// to what this function has always sent.
+// AuthorizationScope and no Settings, so its statement differs from the
+// earlier one only by the trailing provider projection; its predicate, order
+// and limit are unchanged.
 func ReadWorkItemTitleWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, limit int) ([]WorkItemTitleRow, error) {
 	return ReadWorkItemTitleWithScopeAndRowLimit(ctx, client, orgID, ids, AuthorizationScope{}, Settings{}, limit)
 }
@@ -158,8 +160,9 @@ func ReadWorkItemCompletion(ctx context.Context, client QueryClient, orgID strin
 // ProbeRowLimit.
 //
 // Delegates to ReadWorkItemCompletionWithScopeAndRowLimit with an allow-all
-// AuthorizationScope and no Settings, so its statement stays byte-identical
-// to what this function has always sent.
+// AuthorizationScope and no Settings, so its statement differs from the
+// earlier one only by the trailing provider projection; its predicate, order
+// and limit are unchanged.
 func ReadWorkItemCompletionWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound, limit int) ([]WorkItemCompletionRow, error) {
 	return ReadWorkItemCompletionWithScopeAndRowLimit(ctx, client, orgID, ids, timeBound, AuthorizationScope{}, Settings{}, limit)
 }
