@@ -54,7 +54,8 @@ FROM (
 	FROM repo_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY day DESC, repo_id`, DefaultRowLimit)
 	var rows []RepositoryMetricsRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadRepositoryMetrics", statement, orgID, repoIDs, func(row RowScanner) error {
 		var r RepositoryMetricsRow
@@ -94,7 +95,8 @@ FROM (
 	FROM team_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY day DESC, team_id`, DefaultRowLimit)
 	var rows []TeamMetricsRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamMetrics", statement, orgID, teamIDs, func(row RowScanner) error {
 		var r TeamMetricsRow
@@ -137,7 +139,7 @@ INNER JOIN (
 	FROM team_metrics_daily
 	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
 ) AS tm ON tm.team_id = p.team_id AND tm.rn = 1
-ORDER BY p.id, tm.team_id`, DefaultRowLimit)
+ORDER BY p.id, p.provider, tm.team_id`, DefaultRowLimit)
 	var rows []ProjectTeamMetricsRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectMetricsBreakdown", statement, orgID, projectKeys, func(row RowScanner) error {
 		var r ProjectTeamMetricsRow

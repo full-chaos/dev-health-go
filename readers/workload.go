@@ -48,7 +48,8 @@ FROM (
 	FROM capacity_forecasts FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}`+timeBound.TimestampPredicate("computed_at")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY computed_at DESC, team_id, work_scope_id`, DefaultRowLimit)
 	var rows []WorkloadForecastRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamWorkload", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkloadForecastRow
@@ -124,7 +125,7 @@ INNER JOIN (
 	WHERE org_id = {org_id:String}`+timeBound.TimestampPredicate("computed_at")+`
 ) AS cf ON `+ProjectIdentityMatchSQL("cf", "work_scope_id")+` AND cf.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = cf.team_key
-ORDER BY p.id, cf.work_scope_id, cf.team_key`, DefaultRowLimit)
+ORDER BY p.id, p.provider, cf.work_scope_id, cf.has_team, cf.team_key`, DefaultRowLimit)
 	var rows []WorkloadProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectWorkload", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkloadProjectRow

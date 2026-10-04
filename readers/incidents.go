@@ -48,7 +48,8 @@ func ReadIncidents(ctx context.Context, client QueryClient, orgID string, ids []
 	}
 	statement := WithRowLimit(`SELECT i.id, `+statusExpression+`, `+severityExpression+`
 FROM operational_incidents AS i FINAL
-WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_deleted = 0`+timeBound.ExistencePredicate("i.started_at"), DefaultRowLimit)
+WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_deleted = 0`+timeBound.ExistencePredicate("i.started_at")+`
+ORDER BY i.started_at DESC, i.id`, DefaultRowLimit)
 
 	var rows []IncidentRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadIncidents", statement, orgID, ids, func(row RowScanner) error {

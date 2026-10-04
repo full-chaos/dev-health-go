@@ -51,7 +51,8 @@ FROM (
 	FROM backfill_log
 	WHERE org_id = {org_id:String}`+timeBound.TimestampPredicate("created_at")+`
 )
-WHERE rn = 1`, DefaultRowLimit)
+WHERE rn = 1
+ORDER BY created_at DESC, provider`, DefaultRowLimit)
 
 	var rows []SourceHealthRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadSourceHealth", statement, orgID, ids, func(row RowScanner) error {

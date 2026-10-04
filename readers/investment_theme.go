@@ -170,7 +170,8 @@ UNION ALL
 SELECT team_id, max(team_name) AS team_name, 'subcategory' AS kind, {bugfix_key:String} AS key, sum(bugfix_share * effort_value) AS weighted_effort
 FROM attributed
 GROUP BY team_id
-)`, DefaultRowLimit)
+)
+ORDER BY team_id, kind, key`, DefaultRowLimit)
 
 	extra := append(append([]Binding{}, timeBound.Bindings()...), Binding{Name: "bugfix_key", Value: BugfixSubcategoryKey})
 	var rows []TeamThemeMixRow
