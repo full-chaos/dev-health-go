@@ -574,6 +574,13 @@ func TestIntegrationWorkItemAuthorizationPaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadWorkItemStatusWithScope() error = %v", err)
 			}
+			for _, row := range status {
+				for _, item := range items {
+					if item.id == row.ID && item.provider != row.Provider {
+						t.Errorf("status %s provider = %q, want %q", row.ID, row.Provider, item.provider)
+					}
+				}
+			}
 			title, err := readers.ReadWorkItemTitleWithScope(ctx, client, authzOrg, ids, scope, readers.Settings{})
 			if err != nil {
 				t.Fatalf("ReadWorkItemTitleWithScope() error = %v", err)

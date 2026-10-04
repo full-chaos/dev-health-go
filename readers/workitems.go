@@ -10,6 +10,8 @@ type WorkItemStatusRow struct {
 	ID     string
 	Status string
 	RepoID string
+	// Provider is work_items.provider ("" when the column is NULL).
+	Provider string
 }
 
 // ReadWorkItemStatus reads work_items.status, the same column
@@ -49,12 +51,12 @@ func ReadWorkItemStatusWithScope(ctx context.Context, client QueryClient, orgID 
 // work_items<->repos relation the scope predicate reuses, and Settings.Render
 // for the SETTINGS clause.
 func ReadWorkItemStatusWithScopeAndRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, scope AuthorizationScope, settings Settings, limit int) ([]WorkItemStatusRow, error) {
-	statement, scopeBindings := workItemReadStatement(`w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)`, "", scope, settings, limit)
+	statement, scopeBindings := workItemReadStatement(`w.work_item_id, ifNull(w.status, ''), toString(w.repo_id), ifNull(w.provider, '')`, "", scope, settings, limit)
 
 	var rows []WorkItemStatusRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadWorkItemStatus", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkItemStatusRow
-		if scanErr := row.Scan(&r.ID, &r.Status, &r.RepoID); scanErr != nil {
+		if scanErr := row.Scan(&r.ID, &r.Status, &r.RepoID, &r.Provider); scanErr != nil {
 			return scanErr
 		}
 		rows = append(rows, r)

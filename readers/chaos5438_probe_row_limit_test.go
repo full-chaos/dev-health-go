@@ -234,8 +234,10 @@ func probeRows(arm string, n int) [][]any {
 			rows[i] = []any{"repo-" + strconv.Itoa(i), "acme/r" + strconv.Itoa(i), "github"}
 		case "repository_ids":
 			rows[i] = []any{"repo-" + strconv.Itoa(i)}
+		case "status":
+			rows[i] = []any{id, "value", "repo-1", "jira"}
 		default:
-			// status, title and identity all scan (id, string, repo_id).
+			// title and identity scan (id, string, repo_id).
 			rows[i] = []any{id, "value", "repo-1"}
 		}
 	}
