@@ -15,7 +15,7 @@ func TestReadTeamInvestment(t *testing.T) {
 		t.Parallel()
 		client := &fakeClient{tables: []fakeTable{
 			{match: "FROM investment_metrics_daily", rows: [][]any{
-				{"CHAOS", "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5), uint8(1)},
+				{"CHAOS", "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5), uint8(1), float64(18.5), uint8(1)},
 			}},
 		}}
 		rows, err := readers.ReadTeamInvestment(context.Background(), client, "org-1", []string{"CHAOS"}, readers.TimeBound{})
@@ -24,7 +24,7 @@ func TestReadTeamInvestment(t *testing.T) {
 		}
 		want := readers.InvestmentDailyRow{
 			TeamID: "CHAOS", InvestmentArea: "product", ProjectStream: "growth", Day: "2026-02-22",
-			DeliveryUnits: 30, WorkItemsCompleted: 12, PRsMerged: 4, ChurnLOC: 850, CycleP50Hours: 18.5, CycleP50Known: true,
+			DeliveryUnits: 30, WorkItemsCompleted: 12, PRsMerged: 4, ChurnLOC: 850, CycleP50Hours: 18.5, CycleP50Known: true, CycleP50HoursWeightedMean: 18.5, CycleP50HoursWeightedMeanKnown: true,
 		}
 		if len(rows) != 1 || rows[0] != want {
 			t.Fatalf("rows = %#v, want [%#v]", rows, want)
@@ -78,8 +78,8 @@ func TestReadProjectInvestment(t *testing.T) {
 	t.Run("happy path returns one row per contributing team", func(t *testing.T) {
 		t.Parallel()
 		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
-			{"linear:proj-1", "team-1", "Team One", "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5), uint8(1)},
-			{"linear:proj-1", "team-2", "Team Two", "quality", "", "2026-02-22", int64(10), int64(5), int64(2), uint64(100), float64(4.0), uint8(1)},
+			{"linear:proj-1", "team-1", "Team One", "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5), uint8(1), float64(18.5), uint8(1)},
+			{"linear:proj-1", "team-2", "Team Two", "quality", "", "2026-02-22", int64(10), int64(5), int64(2), uint64(100), float64(4.0), uint8(1), float64(4.0), uint8(1)},
 		}}}}
 		rows, err := readers.ReadProjectInvestment(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 		if err != nil {
@@ -98,7 +98,7 @@ func TestReadProjectInvestment(t *testing.T) {
 
 	t.Run("empty ids short-circuits without querying", func(t *testing.T) {
 		t.Parallel()
-		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{{"linear:proj-1", "team-1", "Team One", "product", "growth", "2026-02-22", int64(1), int64(1), int64(1), uint64(1), float64(1), uint8(1)}}}}}
+		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{{"linear:proj-1", "team-1", "Team One", "product", "growth", "2026-02-22", int64(1), int64(1), int64(1), uint64(1), float64(1), uint8(1), float64(1), uint8(1)}}}}}
 		rows, err := readers.ReadProjectInvestment(context.Background(), client, "org-1", nil, readers.TimeBound{})
 		if err != nil || rows != nil {
 			t.Fatalf("rows = %#v, err = %v, want (nil, nil)", rows, err)

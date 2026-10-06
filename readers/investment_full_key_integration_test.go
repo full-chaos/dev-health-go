@@ -57,6 +57,8 @@ type fkWant struct {
 	// cycle is the served CycleP50Hours; cycleKnown is CycleP50Known (0 is not a value when false).
 	cycle      float64
 	cycleKnown bool
+	mean       float64
+	meanKnown  bool
 }
 
 // prs is checked as 2 * items: fkSeedInsert writes prs_merged = 2 * items.
@@ -71,48 +73,55 @@ func fkCases() []fkCase {
 			{repo: fkRepo(1), day: d, at: "2026-03-02 11:00:00", units: 10, items: 10, cycle: 10},
 			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 88, items: 88, cycle: 1},
 			{repo: fkRepo(2), day: d, at: "2026-03-02 11:00:00", units: 20, items: 20, cycle: 20},
-		}, want: &fkWant{day: d, units: 30, items: 30, churn: 3000, cycleKnown: false}},
+		}, want: &fkWant{day: d, units: 30, items: 30, churn: 3000, mean: (10.0*10 + 20.0*20) / 30, meanKnown: true}},
 		{name: "three-repos", rows: []fkRow{
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 5, items: 5, cycle: 5},
 			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 6, items: 6, cycle: 6},
 			{repo: fkRepo(3), day: d, at: "2026-03-02 10:00:00", units: 7, items: 7, cycle: 7},
 			{repo: fkRepo(3), day: d, at: "2026-03-01 10:00:00", units: 70, items: 70, cycle: 70},
-		}, want: &fkWant{day: d, units: 18, items: 18, churn: 1800}},
+		}, want: &fkWant{day: d, units: 18, items: 18, churn: 1800, mean: (5.0*5 + 6.0*6 + 7.0*7) / 18, meanKnown: true}},
 		{name: "one-repo-unchanged", rows: []fkRow{
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 99, items: 99, cycle: 1},
 			{repo: fkRepo(1), day: d, at: "2026-03-02 11:00:00", units: 10, items: 10, cycle: 12.5},
-		}, want: &fkWant{day: d, units: 10, items: 10, churn: 1000, cycle: 12.5, cycleKnown: true}},
+		}, want: &fkWant{day: d, units: 10, items: 10, churn: 1000, cycle: 12.5, cycleKnown: true, mean: 12.5, meanKnown: true}},
 		{name: "newest-zero-never-falls-back", rows: []fkRow{
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 7, items: 7, cycle: 7},
 			{repo: fkRepo(1), day: d, at: "2026-03-02 11:00:00", units: 0, items: 0, cycle: 0},
 			{repo: fkRepo(2), day: d, at: "2026-03-02 11:00:00", units: 5, items: 5, cycle: 8},
-		}, want: &fkWant{day: d, units: 5, items: 5, churn: 500, cycleKnown: false}},
+		}, want: &fkWant{day: d, units: 5, items: 5, churn: 500, mean: 8, meanKnown: true}},
 		{name: "nil-uuid-repository-counts-with-a-real-one", rows: []fkRow{
 			{repo: fkNilRepo, day: d, at: "2026-03-02 10:00:00", units: 3, items: 3, cycle: 3},
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 4, items: 4, cycle: 4},
-		}, want: &fkWant{day: d, units: 7, items: 7, churn: 700}},
+		}, want: &fkWant{day: d, units: 7, items: 7, churn: 700, mean: (3.0*3 + 4.0*4) / 7, meanKnown: true}},
 		// A NULL repo_id and the nil UUID both mean "no repository": one key.
 		{name: "null-repo-and-nil-uuid-are-one-key", rows: []fkRow{
 			{repo: "", day: d, at: "2026-03-02 10:00:00", units: 50, items: 50, cycle: 5},
 			{repo: fkNilRepo, day: d, at: "2026-03-02 11:00:00", units: 6, items: 6, cycle: 6},
-		}, want: &fkWant{day: d, units: 6, items: 6, churn: 600, cycle: 6, cycleKnown: true}},
+		}, want: &fkWant{day: d, units: 6, items: 6, churn: 600, cycle: 6, cycleKnown: true, mean: 6, meanKnown: true}},
 		{name: "latest-day-only-per-team-area-stream", rows: []fkRow{
 			{repo: fkRepo(1), day: "2026-02-28", at: "2026-03-01 10:00:00", units: 100, items: 100, cycle: 1},
 			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 2, items: 2, cycle: 2},
-		}, want: &fkWant{day: d, units: 2, items: 2, churn: 200, cycle: 2, cycleKnown: true}},
+		}, want: &fkWant{day: d, units: 2, items: 2, churn: 200, cycle: 2, cycleKnown: true, mean: 2, meanKnown: true}},
 		{name: "other-org-rows-never-count", rows: []fkRow{
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 3, items: 3, cycle: 3},
 			{repo: fkRepo(1), day: d, at: "2026-03-03 10:00:00", units: 900, items: 900, cycle: 900, org: "fk-other-org"},
 			{repo: fkRepo(2), day: d, at: "2026-03-03 10:00:00", units: 800, items: 800, cycle: 800, org: "fk-other-org"},
-		}, want: &fkWant{day: d, units: 3, items: 3, churn: 300, cycleKnown: true, cycle: 3}},
+		}, want: &fkWant{day: d, units: 3, items: 3, churn: 300, cycleKnown: true, cycle: 3, mean: 3, meanKnown: true}},
 		{name: "rerun-of-an-older-day-does-not-hide-the-latest-day", rows: []fkRow{
 			{repo: fkRepo(1), day: "2026-02-28", at: "2026-03-09 10:00:00", units: 100, items: 100, cycle: 1},
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 7, items: 7, cycle: 7},
-		}, want: &fkWant{day: d, units: 7, items: 7, churn: 700, cycle: 7, cycleKnown: true}},
+		}, want: &fkWant{day: d, units: 7, items: 7, churn: 700, cycle: 7, cycleKnown: true, mean: 7, meanKnown: true}},
 		{name: "no-completed-items-cycle-is-the-plain-mean", rows: []fkRow{
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 2, items: 0, cycle: 4},
 			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 3, items: 0, cycle: 8},
-		}, want: &fkWant{day: d, units: 5, items: 0, churn: 500, cycleKnown: false}},
+		}, want: &fkWant{day: d, units: 5, items: 0, churn: 500}},
+		{name: "one-repo-without-completed-items-median-known-mean-not", rows: []fkRow{
+			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 4, items: 0, cycle: 9},
+		}, want: &fkWant{day: d, units: 4, items: 0, churn: 400, cycle: 9, cycleKnown: true}},
+		{name: "zero-weight-repo-does-not-move-the-mean", rows: []fkRow{
+			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 4, items: 0, cycle: 900},
+			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 6, items: 6, cycle: 5},
+		}, want: &fkWant{day: d, units: 10, items: 6, churn: 1000, mean: 5, meanKnown: true}},
 		{name: "no-rows-no-zero-filled-row", rows: nil, want: nil},
 	}
 }
@@ -237,7 +246,10 @@ func fkCheck(t *testing.T, label string, got *fkWant, want *fkWant) {
 	if got.day != want.day || got.units != want.units || got.items != want.items || got.churn != want.churn || got.prs != want.items*2 {
 		t.Errorf("%s: got %+v, want %+v", label, *got, *want)
 	}
-	if got.cycleKnown != want.cycleKnown || math.Abs(got.cycle-want.cycle) > 1e-9 {
+	if got.meanKnown != want.meanKnown || !(math.Abs(got.mean-want.mean) <= 1e-9) {
+		t.Errorf("%s: weighted mean = %v known=%v, want %v known=%v", label, got.mean, got.meanKnown, want.mean, want.meanKnown)
+	}
+	if got.cycleKnown != want.cycleKnown || !(math.Abs(got.cycle-want.cycle) <= 1e-9) {
 		t.Errorf("%s: cycle = %v known=%v, want %v known=%v", label, got.cycle, got.cycleKnown, want.cycle, want.cycleKnown)
 	}
 }
@@ -276,11 +288,11 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 	}
 	teamGot := map[string][]fkWant{}
 	for _, r := range teamRows {
-		teamGot[r.TeamID] = append(teamGot[r.TeamID], fkWant{day: r.Day, units: r.DeliveryUnits, items: r.WorkItemsCompleted, prs: r.PRsMerged, churn: r.ChurnLOC, cycle: r.CycleP50Hours, cycleKnown: r.CycleP50Known})
+		teamGot[r.TeamID] = append(teamGot[r.TeamID], fkWant{day: r.Day, units: r.DeliveryUnits, items: r.WorkItemsCompleted, prs: r.PRsMerged, churn: r.ChurnLOC, cycle: r.CycleP50Hours, cycleKnown: r.CycleP50Known, mean: r.CycleP50HoursWeightedMean, meanKnown: r.CycleP50HoursWeightedMeanKnown})
 	}
 	projectGot := map[string][]fkWant{}
 	for _, r := range projectRows {
-		projectGot[r.TeamID] = append(projectGot[r.TeamID], fkWant{day: r.Day, units: r.DeliveryUnits, items: r.WorkItemsCompleted, prs: r.PRsMerged, churn: r.ChurnLOC, cycle: r.CycleP50Hours, cycleKnown: r.CycleP50Known})
+		projectGot[r.TeamID] = append(projectGot[r.TeamID], fkWant{day: r.Day, units: r.DeliveryUnits, items: r.WorkItemsCompleted, prs: r.PRsMerged, churn: r.ChurnLOC, cycle: r.CycleP50Hours, cycleKnown: r.CycleP50Known, mean: r.CycleP50HoursWeightedMean, meanKnown: r.CycleP50HoursWeightedMeanKnown})
 	}
 	one := func(label string, got []fkWant) *fkWant {
 		t.Helper()

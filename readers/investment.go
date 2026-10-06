@@ -30,6 +30,15 @@ type InvestmentDailyRow struct {
 	// CycleP50Known is true when exactly one repository row stands behind the
 	// key, so CycleP50Hours is that row's own median.
 	CycleP50Known bool
+	// CycleP50HoursWeightedMean is an APPROXIMATION, not a median: the
+	// work_items_completed-weighted mean of the per-repository medians (a
+	// repository with zero completed items has zero weight). With one
+	// repository that has completed items it equals CycleP50Hours. 0 is not a
+	// value unless CycleP50HoursWeightedMeanKnown is true.
+	CycleP50HoursWeightedMean float64
+	// CycleP50HoursWeightedMeanKnown is false when no repository row of the
+	// key completed any item (no weight).
+	CycleP50HoursWeightedMeanKnown bool
 }
 
 // investmentLatestDaySQL is the shared body of both investment readers: one
@@ -51,20 +60,23 @@ type InvestmentDailyRow struct {
 // a value (cycle_p50_known = 1) only when exactly one repository row stands
 // behind the key; with more than one it is 0 and cycle_p50_known = 0. The
 // ops writer stores no population column for the median, so a row count is
-// the only provable rule.
+// the only provable rule. weighted_cycle_p50_hours is a separate APPROXIMATION
+// (work_items_completed-weighted mean of the per-repository medians), served
+// under its own name and known flag, never as the median.
 //
 // Rows of one key that share computed_at fall to cityHash64 of the value
 // columns (larger wins): arbitrary among an exact tie, but stable and always
 // one whole row, never a stitched combination.
 func investmentLatestDaySQL(filters string) string {
-	return `SELECT team_id, investment_area, project_stream, day, total_delivery_units, total_work_items_completed, total_prs_merged, total_churn_loc, exact_cycle_p50_hours, cycle_p50_known
+	return `SELECT team_id, investment_area, project_stream, day, total_delivery_units, total_work_items_completed, total_prs_merged, total_churn_loc, exact_cycle_p50_hours, cycle_p50_known, weighted_cycle_p50_hours, weighted_cycle_p50_known
 	FROM (
-		SELECT team_id, investment_area, project_stream, day, total_delivery_units, total_work_items_completed, total_prs_merged, total_churn_loc, exact_cycle_p50_hours, cycle_p50_known,
+		SELECT team_id, investment_area, project_stream, day, total_delivery_units, total_work_items_completed, total_prs_merged, total_churn_loc, exact_cycle_p50_hours, cycle_p50_known, weighted_cycle_p50_hours, weighted_cycle_p50_known,
 			row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC) AS day_rn
 		FROM (
 			SELECT team_id, investment_area, project_stream, day,
 				toInt64(sum(delivery_units)) AS total_delivery_units, toInt64(sum(work_items_completed)) AS total_work_items_completed, toInt64(sum(prs_merged)) AS total_prs_merged, sum(churn_loc) AS total_churn_loc,
-				if(count() = 1, sum(cycle_p50_hours), 0) AS exact_cycle_p50_hours, toUInt8(count() = 1) AS cycle_p50_known
+				if(count() = 1, sum(cycle_p50_hours), 0) AS exact_cycle_p50_hours, toUInt8(count() = 1) AS cycle_p50_known,
+				if(sum(work_items_completed) > 0, sum(cycle_p50_hours * work_items_completed) / sum(work_items_completed), 0) AS weighted_cycle_p50_hours, toUInt8(sum(work_items_completed) > 0) AS weighted_cycle_p50_known
 			FROM (
 				SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
 					row_number() OVER (PARTITION BY team_id, investment_area, project_stream, day, ifNull(repo_id, toUUID('00000000-0000-0000-0000-000000000000')) ORDER BY computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
@@ -89,7 +101,7 @@ func investmentLatestDaySQL(filters string) string {
 // then summed. See investmentLatestDaySQL for the full rule, including the
 // computed_at tie-break.
 func ReadTeamInvestment(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound) ([]InvestmentDailyRow, error) {
-	statement := WithRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), total_delivery_units, total_work_items_completed, total_prs_merged, total_churn_loc, exact_cycle_p50_hours, cycle_p50_known
+	statement := WithRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), total_delivery_units, total_work_items_completed, total_prs_merged, total_churn_loc, exact_cycle_p50_hours, cycle_p50_known, weighted_cycle_p50_hours, weighted_cycle_p50_known
 FROM (
 `+investmentLatestDaySQL(" AND team_id IN {ids:Array(String)}"+timeBound.DayPredicate("day"))+`
 )
@@ -97,11 +109,12 @@ ORDER BY day DESC, team_id, investment_area, project_stream`, DefaultRowLimit)
 	var rows []InvestmentDailyRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamInvestment", statement, orgID, ids, func(row RowScanner) error {
 		var r InvestmentDailyRow
-		var cycleKnown uint8
-		if err := row.Scan(&r.TeamID, &r.InvestmentArea, &r.ProjectStream, &r.Day, &r.DeliveryUnits, &r.WorkItemsCompleted, &r.PRsMerged, &r.ChurnLOC, &r.CycleP50Hours, &cycleKnown); err != nil {
+		var cycleKnown, weightedKnown uint8
+		if err := row.Scan(&r.TeamID, &r.InvestmentArea, &r.ProjectStream, &r.Day, &r.DeliveryUnits, &r.WorkItemsCompleted, &r.PRsMerged, &r.ChurnLOC, &r.CycleP50Hours, &cycleKnown, &r.CycleP50HoursWeightedMean, &weightedKnown); err != nil {
 			return err
 		}
 		r.CycleP50Known = cycleKnown != 0
+		r.CycleP50HoursWeightedMeanKnown = weightedKnown != 0
 		rows = append(rows, r)
 		return nil
 	}, timeBound.Bindings()...)
@@ -140,6 +153,15 @@ type InvestmentProjectRow struct {
 	// CycleP50Known is true when exactly one repository row stands behind the
 	// key, so CycleP50Hours is that row's own median.
 	CycleP50Known bool
+	// CycleP50HoursWeightedMean is an APPROXIMATION, not a median: the
+	// work_items_completed-weighted mean of the per-repository medians (a
+	// repository with zero completed items has zero weight). With one
+	// repository that has completed items it equals CycleP50Hours. 0 is not a
+	// value unless CycleP50HoursWeightedMeanKnown is true.
+	CycleP50HoursWeightedMean float64
+	// CycleP50HoursWeightedMeanKnown is false when no repository row of the
+	// key completed any item (no weight).
+	CycleP50HoursWeightedMeanKnown bool
 }
 
 // ReadProjectInvestment rolls investment_metrics_daily up for a project
@@ -156,7 +178,7 @@ func ReadProjectInvestment(ctx context.Context, client QueryClient, orgID string
 		return nil, nil
 	}
 	ownershipPredicate := OwnershipValidityPredicate(timeBound)
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), p.team_id, ifNull(t.name, ''), im.investment_area, im.project_stream, toString(im.day), im.total_delivery_units, im.total_work_items_completed, im.total_prs_merged, im.total_churn_loc, im.exact_cycle_p50_hours, im.cycle_p50_known
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), p.team_id, ifNull(t.name, ''), im.investment_area, im.project_stream, toString(im.day), im.total_delivery_units, im.total_work_items_completed, im.total_prs_merged, im.total_churn_loc, im.exact_cycle_p50_hours, im.cycle_p50_known, im.weighted_cycle_p50_hours, im.weighted_cycle_p50_known
 FROM `+ProjectOwnershipJoinSQL(ownershipPredicate)+`
 INNER JOIN (
 `+investmentLatestDaySQL(timeBound.DayPredicate("day"))+`
@@ -166,11 +188,12 @@ ORDER BY p.id, p.provider, p.team_id, im.investment_area, im.project_stream`, De
 	var rows []InvestmentProjectRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectInvestment", statement, orgID, ids, func(row RowScanner) error {
 		var r InvestmentProjectRow
-		var cycleKnown uint8
-		if err := row.Scan(&r.ProjectSubjectKey, &r.TeamID, &r.TeamName, &r.InvestmentArea, &r.ProjectStream, &r.Day, &r.DeliveryUnits, &r.WorkItemsCompleted, &r.PRsMerged, &r.ChurnLOC, &r.CycleP50Hours, &cycleKnown); err != nil {
+		var cycleKnown, weightedKnown uint8
+		if err := row.Scan(&r.ProjectSubjectKey, &r.TeamID, &r.TeamName, &r.InvestmentArea, &r.ProjectStream, &r.Day, &r.DeliveryUnits, &r.WorkItemsCompleted, &r.PRsMerged, &r.ChurnLOC, &r.CycleP50Hours, &cycleKnown, &r.CycleP50HoursWeightedMean, &weightedKnown); err != nil {
 			return err
 		}
 		r.CycleP50Known = cycleKnown != 0
+		r.CycleP50HoursWeightedMeanKnown = weightedKnown != 0
 		rows = append(rows, r)
 		return nil
 	}, timeBound.Bindings()...)
