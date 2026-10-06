@@ -182,6 +182,9 @@ var ProductionColumns = map[string][]Column{
 		{Name: "org_id", Type: "String"},
 	},
 	"investment_metrics_daily": {
+		// repo_id: written one row per repository per run (ops migration 007);
+		// the investment readers dedupe per repository, then sum.
+		{Name: "repo_id", Type: "Nullable(UUID)"},
 		{Name: "day", Type: "Date"},
 		{Name: "team_id", Type: "LowCardinality(Nullable(String))"},
 		{Name: "investment_area", Type: "LowCardinality(String)"},
