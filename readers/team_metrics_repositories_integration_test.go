@@ -123,6 +123,12 @@ func tmCases() []tmCase {
 			{repo: tmRepo(1), day: "2026-02-28", at: "2026-03-09 10:00:00", commits: 100, ah: 50, wk: 50},
 			{repo: tmRepo(1), day: d, at: "2026-03-02 10:00:00", commits: 7, ah: 1, wk: 2},
 		}, want: &tmWant{day: d, commits: 7, ah: 1, wk: 2, ahRatio: 1.0 / 7, wkRatio: 2.0 / 7}},
+		// The legacy drop counts real rows of THIS org only: a real row of another
+		// org with the same team id and day must not hide the legacy bucket.
+		{name: "legacy-bucket-beside-a-real-row-of-another-org", rows: []tmRow{
+			{repo: "", day: d, at: "2026-03-02 10:00:00", commits: 8, ah: 2, wk: 4},
+			{repo: tmRepo(1), day: d, at: "2026-03-03 10:00:00", commits: 900, ah: 900, wk: 900, org: "tm-other-org"},
+		}, want: &tmWant{day: d, commits: 8, ah: 2, wk: 4, ahRatio: 0.25, wkRatio: 0.5}},
 		{name: "no-rows-no-zero-filled-row", rows: nil, want: nil},
 	}
 }
@@ -226,6 +232,11 @@ func tmClient(t *testing.T) (*clickhouse.Client, clickhousedriver.Conn) {
 		if err := seed.Exec(ctx, stmt); err != nil {
 			t.Fatalf("ddl %q: %v", stmt, err)
 		}
+	}
+	// The production table is a ReplacingMergeTree: a background merge could
+	// collapse the deliberate same-key rows of these cells mid-test.
+	if err := seed.Exec(ctx, "SYSTEM STOP MERGES team_metrics_daily"); err != nil {
+		t.Fatal(err)
 	}
 	parsed.Path = "/" + database
 	client, err := clickhouse.NewClickHouseQueryClientWithOptions(clickhouse.Options{DSN: parsed.String(), QueryTimeout: 30 * time.Second})
