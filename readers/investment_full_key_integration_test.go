@@ -122,6 +122,15 @@ func fkCases() []fkCase {
 			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 4, items: 0, cycle: 900},
 			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 6, items: 6, cycle: 5},
 		}, want: &fkWant{day: d, units: 10, items: 6, churn: 1000, mean: 5, meanKnown: true}},
+		// A non-finite median in a zero-weight repository must never reach the mean.
+		{name: "nan-median-in-zero-weight-repo", rows: []fkRow{
+			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 1, items: 0, cycle: math.NaN()},
+			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 5, items: 5, cycle: 4},
+		}, want: &fkWant{day: d, units: 6, items: 5, churn: 600, mean: 4, meanKnown: true}},
+		{name: "inf-median-in-zero-weight-repo", rows: []fkRow{
+			{repo: fkRepo(1), day: d, at: "2026-03-02 10:00:00", units: 1, items: 0, cycle: math.Inf(1)},
+			{repo: fkRepo(2), day: d, at: "2026-03-02 10:00:00", units: 5, items: 5, cycle: 4},
+		}, want: &fkWant{day: d, units: 6, items: 5, churn: 600, mean: 4, meanKnown: true}},
 		{name: "no-rows-no-zero-filled-row", rows: nil, want: nil},
 	}
 }
@@ -159,8 +168,15 @@ func fkSeedInsert(team string, r fkRow) string {
 	if area == "" {
 		area = "product"
 	}
-	return fmt.Sprintf("INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES (%s, '%s', '%s', '%s', '%s', %d, %d, %d, %d, %v, '%s', '%s')",
-		repo, r.day, team, area, stream, r.units, r.items, r.items*2, r.units*100, r.cycle, r.at, org)
+	cycle := fmt.Sprintf("%v", r.cycle)
+	switch {
+	case math.IsNaN(r.cycle):
+		cycle = "nan"
+	case math.IsInf(r.cycle, 1):
+		cycle = "inf"
+	}
+	return fmt.Sprintf("INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES (%s, '%s', '%s', '%s', '%s', %d, %d, %d, %d, %s, '%s', '%s')",
+		repo, r.day, team, area, stream, r.units, r.items, r.items*2, r.units*100, cycle, r.at, org)
 }
 
 func fkClient(t *testing.T) (*clickhouse.Client, clickhousedriver.Conn) {
@@ -271,6 +287,16 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 			}
 		}
 	}
+	// A team that is not in the requested scope must add nothing to any row.
+	const outTeam = "t-out-of-scope"
+	for _, r := range []fkRow{
+		{repo: fkRepo(1), day: "2026-03-01", at: "2026-03-02 10:00:00", units: 1000, items: 1000, cycle: 1},
+		{repo: fkRepo(2), day: "2026-03-05", at: "2026-03-06 10:00:00", units: 2000, items: 2000, cycle: 1},
+	} {
+		if err := seed.Exec(ctx, fkSeedInsert(outTeam, r)); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
 	ids := make([]string, 0, len(cases))
 	projects := make([]string, 0, len(cases))
 	for _, c := range cases {
@@ -285,6 +311,11 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 	projectRows, err := readers.ReadProjectInvestment(ctx, client, fkOrg, projects, readers.TimeBound{})
 	if err != nil {
 		t.Fatalf("ReadProjectInvestment: %v", err)
+	}
+	for _, r := range teamRows {
+		if r.TeamID == outTeam {
+			t.Errorf("ReadTeamInvestment served a team outside the scope: %+v", r)
+		}
 	}
 	teamGot := map[string][]fkWant{}
 	for _, r := range teamRows {

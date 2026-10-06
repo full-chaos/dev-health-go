@@ -76,7 +76,7 @@ func investmentLatestDaySQL(filters string) string {
 			SELECT team_id, investment_area, project_stream, day,
 				toInt64(sum(delivery_units)) AS total_delivery_units, toInt64(sum(work_items_completed)) AS total_work_items_completed, toInt64(sum(prs_merged)) AS total_prs_merged, sum(churn_loc) AS total_churn_loc,
 				if(count() = 1, sum(cycle_p50_hours), 0) AS exact_cycle_p50_hours, toUInt8(count() = 1) AS cycle_p50_known,
-				if(sum(work_items_completed) > 0, sum(cycle_p50_hours * work_items_completed) / sum(work_items_completed), 0) AS weighted_cycle_p50_hours, toUInt8(sum(work_items_completed) > 0) AS weighted_cycle_p50_known
+				if(sum(work_items_completed) > 0, sumIf(cycle_p50_hours * work_items_completed, work_items_completed > 0) / sum(work_items_completed), 0) AS weighted_cycle_p50_hours, toUInt8(sum(work_items_completed) > 0) AS weighted_cycle_p50_known
 			FROM (
 				SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
 					row_number() OVER (PARTITION BY team_id, investment_area, project_stream, day, ifNull(repo_id, toUUID('00000000-0000-0000-0000-000000000000')) ORDER BY computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
