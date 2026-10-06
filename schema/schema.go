@@ -334,8 +334,12 @@ var ProductionColumns = map[string][]Column{
 		{Name: "weekend_commits_count", Type: "UInt32"},
 		{Name: "after_hours_commit_ratio", Type: "Float64"},
 		{Name: "weekend_commit_ratio", Type: "Float64"},
-		{Name: "computed_at", Type: "DateTime('UTC')"},
+		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
 		{Name: "org_id", Type: "String"},
+		// repo_id: one row per (org, team, repo, day); legacy rows are the one
+		// '' bucket (ops migration 080 ADD COLUMN, appended last; computed_at
+		// widened to DateTime64(6) by the same migration).
+		{Name: "repo_id", Type: "String"},
 	},
 	"cicd_metrics_daily": {
 		{Name: "repo_id", Type: "UUID"},
@@ -648,7 +652,7 @@ var EngineFull = map[string]string{
 	// production, and a fixture that dropped the term would collapse them.
 	"team_cognitive_load_daily":            "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
 	"team_complexity_daily":                "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
-	"team_metrics_daily":                   "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
+	"team_metrics_daily":                   "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"team_project_ownership":               "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"team_repo_ownership":                  "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",

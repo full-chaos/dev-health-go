@@ -10,7 +10,9 @@ import "context"
 // the (neutral) Go-side rollup aggregation, returning plain structs. acr's
 // adapter wraps these into CanonicalFact/FactValue on top.
 //
-// Both tables are plain, append-only MergeTree tables: live data shows up
+// Both tables are written append-only; since ops migration 096 they are
+// ReplacingMergeTree(computed_at) tables, but these readers never rely on a
+// merge having run (unmerged rows are always present): live data shows up
 // to ~86 rows sharing one (repo_id|team_id, day) key (intraday reruns), and
 // those reruns carry genuinely different values, not no-op repeats. Every
 // statement below picks exactly one row per subject via
@@ -82,20 +84,73 @@ type TeamMetricsRow struct {
 	WeekendCommitRatio     float64
 }
 
-// ReadTeamMetrics reads the latest team_metrics_daily row (subject to
-// timeBound) for each of teamIDs, scoped to orgID.
+// teamMetricsLatestDaySQL returns one row per team: the team's latest day
+// (subject to filters) with the counts summed over repositories. Columns:
+// team_id, team_name, day, commits_count, after_hours_commits_count,
+// weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio.
+//
+// team_metrics_daily is append-only and is written one row per
+// (org_id, team_id, repo_id, day) (ops migrations 080 and 096; a legacy row is
+// the one repo_id = empty-string bucket). The rules are the ops readers' rules
+// (recommendations/loader.py _load_sustainability_signals,
+// metrics/scoring/wellbeing.py, migration 080 header):
+//  1. per (team, repo, day) the newest row by computed_at is kept, as one whole
+//     row (a computed_at tie falls to cityHash64 of the value columns, larger
+//     wins: deterministic among the rows the table holds at read time and never
+//     stitched; after a ReplacingMergeTree merge the table keeps one of the tied
+//     rows by its own rule, so an exact tie can flip across a merge);
+//  2. per (team, day) the legacy empty-repo_id bucket is dropped once any real repository
+//     row exists (CHAOS-4342);
+//  3. the day rule is unchanged: the team's latest day over all its kept rows;
+//  4. commits, after-hours and weekend counts are summed over repositories;
+//  5. both ratios are recomputed from the sums, never averaged or served from a
+//     stored row; zero commits gives 0.0 (as in ops);
+//  6. team_name is the name of the newest kept row of the served day (ops has no
+//     rule for it; it is not a metric).
+func teamMetricsLatestDaySQL(filters string) string {
+	return `SELECT team_id, team_name, day, total_commits, total_after_hours, total_weekend,
+		if(total_commits > 0, total_after_hours / total_commits, 0.0) AS after_hours_commit_ratio,
+		if(total_commits > 0, total_weekend / total_commits, 0.0) AS weekend_commit_ratio
+	FROM (
+		SELECT team_id, day,
+			argMax(team_name, (computed_at, row_hash)) AS team_name,
+			toInt64(sum(commits_count)) AS total_commits,
+			toInt64(sum(after_hours_commits_count)) AS total_after_hours,
+			toInt64(sum(weekend_commits_count)) AS total_weekend
+		FROM (
+			SELECT team_id, team_name, day, repo_id, commits_count, after_hours_commits_count, weekend_commits_count, computed_at, row_hash,
+				dense_rank() OVER (PARTITION BY team_id ORDER BY day DESC) AS day_rn
+			FROM (
+				SELECT team_id, team_name, day, repo_id, commits_count, after_hours_commits_count, weekend_commits_count, computed_at, row_hash,
+					countIf(repo_id != '') OVER (PARTITION BY team_id, day) AS real_repo_count
+				FROM (
+					SELECT team_id, team_name, day, repo_id, commits_count, after_hours_commits_count, weekend_commits_count, computed_at,
+						cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) AS row_hash,
+						row_number() OVER (PARTITION BY team_id, day, repo_id ORDER BY computed_at DESC, cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
+					FROM team_metrics_daily
+					WHERE org_id = {org_id:String}` + filters + `
+				)
+				WHERE rn = 1
+			)
+			WHERE repo_id != '' OR real_repo_count = 0
+		)
+		WHERE day_rn = 1
+		GROUP BY team_id, day
+	)`
+}
+
+// ReadTeamMetrics reads each of teamIDs' latest team_metrics_daily day (subject
+// to timeBound), scoped to orgID, with the counts summed over the team's
+// repositories and the ratios recomputed from the sums. See
+// teamMetricsLatestDaySQL for the full rule.
 func ReadTeamMetrics(ctx context.Context, client QueryClient, orgID string, teamIDs []string, timeBound TimeBound) ([]TeamMetricsRow, error) {
 	if len(teamIDs) == 0 {
 		return nil, nil
 	}
-	statement := WithRowLimit(`SELECT toString(team_id), toString(day), toInt64(commits_count), toInt64(after_hours_commits_count), toInt64(weekend_commits_count), toFloat64(after_hours_commit_ratio), toFloat64(weekend_commit_ratio)
+	statement := WithRowLimit(`SELECT toString(team_id), toString(day), toInt64(total_commits), toInt64(total_after_hours), toInt64(total_weekend), toFloat64(after_hours_commit_ratio), toFloat64(weekend_commit_ratio)
 FROM (
-	SELECT team_id, day, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio,
-		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
-	FROM team_metrics_daily
-	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
+`+teamMetricsLatestDaySQL(" AND toString(team_id) IN {ids:Array(String)}"+timeBound.DayPredicate("day"))+`
 )
-WHERE rn = 1
 ORDER BY day DESC, team_id`, DefaultRowLimit)
 	var rows []TeamMetricsRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamMetrics", statement, orgID, teamIDs, func(row RowScanner) error {
@@ -131,14 +186,11 @@ func ReadProjectMetricsBreakdown(ctx context.Context, client QueryClient, orgID 
 		return nil, nil
 	}
 	ownershipPredicate := OwnershipValidityPredicate(timeBound)
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toInt64(tm.commits_count), toInt64(tm.after_hours_commits_count), toInt64(tm.weekend_commits_count), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toInt64(tm.total_commits), toInt64(tm.total_after_hours), toInt64(tm.total_weekend), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
 FROM `+ProjectOwnershipJoinSQL(ownershipPredicate)+`
 INNER JOIN (
-	SELECT team_id, team_name, day, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio,
-		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
-	FROM team_metrics_daily
-	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
-) AS tm ON tm.team_id = p.team_id AND tm.rn = 1
+`+teamMetricsLatestDaySQL(timeBound.DayPredicate("day"))+`
+) AS tm ON tm.team_id = p.team_id
 ORDER BY p.id, p.provider, tm.team_id`, DefaultRowLimit)
 	var rows []ProjectTeamMetricsRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectMetricsBreakdown", statement, orgID, projectKeys, func(row RowScanner) error {
