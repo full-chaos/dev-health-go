@@ -141,7 +141,7 @@ jobs:
           set -o pipefail
           mkdir -p test-results
           go test -tags=integration -count=1 -json \
-            -run '^(TestIntegrationWorkItemReadersRespectScopeAndLimits|TestIntegrationWorkItemAuthorizationPaths|TestIntegrationLimitReadsServeTheSameRowsForAnyPartOrder|TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories|TestIntegrationInvestmentReadersTimeBoundPicksLatestDayInWindow|TestIntegrationInvestmentReadersLatestDayIsPerAreaAndStream|TestIntegrationInvestmentReadersSameDayRepositoryKeepsEveryAreaAndStream)$' ./readers \
+            -run '^(TestIntegrationWorkItemReadersRespectScopeAndLimits|TestIntegrationWorkItemAuthorizationPaths|TestIntegrationLimitReadsServeTheSameRowsForAnyPartOrder|TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories|TestIntegrationInvestmentReadersTimeBoundPicksLatestDayInWindow|TestIntegrationInvestmentReadersLatestDayIsPerAreaAndStream|TestIntegrationInvestmentReadersSameDayRepositoryKeepsEveryAreaAndStream|TestIntegrationTeamMetricsReadersSumRepositoriesAfterFullKeyDedupe|TestIntegrationTeamMetricsReadersTimeBoundPicksLatestDayInWindow)$' ./readers \
             | tee test-results/readers-integration.json
       - name: Upload readers integration test JSON
         if: always()
