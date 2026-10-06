@@ -10,7 +10,9 @@ import "context"
 // the (neutral) Go-side rollup aggregation, returning plain structs. acr's
 // adapter wraps these into CanonicalFact/FactValue on top.
 //
-// Both tables are plain, append-only MergeTree tables: live data shows up
+// Both tables are written append-only; since ops migration 096 they are
+// ReplacingMergeTree(computed_at) tables, but these readers never rely on a
+// merge having run (unmerged rows are always present): live data shows up
 // to ~86 rows sharing one (repo_id|team_id, day) key (intraday reruns), and
 // those reruns carry genuinely different values, not no-op repeats. Every
 // statement below picks exactly one row per subject via
@@ -94,7 +96,9 @@ type TeamMetricsRow struct {
 // metrics/scoring/wellbeing.py, migration 080 header):
 //  1. per (team, repo, day) the newest row by computed_at is kept, as one whole
 //     row (a computed_at tie falls to cityHash64 of the value columns, larger
-//     wins: arbitrary among an exact tie, but stable and never stitched);
+//     wins: deterministic among the rows the table holds at read time and never
+//     stitched; after a ReplacingMergeTree merge the table keeps one of the tied
+//     rows by its own rule, so an exact tie can flip across a merge);
 //  2. per (team, day) the legacy empty-repo_id bucket is dropped once any real repository
 //     row exists (CHAOS-4342);
 //  3. the day rule is unchanged: the team's latest day over all its kept rows;

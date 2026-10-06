@@ -335,11 +335,11 @@ var ProductionColumns = map[string][]Column{
 		{Name: "after_hours_commit_ratio", Type: "Float64"},
 		{Name: "weekend_commit_ratio", Type: "Float64"},
 		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
-		{Name: "org_id", Type: "String DEFAULT 'default'"},
+		{Name: "org_id", Type: "String"},
 		// repo_id: one row per (org, team, repo, day); legacy rows are the one
 		// '' bucket (ops migration 080 ADD COLUMN, appended last; computed_at
 		// widened to DateTime64(6) by the same migration).
-		{Name: "repo_id", Type: "String DEFAULT ''"},
+		{Name: "repo_id", Type: "String"},
 	},
 	"cicd_metrics_daily": {
 		{Name: "repo_id", Type: "UUID"},

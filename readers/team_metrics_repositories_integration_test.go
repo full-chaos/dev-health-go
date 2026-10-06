@@ -456,3 +456,68 @@ func TestIntegrationTeamMetricsReadersTimeBoundPicksLatestDayInWindow(t *testing
 	g = tmFromTeamRow(projectRows[0].TeamMetricsRow)
 	tmCheck(t, "ReadProjectMetricsBreakdown bounded", &g, want)
 }
+
+// After a ReplacingMergeTree merge the table keeps ONE of two rows that tie on
+// computed_at within a key, by its own rule (a named limit: the larger-hash
+// rule holds only among the rows the table holds at read time). What must hold
+// either way: the reader serves exactly one of the two whole rows, never a
+// stitched row and never the sum of both.
+func TestIntegrationTeamMetricsReadersTieAfterMergeServesOneWholeRow(t *testing.T) {
+	client, seed := tmClient(t)
+	ctx := context.Background()
+	if err := seed.Exec(ctx, "SYSTEM START MERGES team_metrics_daily"); err != nil {
+		t.Fatal(err)
+	}
+	const teams = 6
+	ids := make([]string, 0, teams)
+	projects := make([]string, 0, teams)
+	for i := 0; i < teams; i++ {
+		team := fmt.Sprintf("t-merge-tie-%02d", i)
+		ids = append(ids, team)
+		projects = append(projects, tmSeedProject(t, seed, team))
+		for _, r := range tmTieRows(i) {
+			if err := seed.Exec(ctx, tmSeedInsert(team, r)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := seed.Exec(ctx, "OPTIMIZE TABLE team_metrics_daily FINAL"); err != nil {
+		t.Fatal(err)
+	}
+	teamRows, err := readers.ReadTeamMetrics(ctx, client, tmOrg, ids, readers.TimeBound{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRows, err := readers.ReadProjectMetricsBreakdown(ctx, client, tmOrg, projects, readers.TimeBound{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]tmWant{}
+	for _, r := range teamRows {
+		got["team "+r.TeamID] = append(got["team "+r.TeamID], tmFromTeamRow(r))
+	}
+	for _, r := range projectRows {
+		got["project "+r.TeamID] = append(got["project "+r.TeamID], tmFromTeamRow(r.TeamMetricsRow))
+	}
+	for i := 0; i < teams; i++ {
+		team := fmt.Sprintf("t-merge-tie-%02d", i)
+		candidates := tmTieRows(i)
+		for _, label := range []string{"team ", "project "} {
+			rows := got[label+team]
+			if len(rows) != 1 {
+				t.Errorf("%s%s: %d rows, want one", label, team, len(rows))
+				continue
+			}
+			ok := false
+			for _, c := range candidates {
+				w := tmWant{day: c.day, commits: int64(c.commits), ah: int64(c.ah), wk: int64(c.wk), ahRatio: float64(c.ah) / float64(c.commits), wkRatio: float64(c.wk) / float64(c.commits)}
+				if rows[0] == w {
+					ok = true
+				}
+			}
+			if !ok {
+				t.Errorf("%s%s: served %+v, want exactly one of the two whole tied rows %+v", label, team, rows[0], candidates)
+			}
+		}
+	}
+}
