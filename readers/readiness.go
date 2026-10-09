@@ -70,7 +70,7 @@ ORDER BY day DESC, team_id, work_scope_id, provider`, DefaultRowLimit)
 
 // ReadinessProjectRow is one (project, team, work_scope, provider) row
 // contributing to a project's readiness rollup, scanned verbatim off
-// ReadProjectReadiness's team_project_ownership join. Multiple rows can
+// ReadProjectReadiness's project-identity join. Multiple rows can
 // share ProjectSubjectKey: estimate_coverage_metrics_daily partitions by
 // (team, work_scope_id, provider), so summing estimated_count/backlog_size
 // across teams that track DIFFERENT work scopes would mix unrelated
