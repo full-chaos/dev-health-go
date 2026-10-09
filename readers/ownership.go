@@ -1,11 +1,11 @@
 package readers
 
-// Shared helpers for the project-rollup readers (metrics.go, investment.go,
-// workload.go, readiness.go): every one of those rolls a project up through
-// projects -> team_project_ownership -> a team-scoped daily table, using the
-// SAME join shape and the SAME slowly-changing-dimension validity predicate.
-// A single declaration here is what stops the join or the predicate drifting
-// between the four readers the way acr's own devhealthfacts/shared.go
+// Shared helpers for the project-rollup readers: metrics.go and investment.go
+// roll a project up through projects -> team_project_ownership -> a
+// team-scoped daily table, using the SAME join shape and the SAME
+// slowly-changing-dimension validity predicate (workload.go and readiness.go
+// resolve through the project-identity join instead). A single declaration
+// here is what stops the join or the predicate drifting between readers the way acr's own devhealthfacts/shared.go
 // comment warns about for its callers.
 //
 // Extracted from acr's internal/contextfabric/devhealthfacts/shared.go
