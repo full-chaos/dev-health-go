@@ -16,14 +16,18 @@ package readers
 // OwnershipValidityPredicate returns the valid_from/valid_to predicate a
 // slowly-changing ownership edge (team_project_ownership, team_repo_ownership
 // -- both carry the same valid_from/valid_to(DateTime64) shape) must satisfy
-// for the requested time context: "currently active" on the current axis,
-// "active AT THE END of the requested window" for a bounded historical
-// query -- the same convention TimeBound.AsOfExpression documents for every
-// other derived-state read. now64(3) is a literal ClickHouse function call,
+// for the requested time context: "currently active" on the current axis.
+// For a bounded query valid_from is never a window filter (it carries the
+// sync stamp, not the start of ownership): a row counts when it has not
+// ended before the window start (a point bound uses its instant). now64(3) is a literal ClickHouse function call,
 // never caller-supplied text, so it carries no injection surface.
 func OwnershipValidityPredicate(bound TimeBound) string {
 	if bound.Active {
-		return " AND valid_from <= {" + BoundEndParam + ":DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {" + BoundEndParam + ":DateTime64(6,'UTC')})"
+		param := BoundEndParam
+		if bound.HasStart {
+			param = BoundStartParam
+		}
+		return " AND (valid_to IS NULL OR valid_to > {" + param + ":DateTime64(6,'UTC')})"
 	}
 	return " AND valid_from <= now64(3) AND valid_to IS NULL"
 }
