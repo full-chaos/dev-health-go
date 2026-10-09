@@ -67,7 +67,7 @@ ORDER BY computed_at DESC, team_id, work_scope_id`, DefaultRowLimit)
 
 // WorkloadProjectRow is one (project, team, work_scope) row contributing to
 // a project's workload rollup, scanned verbatim off ReadProjectWorkload's
-// team_project_ownership join. Multiple rows can share ProjectSubjectKey:
+// project-identity join. Multiple rows can share ProjectSubjectKey:
 // Monte Carlo throughput/percentile stats are never additive across teams
 // (summing two independent forecasts' throughput_mean is not a meaningful
 // number), so every owning team's own latest per-scope forecast survives

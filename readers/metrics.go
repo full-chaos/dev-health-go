@@ -176,8 +176,9 @@ type ProjectTeamMetricsRow struct {
 
 // ReadProjectMetricsBreakdown rolls repository/team metrics up for a
 // project through projects -> team_project_ownership -> team_metrics_daily:
-// every team owning the project (as of the requested instant, or currently
-// on the current axis) contributes its own latest team_metrics_daily row.
+// every team owning the project (not ended before the window start for a
+// range, not ended before the instant for a point bound, or currently on the
+// current axis) contributes its own latest team_metrics_daily row.
 // Rows are returned in a deterministic (project, team) order -- the
 // query's own ORDER BY makes the scan order itself deterministic, which
 // RollupProjectMetrics' caller-visible ordering depends on.
