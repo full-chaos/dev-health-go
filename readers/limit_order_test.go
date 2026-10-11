@@ -273,10 +273,6 @@ func orderedLimitReads(t *testing.T) map[string][]orderedLimitRead {
 		_, err := readers.ReadTeamInvestment(ctx, c, org, ids, tb)
 		return err
 	})
-	addBounded("ReadProjectInvestment", "p.id, p.provider, p.team_id, im.investment_area, im.project_stream", func(c *fakeClient, tb readers.TimeBound) error {
-		_, err := readers.ReadProjectInvestment(ctx, c, org, ids, tb)
-		return err
-	})
 	addBounded("ReadTeamThemeMix", "team_id, kind, key", func(c *fakeClient, tb readers.TimeBound) error {
 		_, err := readers.ReadTeamThemeMix(ctx, c, org, ids, tb)
 		return err
