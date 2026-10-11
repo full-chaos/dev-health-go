@@ -38,8 +38,8 @@ const BugfixSubcategoryKey = "quality.bugfix"
 // weighted by each work unit's `effort_value`.
 //
 // CHAOS-4398 §0 (cohort-answer-plan.md): this is a NEW acr producer join,
-// not a reuse of investment.go's ReadTeamInvestment
-// -- those read `investment_metrics_daily`, fed by the deprecated legacy
+// not a reuse of the retired investment_metrics_daily reader
+// -- that read `investment_metrics_daily`, fed by the deprecated legacy
 // rule set (`investment_areas.yaml`: "do not use this file for canonical
 // WorkUnit categorization"), whose `investment_area` values are NOT the
 // canonical 5-theme taxonomy. The canonical distribution lives on
