@@ -62,29 +62,41 @@ ORDER BY p.created_at DESC, p.repo_id, p.number`, DefaultRowLimit)
 	return rows, nil
 }
 
-// PullRequestReviewRow is one row of git_pull_request_reviews's state.
+// PullRequestReviewRow is one row of git_pull_request_reviews's state, with
+// the row's full key (repository, pull request number, review id).
 type PullRequestReviewRow struct {
 	ReviewID string
 	State    string
 	RepoID   string
+	// Number is scanned as uint32, git_pull_request_reviews.number's column
+	// type (see PullRequestStateRow.Number).
+	Number uint32
 }
 
 // ReadPullRequestReviews reads git_pull_request_reviews.state, the same
 // column devhealthsource/tables.go's queryPullRequestReviews already reads.
 //
+// ids are "<repo_id>:<number>:<review_id>", the table's key (org_id,
+// repo_id, number, review_id) without the organization. A review id is not
+// unique inside a repository -- one provider names an approval by its
+// approver, so the same id recurs on every pull request that approver
+// approves -- and a key without the number would read every one of them for
+// one review. The repository UUID and the number hold no ':', so the review
+// id, last, may.
+//
 // CHAOS-3781 Tier B: a review is an immutable point event -- its state is
 // decided when it is submitted and is never revised -- so the only
 // temporal question is whether it had been submitted yet.
 func ReadPullRequestReviews(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound) ([]PullRequestReviewRow, error) {
-	statement := WithRowLimit(`SELECT r.review_id, ifNull(r.state, ''), toString(r.repo_id)
+	statement := WithRowLimit(`SELECT r.review_id, ifNull(r.state, ''), toString(r.repo_id), r.number
 FROM git_pull_request_reviews AS r FINAL
-WHERE r.org_id = {org_id:String} AND concat(toString(r.repo_id), ':', r.review_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("r.submitted_at")+`
+WHERE r.org_id = {org_id:String} AND concat(toString(r.repo_id), ':', toString(r.number), ':', r.review_id) IN {ids:Array(String)}`+timeBound.ExistencePredicate("r.submitted_at")+`
 ORDER BY r.submitted_at DESC, r.repo_id, r.number, r.review_id`, DefaultRowLimit)
 
 	var rows []PullRequestReviewRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadPullRequestReviews", statement, orgID, ids, func(row RowScanner) error {
 		var r PullRequestReviewRow
-		if scanErr := row.Scan(&r.ReviewID, &r.State, &r.RepoID); scanErr != nil {
+		if scanErr := row.Scan(&r.ReviewID, &r.State, &r.RepoID, &r.Number); scanErr != nil {
 			return scanErr
 		}
 		rows = append(rows, r)

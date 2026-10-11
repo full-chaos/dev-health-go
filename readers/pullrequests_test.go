@@ -72,13 +72,13 @@ func TestReadPullRequestReviews(t *testing.T) {
 	t.Run("happy path", func(t *testing.T) {
 		t.Parallel()
 		client := &fakeClient{tables: []fakeTable{
-			{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1"}}},
+			{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1", uint32(1042)}}},
 		}}
-		rows, err := readers.ReadPullRequestReviews(context.Background(), client, "org-1", []string{"repo-1:review-1"}, readers.TimeBound{})
+		rows, err := readers.ReadPullRequestReviews(context.Background(), client, "org-1", []string{"repo-1:1042:review-1"}, readers.TimeBound{})
 		if err != nil {
 			t.Fatalf("ReadPullRequestReviews() error = %v", err)
 		}
-		if len(rows) != 1 || rows[0] != (readers.PullRequestReviewRow{ReviewID: "review-1", State: "approved", RepoID: "repo-1"}) {
+		if len(rows) != 1 || rows[0] != (readers.PullRequestReviewRow{ReviewID: "review-1", State: "approved", RepoID: "repo-1", Number: 1042}) {
 			t.Fatalf("rows = %#v", rows)
 		}
 	})
@@ -86,7 +86,7 @@ func TestReadPullRequestReviews(t *testing.T) {
 	t.Run("query error propagates", func(t *testing.T) {
 		t.Parallel()
 		client := &fakeClient{tables: []fakeTable{{match: "FROM git_pull_request_reviews", err: errors.New("boom")}}}
-		rows, err := readers.ReadPullRequestReviews(context.Background(), client, "org-1", []string{"repo-1:review-1"}, readers.TimeBound{})
+		rows, err := readers.ReadPullRequestReviews(context.Background(), client, "org-1", []string{"repo-1:1042:review-1"}, readers.TimeBound{})
 		if err == nil || rows != nil {
 			t.Fatalf("rows = %#v, err = %v, want (nil, err)", rows, err)
 		}
