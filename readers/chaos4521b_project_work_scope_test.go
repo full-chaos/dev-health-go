@@ -119,15 +119,15 @@ func TestChaos4521b_ProjectReadersKeyOnTheProjectsOwnWorkScope(t *testing.T) {
 // ProjectOwnershipJoinSQL therefore has to stay, and stay used.
 func TestChaos4521b_TeamScopedProjectRollupsKeepTheOwnershipHop(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
-	if _, err := readers.ReadProjectInvestment(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
-		t.Fatalf("ReadProjectInvestment: %v", err)
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_metrics_daily", rows: nil}}}
+	if _, err := readers.ReadProjectMetricsBreakdown(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
+		t.Fatalf("ReadProjectMetricsBreakdown: %v", err)
 	}
 	if len(client.queries) != 1 {
 		t.Fatalf("queries = %d, want exactly one", len(client.queries))
 	}
 	if !strings.Contains(client.queries[0].statement, "team_project_ownership") {
-		t.Errorf("investment_metrics_daily is keyed by repo_id/team_id and has no project dimension; its project rollup must keep the ownership hop")
+		t.Errorf("team_metrics_daily is keyed by repo_id/team_id and has no project dimension; its project rollup must keep the ownership hop")
 	}
 }
 
@@ -147,13 +147,13 @@ func TestChaos4521b_TeamScopedProjectRollupsKeepTheOwnershipHop(t *testing.T) {
 // the work-scope readers use, through one named column constant.
 func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
-	if _, err := readers.ReadProjectInvestment(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
-		t.Fatalf("ReadProjectInvestment: %v", err)
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_metrics_daily", rows: nil}}}
+	if _, err := readers.ReadProjectMetricsBreakdown(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
+		t.Fatalf("ReadProjectMetricsBreakdown: %v", err)
 	}
 	statement := client.queries[0].statement
 
-	// The ownership edge is still joined -- investment_metrics_daily has no
+	// The ownership edge is still joined -- team_metrics_daily has no
 	// project dimension, so removing the hop would be a capability loss.
 	if !strings.Contains(statement, "team_project_ownership") {
 		t.Fatalf("the team-scoped rollup must keep the ownership hop\n%s", statement)
@@ -285,9 +285,9 @@ func TestChaos4521b_TheOwnershipJoinKeysOnProjectIdentityNotProjectKey(t *testin
 // second, drifting copy of the same fact.
 func TestChaos4521b_TheOwnershipJoinColumnConstantIsWhatTheSQLUses(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
-	if _, err := readers.ReadProjectInvestment(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
-		t.Fatalf("ReadProjectInvestment: %v", err)
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_metrics_daily", rows: nil}}}
+	if _, err := readers.ReadProjectMetricsBreakdown(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{}); err != nil {
+		t.Fatalf("ReadProjectMetricsBreakdown: %v", err)
 	}
 	statement := client.queries[0].statement
 	for _, fragment := range []string{

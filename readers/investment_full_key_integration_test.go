@@ -21,7 +21,7 @@ import (
 // investment_metrics_daily is append-only and a team that owns several
 // repositories writes one row per repository per run. A reader must take the
 // newest row per (day, repo) and then add the repositories up. These cells run
-// ReadTeamInvestment and ReadProjectInvestment against a real ClickHouse
+// ReadTeamInvestment against a real ClickHouse
 // table built by schema.DDL (the ops DDL chain: 007 columns incl. repo_id,
 // org_id from 024, sorting key from 027).
 
@@ -231,22 +231,6 @@ func fkClient(t *testing.T) (*clickhouse.Client, clickhousedriver.Conn) {
 	return client, seed
 }
 
-// fkSeedProject makes project "linear:proj-<team>" owned by team.
-func fkSeedProject(t *testing.T, seed clickhousedriver.Conn, team string) string {
-	t.Helper()
-	ctx := context.Background()
-	for _, stmt := range []string{
-		fmt.Sprintf("INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('proj-%s', '%s', 'linear', NULL, 'p', 1, 'started', '', '2026-01-01 00:00:00')", team, fkOrg),
-		fmt.Sprintf("INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES ('%s', 'linear', '%s', 'proj-%s', NULL, 'native', '2026-01-01 00:00:00', NULL, '2026-01-01 00:00:00')", fkOrg, team, team),
-		fmt.Sprintf("INSERT INTO teams (id, org_id, name, updated_at) VALUES ('%s', '%s', 'Team %s', '2026-01-01 00:00:00')", team, fkOrg, team),
-	} {
-		if err := seed.Exec(ctx, stmt); err != nil {
-			t.Fatalf("seed %q: %v", stmt, err)
-		}
-	}
-	return "linear:proj-" + team
-}
-
 func fkCheck(t *testing.T, label string, got *fkWant, want *fkWant) {
 	t.Helper()
 	if want == nil {
@@ -277,10 +261,8 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 	for i := 0; i < fkTieTeams; i++ {
 		cases = append(cases, fkCase{name: fmt.Sprintf("same-computed-at-%02d", i), rows: fkTieRows(i)})
 	}
-	projectKey := map[string]string{}
 	for _, c := range cases {
 		team := "t-" + c.name
-		projectKey[c.name] = fkSeedProject(t, seed, team)
 		for _, r := range c.rows {
 			if err := seed.Exec(ctx, fkSeedInsert(team, r)); err != nil {
 				t.Fatalf("seed: %v", err)
@@ -298,19 +280,13 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 		}
 	}
 	ids := make([]string, 0, len(cases))
-	projects := make([]string, 0, len(cases))
 	for _, c := range cases {
 		ids = append(ids, "t-"+c.name)
-		projects = append(projects, projectKey[c.name])
 	}
 
 	teamRows, err := readers.ReadTeamInvestment(ctx, client, fkOrg, ids, readers.TimeBound{})
 	if err != nil {
 		t.Fatalf("ReadTeamInvestment: %v", err)
-	}
-	projectRows, err := readers.ReadProjectInvestment(ctx, client, fkOrg, projects, readers.TimeBound{})
-	if err != nil {
-		t.Fatalf("ReadProjectInvestment: %v", err)
 	}
 	for _, r := range teamRows {
 		if r.TeamID == outTeam {
@@ -320,10 +296,6 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 	teamGot := map[string][]fkWant{}
 	for _, r := range teamRows {
 		teamGot[r.TeamID] = append(teamGot[r.TeamID], fkWant{day: r.Day, units: r.DeliveryUnits, items: r.WorkItemsCompleted, prs: r.PRsMerged, churn: r.ChurnLOC, cycle: r.CycleP50Hours, cycleKnown: r.CycleP50Known, mean: r.CycleP50HoursWeightedMean, meanKnown: r.CycleP50HoursWeightedMeanKnown})
-	}
-	projectGot := map[string][]fkWant{}
-	for _, r := range projectRows {
-		projectGot[r.TeamID] = append(projectGot[r.TeamID], fkWant{day: r.Day, units: r.DeliveryUnits, items: r.WorkItemsCompleted, prs: r.PRsMerged, churn: r.ChurnLOC, cycle: r.CycleP50Hours, cycleKnown: r.CycleP50Known, mean: r.CycleP50HoursWeightedMean, meanKnown: r.CycleP50HoursWeightedMeanKnown})
 	}
 	one := func(label string, got []fkWant) *fkWant {
 		t.Helper()
@@ -339,12 +311,10 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 		team := "t-" + c.name
 		if c.want != nil {
 			fkCheck(t, "ReadTeamInvestment "+c.name, one("team "+c.name, teamGot[team]), c.want)
-			fkCheck(t, "ReadProjectInvestment "+c.name, one("project "+c.name, projectGot[team]), c.want)
 			continue
 		}
 		if len(c.rows) == 0 {
 			fkCheck(t, "ReadTeamInvestment "+c.name, one("team "+c.name, teamGot[team]), nil)
-			fkCheck(t, "ReadProjectInvestment "+c.name, one("project "+c.name, projectGot[team]), nil)
 		}
 	}
 	// Same computed_at: the row with the larger cityHash64 of its value
@@ -356,7 +326,7 @@ func TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories(t *testi
 		if err := row.Scan(&winner); err != nil {
 			t.Fatal(err)
 		}
-		for label, got := range map[string][]fkWant{"ReadTeamInvestment": teamGot[team], "ReadProjectInvestment": projectGot[team]} {
+		for label, got := range map[string][]fkWant{"ReadTeamInvestment": teamGot[team]} {
 			if len(got) != 1 || got[0].units != int64(winner) || got[0].items != int64(winner) {
 				t.Errorf("same computed_at %s %s: got %+v, want the larger-hash row (units %d)", label, team, got, winner)
 			}
@@ -370,7 +340,6 @@ func TestIntegrationInvestmentReadersTimeBoundPicksLatestDayInWindow(t *testing.
 	client, seed := fkClient(t)
 	ctx := context.Background()
 	const team = "t-bound"
-	project := fkSeedProject(t, seed, team)
 	for _, r := range []fkRow{
 		{repo: fkRepo(1), day: "2026-02-27", at: "2026-02-28 10:00:00", units: 4, items: 4, cycle: 4},
 		{repo: fkRepo(2), day: "2026-02-27", at: "2026-02-28 10:00:00", units: 5, items: 5, cycle: 5},
@@ -388,13 +357,6 @@ func TestIntegrationInvestmentReadersTimeBoundPicksLatestDayInWindow(t *testing.
 	if len(teamRows) != 1 || teamRows[0].Day != "2026-02-27" || teamRows[0].DeliveryUnits != 9 {
 		t.Errorf("ReadTeamInvestment bounded = %+v, want one row, day 2026-02-27, units 9", teamRows)
 	}
-	projectRows, err := readers.ReadProjectInvestment(ctx, client, fkOrg, []string{project}, bound)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(projectRows) != 1 || projectRows[0].Day != "2026-02-27" || projectRows[0].DeliveryUnits != 9 {
-		t.Errorf("ReadProjectInvestment bounded = %+v, want one row, day 2026-02-27, units 9", projectRows)
-	}
 }
 
 // Each (area, stream) pair of a team is its own series with its own latest day.
@@ -402,7 +364,6 @@ func TestIntegrationInvestmentReadersLatestDayIsPerAreaAndStream(t *testing.T) {
 	client, seed := fkClient(t)
 	ctx := context.Background()
 	const team = "t-series"
-	project := fkSeedProject(t, seed, team)
 	for _, r := range []fkRow{
 		{repo: fkRepo(1), day: "2026-03-01", at: "2026-03-02 10:00:00", units: 1, items: 1},
 		{repo: fkRepo(2), day: "2026-03-01", at: "2026-03-02 10:00:00", units: 2, items: 2},
@@ -422,22 +383,15 @@ func TestIntegrationInvestmentReadersLatestDayIsPerAreaAndStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projectRows, err := readers.ReadProjectInvestment(ctx, client, fkOrg, []string{project}, readers.TimeBound{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, gotProject := map[string][2]any{}, map[string][2]any{}
+	got := map[string][2]any{}
 	for _, r := range teamRows {
 		got[r.InvestmentArea+"/"+r.ProjectStream] = [2]any{r.Day, r.DeliveryUnits}
 	}
-	for _, r := range projectRows {
-		gotProject[r.InvestmentArea+"/"+r.ProjectStream] = [2]any{r.Day, r.DeliveryUnits}
-	}
-	if len(teamRows) != len(want) || len(projectRows) != len(want) {
-		t.Errorf("rows: team %d, project %d, want %d each", len(teamRows), len(projectRows), len(want))
+	if len(teamRows) != len(want) {
+		t.Errorf("rows: team %d, want %d", len(teamRows), len(want))
 	}
 	for key, w := range want {
-		for label, m := range map[string]map[string][2]any{"ReadTeamInvestment": got, "ReadProjectInvestment": gotProject} {
+		for label, m := range map[string]map[string][2]any{"ReadTeamInvestment": got} {
 			if m[key] != [2]any{w.day, w.units} {
 				t.Errorf("%s %s = %v, want day %s units %d", label, key, m[key], w.day, w.units)
 			}
@@ -451,7 +405,6 @@ func TestIntegrationInvestmentReadersSameDayRepositoryKeepsEveryAreaAndStream(t 
 	client, seed := fkClient(t)
 	ctx := context.Background()
 	const team, day, at = "t-pairs", "2026-03-01", "2026-03-02 10:00:00"
-	project := fkSeedProject(t, seed, team)
 	for _, r := range []fkRow{
 		{repo: fkRepo(1), day: day, at: at, units: 1, items: 1},
 		{repo: fkRepo(1), day: day, at: at, units: 2, items: 2, areaName: "ops"},
@@ -466,23 +419,16 @@ func TestIntegrationInvestmentReadersSameDayRepositoryKeepsEveryAreaAndStream(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	projectRows, err := readers.ReadProjectInvestment(ctx, client, fkOrg, []string{project}, readers.TimeBound{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, gotProject := map[string]int64{}, map[string]int64{}
+	got := map[string]int64{}
 	for _, r := range teamRows {
 		got[r.InvestmentArea+"/"+r.ProjectStream] = r.DeliveryUnits
 	}
-	for _, r := range projectRows {
-		gotProject[r.InvestmentArea+"/"+r.ProjectStream] = r.DeliveryUnits
-	}
 	for key, w := range want {
-		if got[key] != w || gotProject[key] != w {
-			t.Errorf("%s: team %d, project %d, want %d", key, got[key], gotProject[key], w)
+		if got[key] != w {
+			t.Errorf("%s: team %d, want %d", key, got[key], w)
 		}
 	}
-	if len(teamRows) != len(want) || len(projectRows) != len(want) {
-		t.Errorf("rows: team %d, project %d, want %d each", len(teamRows), len(projectRows), len(want))
+	if len(teamRows) != len(want) {
+		t.Errorf("rows: team %d, want %d", len(teamRows), len(want))
 	}
 }
