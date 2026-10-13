@@ -63,9 +63,12 @@ func TestIntegrationCandidatesReadOnceDiag(t *testing.T) {
 		return readers.WorkItemScopeSQLAmong(scope, readers.WorkItemCandidateSubquery(sql,
 			readers.Binding{Name: "team_ids", Value: teams}, readers.Binding{Name: "cand_mod", Value: 1}))
 	}
-	type variant struct{ name, stmt string }
+	type variant struct {
+		name, stmt string
+		bindings   []readers.Binding
+	}
 	var variants []variant
-	variants = append(variants, variant{"base", memoryStatement(readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})})
+	variants = append(variants, variant{name: "base", stmt: memoryStatement(readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})})
 	for _, cand := range []struct{ n, sql string }{{"cur", memoryTeamCandidates}, {"scl", scalar}} {
 		r := bind(cand.sql)
 		pIdx := strings.Index(r.JoinSQL, "LEFT JOIN (SELECT wia_scope")
@@ -77,14 +80,20 @@ func TestIntegrationCandidatesReadOnceDiag(t *testing.T) {
 		mk := func(j string) string {
 			return memoryStatement(readers.WorkItemScopeSQLResult{AuthorizationExpr: "1", JoinSQL: j})
 		}
-		variants = append(variants, variant{cand.n + "-repo", mk(j0)}, variant{cand.n + "-proj", mk(j0 + " " + jp)}, variant{cand.n + "-link", mk(j0 + " " + jl)}, variant{cand.n + "-all", mk(r.JoinSQL)})
+		variants = append(variants, variant{cand.n + "-repo", mk(j0), r.Bindings}, variant{cand.n + "-proj", mk(j0 + " " + jp), r.Bindings}, variant{cand.n + "-link", mk(j0 + " " + jl), r.Bindings}, variant{cand.n + "-all", mk(r.JoinSQL), r.Bindings})
+	}
+	paramsFor := func(v variant) map[string]string {
+		params := map[string]string{"org_id": "org-300k", "team_ids": memoryParameter(teams), "cand_mod": "1"}
+		for _, b := range v.bindings {
+			params[b.Name] = memoryParameter(b.Value)
+		}
+		return params
 	}
 	for _, v := range variants {
 		if !strings.HasSuffix(v.name, "-all") {
 			continue
 		}
-		params := map[string]string{"org_id": "org-300k", "team_ids": memoryParameter(teams), "cand_mod": "1"}
-		qctx := clickhousedriver.Context(ctx, clickhousedriver.WithParameters(params))
+		qctx := clickhousedriver.Context(ctx, clickhousedriver.WithParameters(paramsFor(v)))
 		rows, err := conn.Query(qctx, "EXPLAIN actions = 1 "+v.stmt)
 		if err != nil {
 			t.Logf("DIAG explain %s: %v", v.name, err)
@@ -105,7 +114,7 @@ func TestIntegrationCandidatesReadOnceDiag(t *testing.T) {
 	byID := map[string]string{}
 	for _, v := range variants {
 		for rep := 0; rep < 5; rep++ {
-			params := map[string]string{"org_id": "org-300k", "team_ids": memoryParameter(teams), "cand_mod": "1"}
+			params := paramsFor(v)
 			id := fmt.Sprintf("%s-%s-%d", database, v.name, rep)
 			qctx := clickhousedriver.Context(ctx, clickhousedriver.WithQueryID(id), clickhousedriver.WithParameters(params))
 			var count, admitted uint64
