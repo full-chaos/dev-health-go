@@ -105,7 +105,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	type orgSize struct{ items, projects int }
-	sizes := map[string]orgSize{"org-30k": {30000, 1000}, "org-300k": {300000, 1000}, "org-300k-5kprojects": {300000, 5000}}
+	sizes := map[string]orgSize{"org-30k": {30000, 1000}, "org-300k": {300000, 1000}, "org-300k-5kprojects": {300000, 5000}, "org-300k-20kprojects": {300000, 20000}}
 	stmts := schema.DDL("projects", "repos", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_items", "work_item_team_attributions")
 	for org, size := range sizes {
 		stmts = append(stmts, memorySeed(org, size.items, size.projects)...)
@@ -193,5 +193,6 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	if got := share("org-300k-5kprojects", "candidates"); got >= 32*mib {
 		t.Errorf("candidates relation at 300k work items and 5k projects = %.2f MiB, want < 32", float64(got)/mib)
 	}
-	t.Logf("candidates relation: %.2f MiB with 1k projects, %.2f MiB with 5k projects", float64(share("org-300k", "candidates"))/mib, float64(share("org-300k-5kprojects", "candidates"))/mib)
+	t.Logf("candidates relation at 300k work items: %.2f MiB with 1k projects, %.2f MiB with 5k, %.2f MiB with 20k (logged, not bounded)",
+		float64(share("org-300k", "candidates"))/mib, float64(share("org-300k-5kprojects", "candidates"))/mib, float64(share("org-300k-20kprojects", "candidates"))/mib)
 }
