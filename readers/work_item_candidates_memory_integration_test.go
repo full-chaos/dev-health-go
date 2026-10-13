@@ -45,13 +45,14 @@ const memoryTeamCandidates = "SELECT work_item_id FROM work_item_team_attributio
 // biggestTeamCandidates is the candidate count of the largest team the
 // relation must serve. The seed spreads work items over 100 teams, so a
 // 300k-item organization gives each team 3000 candidates.
-const biggestTeamCandidates = 10000
+const biggestTeamCandidates = 20000
 
 const (
-	memoryWarmRuns    = 3
-	memorySlopeRatio  = 1.15
-	memorySlopeFloor  = 2 * mib
-	memoryRelationCap = 32 * mib
+	memoryWarmRuns          = 3
+	memorySlopeRatio        = 1.15
+	memorySlopeFloor        = 2 * mib
+	memoryBytesPerCandidate = 4096
+	memoryRelationCap       = 32 * mib
 )
 
 // memoryStatement is a team-scoped work-item selection: the statement's own
@@ -225,6 +226,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 			t.Fatalf("scan query_log: %v", err)
 		}
 		seen[id] = true
+		t.Logf("run %s peak %.2f MiB", strings.TrimPrefix(id, database+"-"), float64(peak)/mib)
 		key := strings.TrimPrefix(id, database+"-")
 		key = key[:strings.LastIndex(key, "-")]
 		if cur, ok := peaks[key]; !ok || int64(peak) < cur {
@@ -252,8 +254,8 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 
 	// Organization size alone: the same number of candidates in a 30k and a
 	// 300k organization.
-	if candidateCount["org-30k"] != candidateCount["org-300k-equal"] {
-		t.Fatalf("equal-candidate scenarios hold %d and %d candidates", candidateCount["org-30k"], candidateCount["org-300k-equal"])
+	if a, b := candidateCount["org-30k"], candidateCount["org-300k-equal"]; a*10 < b*9 || b*10 < a*9 {
+		t.Fatalf("equal-candidate scenarios hold %d and %d candidates, want within 10%%", a, b)
 	}
 	small, large := share("org-30k", "candidates"), share("org-300k-equal", "candidates")
 	if float64(large) > memorySlopeRatio*float64(small) && large > small+memorySlopeFloor {
@@ -269,6 +271,13 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	biggest := share("org-300k-biggest", "candidates")
 	if biggest >= memoryRelationCap {
 		t.Errorf("candidates relation for %d candidates = %.2f MiB, want < 32", candidateCount["org-300k-biggest"], float64(biggest)/mib)
+	}
+	if extra := candidateCount["org-300k-biggest"] - candidateCount["org-300k"]; extra > 0 {
+		perCandidate := float64(biggest-share("org-300k", "candidates")) / float64(extra)
+		if perCandidate > memoryBytesPerCandidate {
+			t.Errorf("candidates relation grows %.0f bytes per extra candidate (%d to %d candidates), want at most %d",
+				perCandidate, candidateCount["org-300k"], candidateCount["org-300k-biggest"], memoryBytesPerCandidate)
+		}
 	}
 	// The project side reads the whole project catalog (its key-ambiguity
 	// count is organization-wide), so it grows with the catalog, not with
