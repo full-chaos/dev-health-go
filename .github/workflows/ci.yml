@@ -148,6 +148,9 @@ jobs:
           go test -tags=integration -count=1 -json \
             -run '^(TestIntegrationWorkItemReadersRespectScopeAndLimits|TestIntegrationWorkItemAuthorizationPaths|TestIntegrationLimitReadsServeTheSameRowsForAnyPartOrder|TestIntegrationInvestmentReadersDedupeByFullKeyThenSumRepositories|TestIntegrationInvestmentReadersTimeBoundPicksLatestDayInWindow|TestIntegrationInvestmentReadersLatestDayIsPerAreaAndStream|TestIntegrationInvestmentReadersSameDayRepositoryKeepsEveryAreaAndStream|TestIntegrationTeamMetricsReadersSumRepositoriesAfterFullKeyDedupe|TestIntegrationTeamMetricsReadersTimeBoundPicksLatestDayInWindow|TestIntegrationTeamMetricsReadersTieAfterMergeServesOneWholeRow|TestIntegrationWorkItemCandidatesDifferential|TestIntegrationWorkItemCandidatesMemory)$' ./readers \
             | tee test-results/readers-integration.json
+      - name: DIAG read once
+        if: always()
+        run: go test -tags=integration -count=1 -v -run '^TestIntegrationCandidatesReadOnceDiag$' ./readers 2>&1 | grep -E 'DIAG|FAIL|panic|Error' || true
       - name: Upload readers integration test JSON
         if: always()
         uses: actions/upload-artifact@v4
