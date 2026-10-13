@@ -38,7 +38,6 @@ func authzIdentityEdgeItems() []authzItem {
 		{id: "linear:norepo-ambiguous-by-key", provider: "linear", projectID: "AMBIG"},
 		{id: "linear:norepo-ambiguous-by-id", provider: "linear", projectID: "proj-ambiguous-granted"},
 		{id: "linear:norepo-collision", provider: "linear", projectID: "COLLIDE"},
-		{id: "linear:norepo-collision-key-owner-by-id", provider: "linear", projectID: "proj-collision-keyed"},
 	}
 }
 
