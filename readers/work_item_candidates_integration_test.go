@@ -27,10 +27,12 @@ func authzCandidateScopes() []authzCandidateScope {
 }
 
 // authzWithoutCandidatePaths is the row a work item outside the candidate
-// set must read: no project or link aggregate joins it, so both repo-less
-// paths are false, their evidence and the excluded links are empty, and
-// only the organization grant or the item's own repository can admit it.
-func authzWithoutCandidatePaths(row authzReadRow) authzReadRow {
+// set must read: no link aggregate joins it, so its link path is false and
+// its excluded links are empty. The project aggregate is per project, so it
+// still joins when a candidate item names the same provider and project
+// (projectKept) and is otherwise gone too. Only the organization grant, the
+// item's own repository or a kept project can admit it.
+func authzWithoutCandidatePaths(row authzReadRow, projectKept bool) authzReadRow {
 	out := authzReadRow{paths: map[string]bool{}, evidence: map[string][]string{}}
 	for path, ok := range row.paths {
 		out.paths[path] = ok
@@ -38,11 +40,18 @@ func authzWithoutCandidatePaths(row authzReadRow) authzReadRow {
 	for path, repos := range row.evidence {
 		out.evidence[path] = repos
 	}
-	for _, path := range []string{readers.WorkItemAuthorizationProjectOwnership, readers.WorkItemAuthorizationPullRequestLink} {
+	dropped := []string{readers.WorkItemAuthorizationPullRequestLink}
+	if !projectKept {
+		dropped = append(dropped, readers.WorkItemAuthorizationProjectOwnership)
+	}
+	for _, path := range dropped {
 		out.paths[path] = false
 		delete(out.evidence, path)
 	}
-	out.authorized = out.paths[readers.WorkItemAuthorizationOrganizationGrant] || out.paths[readers.WorkItemAuthorizationDirectRepository]
+	out.authorized = false
+	for _, ok := range out.paths {
+		out.authorized = out.authorized || ok
+	}
 	return out
 }
 
@@ -103,11 +112,18 @@ func TestIntegrationWorkItemCandidatesDifferential(t *testing.T) {
 				if len(got) != len(items) {
 					t.Fatalf("%s: narrowed relation returned %d rows, want %d", v.name, len(got), len(items))
 				}
+				candidateProjects := map[[2]string]bool{}
+				for _, item := range items {
+					if v.dropped != nil && (len(v.dropped) == 0 || v.dropped[item.id]) {
+						continue
+					}
+					candidateProjects[[2]string{item.provider, item.projectID}] = true
+				}
 				for _, item := range items {
 					want := base[item.id]
 					outside := v.dropped != nil && (len(v.dropped) == 0 || v.dropped[item.id])
 					if outside {
-						want = authzWithoutCandidatePaths(want)
+						want = authzWithoutCandidatePaths(want, candidateProjects[[2]string{item.provider, item.projectID}])
 						if base[item.id].authorized && !want.authorized {
 							denied++
 						}

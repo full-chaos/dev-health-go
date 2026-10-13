@@ -156,11 +156,11 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	}
 	for rows.Next() {
 		var id string
-		var peak int64
+		var peak uint64
 		if err := rows.Scan(&id, &peak); err != nil {
 			t.Fatalf("scan query_log: %v", err)
 		}
-		peaks[strings.TrimPrefix(id, database+"-")] = peak
+		peaks[strings.TrimPrefix(id, database+"-")] = int64(peak)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("query_log rows: %v", err)
