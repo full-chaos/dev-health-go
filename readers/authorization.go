@@ -238,7 +238,7 @@ func workItemProjectAuthorizationJoinSQL(prefix string, candidates WorkItemCandi
 	scopes := "SELECT provider, id, scope FROM " + ProjectIdentityCatalogSQL()
 	if candidates.relation != "" {
 		candidateScopes := "(SELECT provider, project_id FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN " + candidates.relation + ")"
-		ownedProjects += " WHERE (provider, id) IN (SELECT provider, id FROM " + ProjectIdentityCatalogSQL() + " WHERE (provider, scope) IN " + candidateScopes + ")"
+		ownedProjects += " WHERE (provider, id) IN (SELECT provider, id FROM " + ProjectIdentityCatalogSQL() + " WHERE (provider, scope) IN " + candidateScopes + " ORDER BY id LIMIT 1 BY provider, scope)"
 		scopes += " WHERE (provider, scope) IN " + candidateScopes
 	}
 	owned := "SELECT wia_owned_project.provider AS wia_owned_provider, wia_owned_project.id AS wia_owned_id, " + repositorySlugSQL("wia_owned_repo.repo") + " AS wia_owned_repository " +
