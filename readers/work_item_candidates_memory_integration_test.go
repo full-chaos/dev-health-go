@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -39,7 +40,19 @@ func memorySeed(org string, n, projects int) []string {
 	}
 }
 
-const memoryTeamCandidates = "SELECT work_item_id FROM work_item_team_attributions WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)}"
+const memoryTeamCandidates = "SELECT work_item_id FROM work_item_team_attributions WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)} AND cityHash64(work_item_id) % {cand_mod:UInt64} = 0"
+
+// biggestTeamCandidates is the candidate count of the largest team the
+// relation must serve. The seed spreads work items over 100 teams, so a
+// 300k-item organization gives each team 3000 candidates.
+const biggestTeamCandidates = 10000
+
+const (
+	memoryWarmRuns    = 3
+	memorySlopeRatio  = 1.15
+	memorySlopeFloor  = 2 * mib
+	memoryRelationCap = 32 * mib
+)
 
 // memoryStatement is a team-scoped work-item selection: the statement's own
 // rows are one team's, so whatever grows with the organization is the
@@ -66,11 +79,12 @@ func memoryParameter(value any) string {
 }
 
 // TestIntegrationWorkItemCandidatesMemory measures the peak memory of a
-// team-scoped statement over a 30k and a 300k work-item organization: with
-// no authorization relation, with the unnarrowed one, and with candidates.
-// With candidates the relation's share stays under 32 MiB and does not grow
-// with the organization; unnarrowed it does, which shows the measurement
-// sees organization size at all.
+// team-scoped statement with no authorization relation, with the unnarrowed
+// one, and with candidates. It separates two inputs: organization size at a
+// fixed candidate count must not grow the relation (min of three warm runs,
+// slope rule), and the candidate count may, within the cap, because a bigger
+// team is a real input. Unnarrowed, the relation grows with organization
+// size, which shows the measurement sees it at all.
 func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	required := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1"
 	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
@@ -118,35 +132,83 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	}
 
 	scope := readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: readers.RepositorySelectorSet{Owners: []string{"acme/*"}}}}
-	team := []string{"team-7"}
-	run := func(org, mode string, rendered readers.WorkItemScopeSQLResult) (uint64, uint64, string) {
+	teamsFor := func(n int) []string {
+		teams := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			teams = append(teams, fmt.Sprintf("team-%d", 7+i))
+		}
+		return teams
+	}
+	// A scenario fixes the organization, the teams and the share of their
+	// work items kept as candidates, so the organization size and the
+	// candidate count move independently.
+	type scenario struct {
+		org   string
+		teams []string
+		mod   int
+	}
+	scenarios := map[string]scenario{
+		"org-30k":              {"org-30k", teamsFor(1), 1},
+		"org-300k":             {"org-300k", teamsFor(1), 1},
+		"org-300k-equal":       {"org-300k", teamsFor(1), 10},
+		"org-300k-5kprojects":  {"org-300k-5kprojects", teamsFor(1), 1},
+		"org-300k-20kprojects": {"org-300k-20kprojects", teamsFor(1), 1},
+		"org-300k-biggest":     {"org-300k", teamsFor((biggestTeamCandidates + 2999) / 3000), 1},
+	}
+	scenarioNames := make([]string, 0, len(scenarios))
+	for name := range scenarios {
+		scenarioNames = append(scenarioNames, name)
+	}
+	sort.Strings(scenarioNames)
+
+	candidateCount := map[string]int64{}
+	for name, sc := range scenarios {
+		params := map[string]string{"org_id": sc.org, "team_ids": memoryParameter(sc.teams), "cand_mod": fmt.Sprint(sc.mod)}
+		qctx := clickhousedriver.Context(ctx, clickhousedriver.WithParameters(params))
+		var n uint64
+		if err := conn.QueryRow(qctx, "SELECT count() FROM ("+memoryTeamCandidates+")").Scan(&n); err != nil {
+			t.Fatalf("count candidates %s: %v", name, err)
+		}
+		candidateCount[name] = int64(n)
+		t.Logf("scenario %s: %d candidates", name, n)
+	}
+
+	run := func(name, mode string, rep int, rendered readers.WorkItemScopeSQLResult) (uint64, uint64, string) {
 		t.Helper()
-		params := map[string]string{"org_id": org, "team_ids": memoryParameter(team)}
+		sc := scenarios[name]
+		params := map[string]string{"org_id": sc.org, "team_ids": memoryParameter(sc.teams), "cand_mod": fmt.Sprint(sc.mod)}
 		for _, b := range rendered.Bindings {
 			params[b.Name] = memoryParameter(b.Value)
 		}
-		queryID := fmt.Sprintf("%s-%s-%s", database, org, mode)
+		queryID := fmt.Sprintf("%s-%s-%s-%d", database, name, mode, rep)
 		qctx := clickhousedriver.Context(ctx, clickhousedriver.WithQueryID(queryID), clickhousedriver.WithParameters(params))
 		var count, admitted uint64
 		if err := conn.QueryRow(qctx, memoryStatement(rendered)).Scan(&count, &admitted); err != nil {
-			t.Fatalf("%s %s: %v", org, mode, err)
+			t.Fatalf("%s %s: %v", name, mode, err)
 		}
 		return count, admitted, queryID
 	}
 
+	// Each statement runs memoryWarmRuns times and the smallest peak counts:
+	// one peak of a short multi-threaded query carries several MiB of
+	// scheduling noise on either ClickHouse version.
 	peaks := map[string]int64{}
 	var queryIDs []string
-	for org := range sizes {
-		baseCount, _, baseID := run(org, "baseline", readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})
-		oldCount, oldAdmitted, oldID := run(org, "unnarrowed", readers.WorkItemScopeSQL(scope))
-		newCount, newAdmitted, newID := run(org, "candidates", readers.WorkItemScopeSQLAmong(scope, readers.WorkItemCandidateSubquery(memoryTeamCandidates, readers.Binding{Name: "team_ids", Value: team})))
-		if oldCount == 0 || oldAdmitted == 0 || oldAdmitted == oldCount || baseCount != oldCount {
-			t.Fatalf("%s: %d rows (baseline %d), %d admitted: the seed must hold admitted and denied rows", org, oldCount, baseCount, oldAdmitted)
+	for _, name := range scenarioNames {
+		sc := scenarios[name]
+		for rep := 0; rep < memoryWarmRuns; rep++ {
+			baseCount, _, baseID := run(name, "baseline", rep, readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})
+			oldCount, oldAdmitted, oldID := run(name, "unnarrowed", rep, readers.WorkItemScopeSQL(scope))
+			newCount, newAdmitted, newID := run(name, "candidates", rep, readers.WorkItemScopeSQLAmong(scope, readers.WorkItemCandidateSubquery(memoryTeamCandidates,
+				readers.Binding{Name: "team_ids", Value: sc.teams}, readers.Binding{Name: "cand_mod", Value: sc.mod})))
+			if oldCount == 0 || oldAdmitted == 0 || oldAdmitted == oldCount || baseCount != oldCount {
+				t.Fatalf("%s: %d rows (baseline %d), %d admitted: the seed must hold admitted and denied rows", name, oldCount, baseCount, oldAdmitted)
+			}
+			if newCount != oldCount || newAdmitted != oldAdmitted {
+				t.Errorf("%s: candidates read %d rows, %d admitted; unnarrowed read %d, %d", name, newCount, newAdmitted, oldCount, oldAdmitted)
+			}
+			queryIDs = append(queryIDs, baseID, oldID, newID)
 		}
-		if newCount != oldCount || newAdmitted != oldAdmitted {
-			t.Errorf("%s: candidates read %d rows, %d admitted; unnarrowed read %d, %d", org, newCount, newAdmitted, oldCount, oldAdmitted)
-		}
-		queryIDs = append(queryIDs, baseID, oldID, newID)
 	}
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("flush logs: %v", err)
@@ -155,19 +217,25 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
+	seen := map[string]bool{}
 	for rows.Next() {
 		var id string
 		var peak uint64
 		if err := rows.Scan(&id, &peak); err != nil {
 			t.Fatalf("scan query_log: %v", err)
 		}
-		peaks[strings.TrimPrefix(id, database+"-")] = int64(peak)
+		seen[id] = true
+		key := strings.TrimPrefix(id, database+"-")
+		key = key[:strings.LastIndex(key, "-")]
+		if cur, ok := peaks[key]; !ok || int64(peak) < cur {
+			peaks[key] = int64(peak)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("query_log rows: %v", err)
 	}
 	for _, id := range queryIDs {
-		if _, ok := peaks[strings.TrimPrefix(id, database+"-")]; !ok {
+		if !seen[id] {
 			t.Fatalf("no query_log row for %s: the peak was never measured", id)
 		}
 	}
@@ -177,22 +245,40 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 
 	// The authorization relation's share of a peak is the statement's peak
 	// less the same statement's peak with no authorization relation.
-	share := func(org, mode string) int64 { return peaks[org+"-"+mode] - peaks[org+"-baseline"] }
+	share := func(name, mode string) int64 { return peaks[name+"-"+mode] - peaks[name+"-baseline"] }
 	if grew := share("org-300k", "unnarrowed") - share("org-30k", "unnarrowed"); grew < 32*mib {
 		t.Fatalf("unnarrowed relation grew %.2f MiB from 30k to 300k work items, want at least 32: the measurement does not see organization size", float64(grew)/mib)
 	}
-	if got := share("org-300k", "candidates"); got >= 32*mib {
+
+	// Organization size alone: the same number of candidates in a 30k and a
+	// 300k organization.
+	if candidateCount["org-30k"] != candidateCount["org-300k-equal"] {
+		t.Fatalf("equal-candidate scenarios hold %d and %d candidates", candidateCount["org-30k"], candidateCount["org-300k-equal"])
+	}
+	small, large := share("org-30k", "candidates"), share("org-300k-equal", "candidates")
+	if float64(large) > memorySlopeRatio*float64(small) && large > small+memorySlopeFloor {
+		t.Errorf("candidates relation grew with organization size at %d candidates: %.2f MiB at 30k, %.2f MiB at 300k work items, want at most x%.2f or +%.0f MiB",
+			candidateCount["org-30k"], float64(small)/mib, float64(large)/mib, memorySlopeRatio, float64(memorySlopeFloor)/mib)
+	}
+
+	// Candidate count: a bigger team is a real input, so the relation may
+	// grow with it, but the largest team still fits under the cap.
+	if got := share("org-300k", "candidates"); got >= memoryRelationCap {
 		t.Errorf("candidates relation at 300k = %.2f MiB, want < 32", float64(got)/mib)
 	}
-	if grew := share("org-300k", "candidates") - share("org-30k", "candidates"); grew > 8*mib {
-		t.Errorf("candidates relation grew %.2f MiB from 30k to 300k work items, want at most 8", float64(grew)/mib)
+	biggest := share("org-300k-biggest", "candidates")
+	if biggest >= memoryRelationCap {
+		t.Errorf("candidates relation for %d candidates = %.2f MiB, want < 32", candidateCount["org-300k-biggest"], float64(biggest)/mib)
 	}
 	// The project side reads the whole project catalog (its key-ambiguity
 	// count is organization-wide), so it grows with the catalog, not with
 	// work items. Five times the projects stays under the same bound.
-	if got := share("org-300k-5kprojects", "candidates"); got >= 32*mib {
+	if got := share("org-300k-5kprojects", "candidates"); got >= memoryRelationCap {
 		t.Errorf("candidates relation at 300k work items and 5k projects = %.2f MiB, want < 32", float64(got)/mib)
 	}
+	t.Logf("candidates relation: %.2f MiB at %d candidates (30k), %.2f MiB at %d (300k, equal), %.2f MiB at %d (300k), %.2f MiB at %d (300k, biggest team)",
+		float64(small)/mib, candidateCount["org-30k"], float64(large)/mib, candidateCount["org-300k-equal"],
+		float64(share("org-300k", "candidates"))/mib, candidateCount["org-300k"], float64(biggest)/mib, candidateCount["org-300k-biggest"])
 	t.Logf("candidates relation at 300k work items: %.2f MiB with 1k projects, %.2f MiB with 5k, %.2f MiB with 20k (logged, not bounded)",
 		float64(share("org-300k", "candidates"))/mib, float64(share("org-300k-5kprojects", "candidates"))/mib, float64(share("org-300k-20kprojects", "candidates"))/mib)
 }
