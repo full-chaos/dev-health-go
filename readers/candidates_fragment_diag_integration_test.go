@@ -86,6 +86,18 @@ func TestIntegrationCandidatesFragmentDiag(t *testing.T) {
 		"12-stmt-plus-link":     memoryStmtWith(j0+" "+jl, "1"),
 		"13-stmt-all":           memoryStmtWith(join, "1"),
 	}
+	modCandidates := memoryTeamCandidates + " AND cityHash64(work_item_id) % {wia_mod:UInt64} = 0"
+	modRendered := readers.WorkItemScopeSQLAmong(scope, readers.WorkItemCandidateSubquery(modCandidates, readers.Binding{Name: "team_ids", Value: team}, readers.Binding{Name: "mod_unused", Value: 1}))
+	modStmt := func(joinSQL string) string {
+		return strings.ReplaceAll(memoryStmtWith(joinSQL, "1"), memoryTeamCandidates, modCandidates)
+	}
+	mj := modRendered.JoinSQL
+	mp := strings.Index(mj, "LEFT JOIN (SELECT wia_scope")
+	ml := strings.Index(mj, "LEFT JOIN (SELECT wia_link.work_item_id")
+	statements["20-eqcand-repojoin"] = modStmt(mj[:mp])
+	statements["21-eqcand-project"] = modStmt(mj[:ml])
+	statements["22-eqcand-link"] = modStmt(mj[:mp] + " " + mj[ml:])
+	statements["23-eqcand-all"] = modStmt(mj)
 	keys := make([]string, 0, len(statements))
 	for k := range statements {
 		keys = append(keys, k)
@@ -101,7 +113,10 @@ func TestIntegrationCandidatesFragmentDiag(t *testing.T) {
 	for _, org := range []string{"org-30k", "org-300k"} {
 		for _, key := range keys {
 			for rep := 0; rep < 3; rep++ {
-				params := map[string]string{"org_id": org, "team_ids": memoryParameter(team)}
+				params := map[string]string{"org_id": org, "team_ids": memoryParameter(team), "wia_mod": "1"}
+				if org == "org-300k" {
+					params["wia_mod"] = "10"
+				}
 				for _, b := range rendered.Bindings {
 					params[b.Name] = memoryParameter(b.Value)
 				}
