@@ -17,10 +17,10 @@ import (
 
 const mib = 1 << 20
 
-// memorySeed seeds one organization of n work items: half repo-less, 1000
-// projects owned by 100 teams over 300 repositories, 1.5 links per item
-// across every provenance, and one team attribution per item.
-func memorySeed(org string, n int) []string {
+// memorySeed seeds one organization of n work items: half repo-less, the
+// given number of projects owned by 100 teams over 300 repositories, 1.5
+// links per item across every provenance, and one team attribution per item.
+func memorySeed(org string, n, projects int) []string {
 	repoID := func(expr string) string {
 		return "toUUID(UUIDNumToString(MD5(concat('" + org + "repo', toString(" + expr + ")))))"
 	}
@@ -30,10 +30,10 @@ func memorySeed(org string, n int) []string {
 	repoOrNone := "if(number % 2 = 0, toUUID('00000000-0000-0000-0000-000000000000'), " + repoID("number % 300") + ")"
 	return []string{
 		"INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) SELECT " + repoID("number") + ", if(number % 3 = 0, concat('other/repo-', toString(number)), concat('acme/repo-', toString(number))), now(), now(), '" + org + "', 'github' FROM numbers(300)",
-		"INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) SELECT concat('proj-', toString(number)), '" + org + "', 'linear', if(number % 10 = 0, concat('KEY', toString(number)), NULL), 'p', 1, 'started', '', now() FROM numbers(1000)",
-		"INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) SELECT '" + org + "', 'linear', concat('team-', toString(number % 100)), concat('proj-', toString(number)), NULL, 'native', '2026-01-01 00:00:00', NULL, now() FROM numbers(1000)",
+		"INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) SELECT concat('proj-', toString(number)), '" + org + "', 'linear', if(number % 10 = 0, concat('KEY', toString(number)), NULL), 'p', 1, 'started', '', now() FROM numbers(" + fmt.Sprint(projects) + ")",
+		"INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) SELECT '" + org + "', 'linear', concat('team-', toString(number % 100)), concat('proj-', toString(number)), NULL, 'native', '2026-01-01 00:00:00', NULL, now() FROM numbers(" + fmt.Sprint(projects) + ")",
 		"INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) SELECT '" + org + "', 'github', concat('team-', toString(intDiv(number, 3))), " + repoID("number") + ", '', 'exact', 'inferred', 0, 0, 0, '2026-01-01 00:00:00', NULL, now() FROM numbers(300)",
-		fmt.Sprintf("INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) SELECT %s, %s, 'linear', 't', 'issue', 'open', '', if(number %% 10 = 0, concat('KEY', toString(number %% 1000 - number %% 10)), concat('proj-', toString(number %% 1000))), '', '', now(), now(), NULL, '', '', now(), '%s' FROM numbers(%d)", repoOrNone, itemID("number"), org, n),
+		fmt.Sprintf("INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) SELECT %s, %s, 'linear', 't', 'issue', 'open', '', if(number %% 10 = 0, concat('KEY', toString(number %% %[5]d - number %% 10)), concat('proj-', toString(number %% %[5]d))), '', '', now(), now(), NULL, '', '', now(), '%[3]s' FROM numbers(%[4]d)", repoOrNone, itemID("number"), org, n, projects),
 		fmt.Sprintf("INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) SELECT %s, %s, toUInt32(number), 1, multiIf(number %% 20 < 12, 'native', number %% 20 < 17, 'explicit_text', 'heuristic'), 'e', now(), '%s' FROM numbers(%d)", repoID("number % 297"), itemID(fmt.Sprintf("number %% %d", n)), org, n*3/2),
 		fmt.Sprintf("INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at) SELECT '%s', %s, %s, concat('team-', toString(number %% 100)), 'n', 'project_ownership', 1, 'high', now() FROM numbers(%d)", org, repoOrNone, itemID("number"), n),
 	}
@@ -104,10 +104,11 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	sizes := map[string]int{"org-30k": 30000, "org-300k": 300000}
+	type orgSize struct{ items, projects int }
+	sizes := map[string]orgSize{"org-30k": {30000, 1000}, "org-300k": {300000, 1000}, "org-300k-5kprojects": {300000, 5000}}
 	stmts := schema.DDL("projects", "repos", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_items", "work_item_team_attributions")
-	for org, n := range sizes {
-		stmts = append(stmts, memorySeed(org, n)...)
+	for org, size := range sizes {
+		stmts = append(stmts, memorySeed(org, size.items, size.projects)...)
 	}
 	stmts = append(stmts, "OPTIMIZE TABLE work_items FINAL", "OPTIMIZE TABLE work_graph_issue_pr FINAL")
 	for _, stmt := range stmts {
@@ -186,4 +187,11 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	if grew := share("org-300k", "candidates") - share("org-30k", "candidates"); grew > 8*mib {
 		t.Errorf("candidates relation grew %.2f MiB from 30k to 300k work items, want at most 8", float64(grew)/mib)
 	}
+	// The project side reads the whole project catalog (its key-ambiguity
+	// count is organization-wide), so it grows with the catalog, not with
+	// work items. Five times the projects stays under the same bound.
+	if got := share("org-300k-5kprojects", "candidates"); got >= 32*mib {
+		t.Errorf("candidates relation at 300k work items and 5k projects = %.2f MiB, want < 32", float64(got)/mib)
+	}
+	t.Logf("candidates relation: %.2f MiB with 1k projects, %.2f MiB with 5k projects", float64(share("org-300k", "candidates"))/mib, float64(share("org-300k-5kprojects", "candidates"))/mib)
 }
