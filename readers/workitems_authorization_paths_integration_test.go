@@ -62,6 +62,8 @@ var (
 	authzProjectNonOwned = authzProject{id: "proj-nongranted", provider: "linear", owned: []authzRepo{authzRepoNonGranted}}
 	// Answers to its unambiguous key as well as its id.
 	authzProjectKeyed = authzProject{id: "proj-keyed", key: "KEYED", provider: "linear", owned: []authzRepo{authzRepoGranted}}
+	// Reached only by its key: no item names its id.
+	authzProjectKeyOnly = authzProject{id: "proj-key-only", key: "KEYONLY", provider: "linear", owned: []authzRepo{authzRepoGranted}}
 	// Owned by the granted team only through an expired ownership window.
 	authzProjectExpired = authzProject{id: "proj-expired", provider: "linear"}
 	// A project no team owns.
@@ -315,6 +317,7 @@ func authzItems() []authzItem {
 		authzItem{id: "", provider: "linear"},
 		authzItem{id: "linear:norepo-projkeyed-by-key", provider: "linear", projectID: authzProjectKeyed.key, project: &authzProjectKeyed},
 		authzItem{id: "linear:norepo-projkeyed-by-id", provider: "linear", projectID: authzProjectKeyed.id, project: &authzProjectKeyed},
+		authzItem{id: "linear:norepo-projkeyonly-by-key", provider: "linear", projectID: authzProjectKeyOnly.key, project: &authzProjectKeyOnly},
 		authzItem{id: "linear:norepo-projexpired", provider: "linear", projectID: authzProjectExpired.id, project: &authzProjectExpired},
 		authzItem{id: "linear:norepo-projunowned", provider: "linear", projectID: authzProjectUnowned.id, project: &authzProjectUnowned},
 		authzItem{id: "linear:norepo-projnullrepo", provider: "linear", projectID: authzProjectNullRepo.id, project: &authzProjectNullRepo},
@@ -331,7 +334,7 @@ func authzSeedStatements(items []authzItem) []string {
 	for _, repo := range []authzRepo{authzRepoGranted, authzRepoNonGranted, authzRepoOtherOrg, authzRepoUpper, authzRepoMalformed, authzRepoZero} {
 		stmts = append(stmts, fmt.Sprintf("INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES ('%s', '%s', %s, %s, '%s', 'github')", repo.id, repo.slug, at, at, repo.org))
 	}
-	for _, project := range []authzProject{authzProjectOwned, authzProjectNonOwned, authzProjectKeyed, authzProjectExpired, authzProjectUnowned, authzProjectNullRepo, authzProjectOtherOrg,
+	for _, project := range []authzProject{authzProjectOwned, authzProjectNonOwned, authzProjectKeyed, authzProjectKeyOnly, authzProjectExpired, authzProjectUnowned, authzProjectNullRepo, authzProjectOtherOrg,
 		authzProjectTeamRepoOtherOrg, authzProjectForeignRepo, authzProjectZeroRepo, authzProjectMalformed, authzProjectUpper, authzProjectEmptyID,
 		authzProjectTwoRepos, authzProjectDupLinear, authzProjectDupJira} {
 		key := "NULL"
@@ -350,6 +353,7 @@ func authzSeedStatements(items []authzItem) []string {
 		tpo(authzOrg, "team-granted", authzProjectOwned.id, "NULL"),
 		tpo(authzOrg, "team-nongranted", authzProjectNonOwned.id, "NULL"),
 		tpo(authzOrg, "team-granted", authzProjectKeyed.id, "NULL"),
+		tpo(authzOrg, "team-granted", authzProjectKeyOnly.id, "NULL"),
 		tpo(authzOrg, "team-granted", authzProjectExpired.id, "'2026-02-01 00:00:00'"),
 		tpo(authzOrg, "team-nullrepo", authzProjectNullRepo.id, "NULL"),
 		tpo(authzOtherOrg, "team-granted", authzProjectOtherOrg.id, "NULL"),
@@ -392,7 +396,7 @@ func authzSeedStatements(items []authzItem) []string {
 
 // authzDatabase creates a fresh database from the production DDL, seeds
 // the domain, and returns a reader client bound to it.
-func authzDatabase(t *testing.T, items []authzItem) *clickhouse.Client {
+func authzDatabase(t *testing.T, items []authzItem, extra ...string) *clickhouse.Client {
 	t.Helper()
 	required := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1"
 	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
@@ -431,6 +435,7 @@ func authzDatabase(t *testing.T, items []authzItem) *clickhouse.Client {
 	t.Cleanup(func() { _ = seed.Close() })
 	stmts := schema.DDL("projects", "repos", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_items")
 	stmts = append(stmts, authzSeedStatements(items)...)
+	stmts = append(stmts, extra...)
 	for _, stmt := range stmts {
 		if err := seed.Exec(ctx, stmt); err != nil {
 			t.Fatalf("seed statement %q: %v", stmt, err)
@@ -466,7 +471,13 @@ type authzReadRow struct {
 // bound-parameter funnel.
 func authzReadProvenance(t *testing.T, client *clickhouse.Client, scope readers.AuthorizationScope, ids []string) map[string]authzReadRow {
 	t.Helper()
-	rendered := readers.WorkItemScopeSQL(scope)
+	return authzReadRendered(t, client, readers.WorkItemScopeSQL(scope), ids)
+}
+
+// authzReadRendered is authzReadProvenance over an already rendered
+// relation.
+func authzReadRendered(t *testing.T, client *clickhouse.Client, rendered readers.WorkItemScopeSQLResult, ids []string) map[string]authzReadRow {
+	t.Helper()
 	if len(rendered.Provenance) != len(readers.WorkItemAuthorizationPaths()) {
 		t.Fatalf("Provenance has %d paths, want %d", len(rendered.Provenance), len(readers.WorkItemAuthorizationPaths()))
 	}
