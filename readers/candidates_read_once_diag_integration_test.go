@@ -68,6 +68,13 @@ func TestIntegrationCandidatesReadOnceDiag(t *testing.T) {
 		bindings   []readers.Binding
 	}
 	var variants []variant
+	scopesOnce := func(sql string, relation string) string {
+		old := "(SELECT provider, project_id FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN (" + relation + "))"
+		if !strings.Contains(sql, old) {
+			t.Fatalf("candidate scopes text not found in project join")
+		}
+		return strings.ReplaceAll(sql, old, "(SELECT arrayJoin((SELECT groupUniqArray((provider, project_id)) FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN ("+relation+"))))")
+	}
 	variants = append(variants, variant{name: "base", stmt: memoryStatement(readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})})
 	for _, cand := range []struct{ n, sql string }{{"cur", memoryTeamCandidates}, {"scl", scalar}} {
 		r := bind(cand.sql)
@@ -109,6 +116,17 @@ func TestIntegrationCandidatesReadOnceDiag(t *testing.T) {
 		}
 		rows.Close()
 		t.Logf("DIAG explain %s plan bytes %d", v.name, total)
+	}
+	{
+		r := bind(memoryTeamCandidates)
+		pIdx := strings.Index(r.JoinSQL, "LEFT JOIN (SELECT wia_scope")
+		lIdx := strings.Index(r.JoinSQL, "LEFT JOIN (SELECT wia_link.work_item_id")
+		j0, jp := r.JoinSQL[:pIdx], r.JoinSQL[pIdx:lIdx]
+		jp2 := scopesOnce(jp, memoryTeamCandidates)
+		mk := func(j string) string {
+			return memoryStatement(readers.WorkItemScopeSQLResult{AuthorizationExpr: "1", JoinSQL: j})
+		}
+		variants = append(variants, variant{"sc1-proj", mk(j0 + " " + jp2), r.Bindings})
 	}
 	var ids []string
 	byID := map[string]string{}
