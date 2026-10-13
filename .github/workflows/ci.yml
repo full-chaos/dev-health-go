@@ -150,7 +150,7 @@ jobs:
             | tee test-results/readers-integration.json
       - name: DIAG read once
         if: always()
-        run: go test -tags=integration -count=1 -v -run '^TestIntegrationCandidatesReadOnceDiag$' ./readers 2>&1 | grep -E 'DIAG|FAIL|panic|Error' || true
+        run: go test -tags=integration -count=1 -v -run '^TestIntegrationCandidatesReadOnceDiag$' ./readers 2>&1 | grep -v -E '^(=== |--- PASS)' | cut -c1-400 || true
       - name: Upload readers integration test JSON
         if: always()
         uses: actions/upload-artifact@v4

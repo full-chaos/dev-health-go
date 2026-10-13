@@ -79,6 +79,28 @@ func TestIntegrationCandidatesReadOnceDiag(t *testing.T) {
 		}
 		variants = append(variants, variant{cand.n + "-repo", mk(j0)}, variant{cand.n + "-proj", mk(j0 + " " + jp)}, variant{cand.n + "-link", mk(j0 + " " + jl)}, variant{cand.n + "-all", mk(r.JoinSQL)})
 	}
+	for _, v := range variants {
+		if !strings.HasSuffix(v.name, "-all") {
+			continue
+		}
+		params := map[string]string{"org_id": "org-300k", "team_ids": memoryParameter(teams), "cand_mod": "1"}
+		qctx := clickhousedriver.Context(ctx, clickhousedriver.WithParameters(params))
+		rows, err := conn.Query(qctx, "EXPLAIN actions = 1 "+v.stmt)
+		if err != nil {
+			t.Logf("DIAG explain %s: %v", v.name, err)
+			continue
+		}
+		total := 0
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				break
+			}
+			total += len(line)
+		}
+		rows.Close()
+		t.Logf("DIAG explain %s plan bytes %d", v.name, total)
+	}
 	var ids []string
 	byID := map[string]string{}
 	for _, v := range variants {
