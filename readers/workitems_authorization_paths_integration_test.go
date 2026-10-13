@@ -466,7 +466,13 @@ type authzReadRow struct {
 // bound-parameter funnel.
 func authzReadProvenance(t *testing.T, client *clickhouse.Client, scope readers.AuthorizationScope, ids []string) map[string]authzReadRow {
 	t.Helper()
-	rendered := readers.WorkItemScopeSQL(scope)
+	return authzReadRendered(t, client, readers.WorkItemScopeSQL(scope), ids)
+}
+
+// authzReadRendered is authzReadProvenance over an already rendered
+// relation.
+func authzReadRendered(t *testing.T, client *clickhouse.Client, rendered readers.WorkItemScopeSQLResult, ids []string) map[string]authzReadRow {
+	t.Helper()
 	if len(rendered.Provenance) != len(readers.WorkItemAuthorizationPaths()) {
 		t.Fatalf("Provenance has %d paths, want %d", len(rendered.Provenance), len(readers.WorkItemAuthorizationPaths()))
 	}

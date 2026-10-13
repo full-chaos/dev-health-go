@@ -232,15 +232,22 @@ const workItemAuthorizingLinkProvenance = "native"
 // organization-scoped through the caller's {org_id} binding, and the grant
 // arrays are the same bindings the direct path reads. Aliases carry the
 // wia_ prefix so they cannot shadow a caller's columns.
-func workItemProjectAuthorizationJoinSQL(prefix string) string {
+func workItemProjectAuthorizationJoinSQL(prefix string, candidates WorkItemCandidates) string {
 	current := OwnershipValidityPredicate(TimeBound{})
+	ownedProjects := "SELECT provider, id, team_id FROM " + ProjectOwnershipCatalogJoinSQL(current)
+	scopes := "SELECT provider, id, scope FROM " + ProjectIdentityCatalogSQL()
+	if candidates.relation != "" {
+		candidateScopes := "(SELECT provider, project_id FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN " + candidates.relation + ")"
+		ownedProjects += " WHERE (provider, id) IN (SELECT provider, id FROM " + ProjectIdentityCatalogSQL() + " WHERE (provider, scope) IN " + candidateScopes + ")"
+		scopes += " WHERE (provider, scope) IN " + candidateScopes
+	}
 	owned := "SELECT wia_owned_project.provider AS wia_owned_provider, wia_owned_project.id AS wia_owned_id, " + repositorySlugSQL("wia_owned_repo.repo") + " AS wia_owned_repository " +
-		"FROM (SELECT provider, id, team_id FROM " + ProjectOwnershipCatalogJoinSQL(current) + ") AS wia_owned_project " +
+		"FROM (" + ownedProjects + ") AS wia_owned_project " +
 		"INNER JOIN " + TeamRepositoryOwnershipSQL(current) + " AS wia_team_repo ON wia_team_repo.team_id = wia_owned_project.team_id " +
 		"INNER JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS wia_owned_repo ON wia_owned_repo.id = wia_team_repo.repo_id " +
 		"WHERE " + grantedRepositoryMatchSQL(prefix, "wia_owned_repo.repo")
 	return "LEFT JOIN (SELECT wia_scope.provider AS wia_project_provider, wia_scope.scope AS wia_project_scope, arraySort(groupUniqArray(wia_owned.wia_owned_repository)) AS wia_project_repositories " +
-		"FROM (SELECT provider, id, scope FROM " + ProjectIdentityCatalogSQL() + ") AS wia_scope " +
+		"FROM (" + scopes + ") AS wia_scope " +
 		"INNER JOIN (" + owned + ") AS wia_owned ON wia_owned.wia_owned_provider = wia_scope.provider AND wia_owned.wia_owned_id = wia_scope.id " +
 		"GROUP BY wia_scope.provider, wia_scope.scope) AS wia_project_auth ON wia_project_auth.wia_project_provider = w.provider AND wia_project_auth.wia_project_scope = w.project_id"
 }
@@ -250,14 +257,18 @@ func workItemProjectAuthorizationJoinSQL(prefix string) string {
 // issue-to-pull-request link row names for it, and the sorted provenances
 // of the non-authorizing link rows that name a granted repository for it;
 // an item with no such link gets two empty arrays.
-func workItemPullRequestLinkJoinSQL(prefix string) string {
+func workItemPullRequestLinkJoinSQL(prefix string, candidates WorkItemCandidates) string {
 	authorizing := "wia_link.provenance = '" + workItemAuthorizingLinkProvenance + "'"
+	among := ""
+	if candidates.relation != "" {
+		among = "wia_link.work_item_id IN " + candidates.relation + " AND "
+	}
 	return "LEFT JOIN (SELECT wia_link.work_item_id AS wia_link_work_item_id, " +
 		"arraySort(groupUniqArrayIf(" + repositorySlugSQL("wia_link_repo.repo") + ", " + authorizing + ")) AS wia_link_repositories, " +
 		"arraySort(groupUniqArrayIf(wia_link.provenance, NOT (" + authorizing + "))) AS wia_link_excluded_provenances " +
 		"FROM work_graph_issue_pr AS wia_link FINAL " +
 		"INNER JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS wia_link_repo ON wia_link_repo.id = wia_link.repo_id " +
-		"WHERE wia_link.org_id = {org_id:String} AND " +
+		"WHERE wia_link.org_id = {org_id:String} AND " + among +
 		keyPresentSQL("wia_link.work_item_id", stringKey) + " AND " + keyPresentSQL("wia_link.repo_id", uuidKey) + " AND " +
 		grantedRepositoryMatchSQL(prefix, "wia_link_repo.repo") + " " +
 		"GROUP BY wia_link.work_item_id) AS wia_link_auth ON wia_link_auth.wia_link_work_item_id = w.work_item_id"
@@ -278,8 +289,18 @@ var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-
 // repos and work_graph_issue_pr, each filtered by the caller's {org_id}
 // binding. ClickHouse counts those reads against max_rows_to_read, so a
 // caller that caps rows read with Settings must budget for those relations
-// as well as work_items.
+// as well as work_items. WorkItemScopeSQLAmong narrows both to a candidate
+// set.
 func WorkItemScopeSQL(scope AuthorizationScope) WorkItemScopeSQLResult {
+	return WorkItemScopeSQLAmong(scope, WorkItemCandidates{})
+}
+
+// WorkItemScopeSQLAmong is WorkItemScopeSQL with the two organization-wide
+// authorization aggregates narrowed to candidates before they aggregate.
+// The zero WorkItemCandidates renders exactly WorkItemScopeSQL's statement.
+// Outside selector mode there is no aggregate to narrow and candidates is
+// not read.
+func WorkItemScopeSQLAmong(scope AuthorizationScope, candidates WorkItemCandidates) WorkItemScopeSQLResult {
 	result := WorkItemScopeSQLResult{}
 	var expressions []string
 	if scope.GrantedRepositoryIDs != nil {
@@ -292,7 +313,8 @@ func WorkItemScopeSQL(scope AuthorizationScope) WorkItemScopeSQLResult {
 	}
 
 	if scope.RepositorySelectors != nil {
-		result.JoinSQL = workItemRepositoryJoin + " " + workItemProjectAuthorizationJoinSQL("authorized") + " " + workItemPullRequestLinkJoinSQL("authorized")
+		result.JoinSQL = workItemRepositoryJoin + " " + workItemProjectAuthorizationJoinSQL("authorized", candidates) + " " + workItemPullRequestLinkJoinSQL("authorized", candidates)
+		result.Bindings = append(result.Bindings, candidates.bindings...)
 		// Every path expression carries the ID dimensions and the requested
 		// selector, so a true path always implies an authorized row.
 		restrictions := append([]string(nil), expressions...)
