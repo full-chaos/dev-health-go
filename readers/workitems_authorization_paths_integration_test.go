@@ -396,7 +396,7 @@ func authzSeedStatements(items []authzItem) []string {
 
 // authzDatabase creates a fresh database from the production DDL, seeds
 // the domain, and returns a reader client bound to it.
-func authzDatabase(t *testing.T, items []authzItem) *clickhouse.Client {
+func authzDatabase(t *testing.T, items []authzItem, extra ...string) *clickhouse.Client {
 	t.Helper()
 	required := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1"
 	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
@@ -435,6 +435,7 @@ func authzDatabase(t *testing.T, items []authzItem) *clickhouse.Client {
 	t.Cleanup(func() { _ = seed.Close() })
 	stmts := schema.DDL("projects", "repos", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_items")
 	stmts = append(stmts, authzSeedStatements(items)...)
+	stmts = append(stmts, extra...)
 	for _, stmt := range stmts {
 		if err := seed.Exec(ctx, stmt); err != nil {
 			t.Fatalf("seed statement %q: %v", stmt, err)

@@ -3,6 +3,7 @@
 package readers_test
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -24,6 +25,41 @@ func authzCandidateScopes() []authzCandidateScope {
 		authzCandidateScope{"matching-exact+requested-granted", readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: authzGrants[1].set, Requested: &requestedGranted}}},
 		authzCandidateScope{"all+requested-granted", readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: authzGrants[0].set, Requested: &requestedGranted}}},
 	)
+}
+
+// authzIdentityEdgeItems are repo-less items over two project identity
+// shapes the base fixture lacks: a key two projects share (ambiguous, so
+// neither answers to it) and a value that is one project's id and another
+// project's key (both answer to it). authzIdentityEdgeSeed seeds their
+// projects and ownership: in each pair one project is owned through the
+// granted repository and the other through the non-granted one.
+func authzIdentityEdgeItems() []authzItem {
+	return []authzItem{
+		{id: "linear:norepo-ambiguous-by-key", provider: "linear", projectID: "AMBIG"},
+		{id: "linear:norepo-ambiguous-by-id", provider: "linear", projectID: "proj-ambiguous-granted"},
+		{id: "linear:norepo-collision", provider: "linear", projectID: "COLLIDE"},
+		{id: "linear:norepo-collision-key-owner-by-id", provider: "linear", projectID: "proj-collision-keyed"},
+	}
+}
+
+func authzIdentityEdgeSeed() []string {
+	const at = "'2026-01-01 00:00:00'"
+	project := func(id, key string) string {
+		return fmt.Sprintf("INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('%s', '%s', 'linear', %s, '%s', 1, 'started', '', %s)", id, authzOrg, key, id, at)
+	}
+	owner := func(team, projectID string) string {
+		return fmt.Sprintf("INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES ('%s', 'linear', '%s', '%s', NULL, 'native', %s, NULL, %s)", authzOrg, team, projectID, at, at)
+	}
+	return []string{
+		project("proj-ambiguous-granted", "'AMBIG'"),
+		project("proj-ambiguous-nongranted", "'AMBIG'"),
+		owner("team-granted", "proj-ambiguous-granted"),
+		owner("team-nongranted", "proj-ambiguous-nongranted"),
+		project("COLLIDE", "NULL"),
+		project("proj-collision-keyed", "'COLLIDE'"),
+		owner("team-nongranted", "COLLIDE"),
+		owner("team-granted", "proj-collision-keyed"),
+	}
 }
 
 // authzWithoutCandidatePaths is the row a work item outside the candidate
@@ -69,8 +105,8 @@ func authzSameRow(a, b authzReadRow) bool {
 // with ids the statement never reads changes nothing, and an item left out
 // of the candidate set loses only its repo-less paths.
 func TestIntegrationWorkItemCandidatesDifferential(t *testing.T) {
-	items := authzItems()
-	client := authzDatabase(t, items)
+	items := append(authzItems(), authzIdentityEdgeItems()...)
+	client := authzDatabase(t, items, authzIdentityEdgeSeed()...)
 	ids := authzIDs(items)
 
 	var workItemIDs, kept []string
