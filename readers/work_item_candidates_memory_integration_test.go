@@ -193,7 +193,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	// Each statement runs memoryWarmRuns times and the smallest peak counts:
 	// one peak of a short multi-threaded query carries several MiB of
 	// scheduling noise on either ClickHouse version.
-	peaks := map[string]int64{}
+	runPeaks := map[string]int64{}
 	var queryIDs []string
 	for _, name := range scenarioNames {
 		sc := scenarios[name]
@@ -227,11 +227,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		}
 		seen[id] = true
 		t.Logf("run %s peak %.2f MiB", strings.TrimPrefix(id, database+"-"), float64(peak)/mib)
-		key := strings.TrimPrefix(id, database+"-")
-		key = key[:strings.LastIndex(key, "-")]
-		if cur, ok := peaks[key]; !ok || int64(peak) < cur {
-			peaks[key] = int64(peak)
-		}
+		runPeaks[strings.TrimPrefix(id, database+"-")] = int64(peak)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("query_log rows: %v", err)
@@ -241,13 +237,20 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 			t.Fatalf("no query_log row for %s: the peak was never measured", id)
 		}
 	}
-	for key, peak := range peaks {
-		t.Logf("%s peak %.2f MiB", key, float64(peak)/mib)
+	// The relation's share of a run is that run's peak less the peak of the
+	// no-relation statement run right beside it; the share of a scenario is
+	// the smallest over its warm runs, so a noisy baseline on one run cannot
+	// stand in for the whole scenario.
+	share := func(name, mode string) int64 {
+		best := int64(-1)
+		for rep := 0; rep < memoryWarmRuns; rep++ {
+			delta := runPeaks[fmt.Sprintf("%s-%s-%d", name, mode, rep)] - runPeaks[fmt.Sprintf("%s-baseline-%d", name, rep)]
+			if best < 0 || delta < best {
+				best = delta
+			}
+		}
+		return best
 	}
-
-	// The authorization relation's share of a peak is the statement's peak
-	// less the same statement's peak with no authorization relation.
-	share := func(name, mode string) int64 { return peaks[name+"-"+mode] - peaks[name+"-baseline"] }
 	if grew := share("org-300k", "unnarrowed") - share("org-30k", "unnarrowed"); grew < 32*mib {
 		t.Fatalf("unnarrowed relation grew %.2f MiB from 30k to 300k work items, want at least 32: the measurement does not see organization size", float64(grew)/mib)
 	}
