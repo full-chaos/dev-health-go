@@ -59,32 +59,35 @@ func TestIntegrationCandidatesReadOnceDiag(t *testing.T) {
 	scope := readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: readers.RepositorySelectorSet{Owners: []string{"acme/*"}}}}
 	teams := []string{"team-7", "team-8", "team-9", "team-10", "team-11", "team-12", "team-13"}
 	scalar := "SELECT arrayJoin((SELECT groupArray(work_item_id) FROM (" + memoryTeamCandidates + ")))"
-	type variant struct {
-		name   string
-		render func() readers.WorkItemScopeSQLResult
-	}
 	bind := func(sql string) readers.WorkItemScopeSQLResult {
 		return readers.WorkItemScopeSQLAmong(scope, readers.WorkItemCandidateSubquery(sql,
 			readers.Binding{Name: "team_ids", Value: teams}, readers.Binding{Name: "cand_mod", Value: 1}))
 	}
-	variants := []variant{
-		{"base", func() readers.WorkItemScopeSQLResult { return readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"} }},
-		{"current", func() readers.WorkItemScopeSQLResult { return bind(memoryTeamCandidates) }},
-		{"scalar", func() readers.WorkItemScopeSQLResult { return bind(scalar) }},
+	type variant struct{ name, stmt string }
+	var variants []variant
+	variants = append(variants, variant{"base", memoryStatement(readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})})
+	for _, cand := range []struct{ n, sql string }{{"cur", memoryTeamCandidates}, {"scl", scalar}} {
+		r := bind(cand.sql)
+		pIdx := strings.Index(r.JoinSQL, "LEFT JOIN (SELECT wia_scope")
+		lIdx := strings.Index(r.JoinSQL, "LEFT JOIN (SELECT wia_link.work_item_id")
+		if pIdx < 0 || lIdx < pIdx {
+			t.Fatal("cannot split")
+		}
+		j0, jp, jl := r.JoinSQL[:pIdx], r.JoinSQL[pIdx:lIdx], r.JoinSQL[lIdx:]
+		mk := func(j string) string {
+			return memoryStatement(readers.WorkItemScopeSQLResult{AuthorizationExpr: "1", JoinSQL: j})
+		}
+		variants = append(variants, variant{cand.n + "-repo", mk(j0)}, variant{cand.n + "-proj", mk(j0 + " " + jp)}, variant{cand.n + "-link", mk(j0 + " " + jl)}, variant{cand.n + "-all", mk(r.JoinSQL)})
 	}
 	var ids []string
 	byID := map[string]string{}
 	for _, v := range variants {
-		rendered := v.render()
 		for rep := 0; rep < 5; rep++ {
 			params := map[string]string{"org_id": "org-300k", "team_ids": memoryParameter(teams), "cand_mod": "1"}
-			for _, b := range rendered.Bindings {
-				params[b.Name] = memoryParameter(b.Value)
-			}
 			id := fmt.Sprintf("%s-%s-%d", database, v.name, rep)
 			qctx := clickhousedriver.Context(ctx, clickhousedriver.WithQueryID(id), clickhousedriver.WithParameters(params))
 			var count, admitted uint64
-			if err := conn.QueryRow(qctx, memoryStatement(rendered)).Scan(&count, &admitted); err != nil {
+			if err := conn.QueryRow(qctx, v.stmt).Scan(&count, &admitted); err != nil {
 				t.Fatalf("%s: %v", v.name, err)
 			}
 			ids = append(ids, id)
