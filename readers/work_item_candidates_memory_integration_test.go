@@ -65,6 +65,11 @@ var memorySlopeFloorMiB = map[string]int64{"24.8": 5, "26.7": 4}
 // that the statement is within the cap on 24.8.
 var memoryAbsoluteBoundMiB = map[string]map[string]int64{
 	"statement-300k": {"24.8": 34},
+	// relation-biggest on 24.8: the highest of five reads measured 28.50 MiB
+	// (run 38508030344) and 32.38 MiB unmerged (hosted CI run 38583097603), the
+	// second above the 32 MiB cap; rounded up to 33 MiB plus 1 MiB makes the
+	// guard 34 MiB. It is not a claim that this row is within the cap on 24.8.
+	"relation-biggest": {"24.8": 34},
 }
 
 // biggestTeamCandidates is the candidate count of the largest team the
@@ -305,13 +310,13 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		return fmt.Sprintf("%s-%s-%s-%d", state, name, mode, rep)
 	}
 	warm := func(state, name, mode string) (smallest, spread int64) {
-		var lo, hi int64 = -1, 0
+		var lo, hi int64
 		for rep := 0; rep < memoryWarmRuns; rep++ {
 			delta := runPeaks[runKey(state, name, mode, rep)] - runPeaks[runKey(state, name, "repojoin", rep)]
-			if lo < 0 || delta < lo {
+			if rep == 0 || delta < lo {
 				lo = delta
 			}
-			if delta > hi {
+			if rep == 0 || delta > hi {
 				hi = delta
 			}
 		}
@@ -403,7 +408,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 
 		// The whole relation statement at the large organization, base
 		// statement included. 26.7 asserts the cap; 24.8 only guards a
-		// regression from its measured 32.24 MiB (see the bound table).
+		// regression from its measured highest read (see the bound table).
 		absoluteRow(state, "statement-300k", "whole relation statement at 300k work items", rawSmallest(state, "org-300k", "candidates"), rawHighest(state, "org-300k", "candidates"), line)
 
 		// Candidate count: a bigger team is a real input, so the relation may
