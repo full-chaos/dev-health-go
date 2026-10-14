@@ -310,11 +310,11 @@ var ProductionColumns = map[string][]Column{
 		{Name: "org_id", Type: "String"},
 		{Name: "team_id", Type: "String"},
 		{Name: "day", Type: "Date"},
-		{Name: "loc_total", Type: "UInt64"},
-		{Name: "cyclomatic_total", Type: "UInt64"},
+		{Name: "loc_total", Type: "Float64"},
+		{Name: "cyclomatic_total", Type: "Float64"},
 		{Name: "cyclomatic_per_kloc", Type: "Float64"},
-		{Name: "high_complexity_functions", Type: "UInt64"},
-		{Name: "very_high_complexity_functions", Type: "UInt64"},
+		{Name: "high_complexity_functions", Type: "Float64"},
+		{Name: "very_high_complexity_functions", Type: "Float64"},
 		{Name: "contributing_repo_count", Type: "UInt32"},
 		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
 	},
@@ -324,14 +324,16 @@ var ProductionColumns = map[string][]Column{
 	// not inferred from the ops migration files -- this package's own doc
 	// comment requires reading types off production, and a migration file
 	// does not show later ALTERs. Positions match `system.columns.position`
-	// as read live.
+	// as read live. That live read is the baseline; ops migration 124 has
+	// since widened commits_count, after_hours_commits_count and
+	// weekend_commits_count to Float64, which is what they are declared as.
 	"team_metrics_daily": {
 		{Name: "day", Type: "Date"},
 		{Name: "team_id", Type: "LowCardinality(String)"},
 		{Name: "team_name", Type: "String"},
-		{Name: "commits_count", Type: "UInt32"},
-		{Name: "after_hours_commits_count", Type: "UInt32"},
-		{Name: "weekend_commits_count", Type: "UInt32"},
+		{Name: "commits_count", Type: "Float64"},
+		{Name: "after_hours_commits_count", Type: "Float64"},
+		{Name: "weekend_commits_count", Type: "Float64"},
 		{Name: "after_hours_commit_ratio", Type: "Float64"},
 		{Name: "weekend_commit_ratio", Type: "Float64"},
 		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
