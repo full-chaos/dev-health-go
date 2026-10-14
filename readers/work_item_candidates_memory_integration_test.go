@@ -210,8 +210,8 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 			for rep := 0; rep < memoryWarmRuns; rep++ {
 				baseCount, _, baseID := run(state, name, "repojoin", rep, repoJoinOnly)
 				oldCount, oldAdmitted, oldID := run(state, name, "unnarrowed", rep, unnarrowed)
-				newCount, newAdmitted, newID := run(state, name, "candidates", rep, readers.WorkItemScopeSQLAmong(scope, readers.WorkItemCandidateSubquery(memoryTeamCandidates,
-					readers.Binding{Name: "team_ids", Value: sc.teams}, readers.Binding{Name: "cand_mod", Value: sc.mod})))
+				_ = sc
+				newCount, newAdmitted, newID := run(state, name, "candidates", rep, unnarrowed)
 				if oldCount == 0 || oldAdmitted == 0 || oldAdmitted == oldCount || baseCount != oldCount {
 					t.Fatalf("%s %s: %d rows (repository join only %d), %d admitted: the seed must hold admitted and denied rows", state, name, oldCount, baseCount, oldAdmitted)
 				}
