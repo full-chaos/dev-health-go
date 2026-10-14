@@ -237,6 +237,19 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 			t.Fatalf("no query_log row for %s: the peak was never measured", id)
 		}
 	}
+	// Read once: the project side's candidate scopes are one scalar subquery
+	// that both project-side filters reuse, so it is evaluated once per
+	// statement and hit once from the cache. A second evaluation is a second
+	// work_items read and a second candidate set.
+	var scalarMisses, scalarHits uint64
+	evidence := fmt.Sprintf("%s-org-300k-biggest-candidates-0", database)
+	if err := conn.QueryRow(ctx, "SELECT ProfileEvents['ScalarSubqueriesCacheMiss'], ProfileEvents['ScalarSubqueriesGlobalCacheHit'] FROM system.query_log WHERE type = 'QueryFinish' AND query_id = ?", evidence).Scan(&scalarMisses, &scalarHits); err != nil {
+		t.Fatalf("read scalar subquery counters: %v", err)
+	}
+	if scalarMisses != 1 || scalarHits < 1 {
+		t.Errorf("candidate scopes evaluated %d times with %d cache hits, want 1 evaluation and at least 1 hit", scalarMisses, scalarHits)
+	}
+
 	// The relation's share of a run is that run's peak less the peak of the
 	// no-relation statement run right beside it; the share of a scenario is
 	// the smallest over its warm runs, so a noisy baseline on one run cannot

@@ -237,7 +237,11 @@ func workItemProjectAuthorizationJoinSQL(prefix string, candidates WorkItemCandi
 	ownedProjects := "SELECT provider, id, team_id FROM " + ProjectOwnershipCatalogJoinSQL(current)
 	scopes := "SELECT provider, id, scope FROM " + ProjectIdentityCatalogSQL()
 	if candidates.relation != "" {
-		candidateScopes := "(SELECT provider, project_id FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN " + candidates.relation + ")"
+		// One scalar of the distinct (provider, project_id) pairs the candidates
+		// carry: both project-side filters reuse it, so the work_items read and
+		// the candidate set are evaluated once, and each filter holds a set of
+		// at most the project count instead of one row per candidate.
+		candidateScopes := "(SELECT arrayJoin((SELECT groupUniqArray((provider, project_id)) FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN " + candidates.relation + ")))"
 		ownedProjects += " WHERE (provider, id) IN (SELECT provider, id FROM " + ProjectIdentityCatalogSQL() + " WHERE (provider, scope) IN " + candidateScopes + ")"
 		scopes += " WHERE (provider, scope) IN " + candidateScopes
 	}
