@@ -42,6 +42,15 @@ func memorySeed(org string, n, projects int) []string {
 
 const memoryTeamCandidates = "SELECT work_item_id FROM work_item_team_attributions WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)} AND cityHash64(work_item_id) % {cand_mod:UInt64} = 0"
 
+// memorySlopeFloorMiB is the slack the organization-size slope allows, per
+// ClickHouse version, frozen from the spread of the clean statement: the
+// largest less the smallest of five warm reads at one size, over both sizes
+// and both part states, rounded up to a whole MiB (hosted CI, run
+// 38490979012: 3.77 MiB on 26.7, 4.71 MiB on 24.8). It is a constant, never
+// computed from the run under test, so a noisy defect cannot raise its own
+// floor.
+var memorySlopeFloorMiB = map[string]int64{"24.8": 5, "26.7": 4}
+
 // biggestTeamCandidates is the candidate count of the largest team the
 // relation must serve. The seed spreads work items over 100 teams, so a
 // 300k-item organization gives each team 3000 candidates.
@@ -316,7 +325,17 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 			}
 		}
 	}
-	floor := (spread + mib - 1) / mib * mib
+	var version string
+	if err := conn.QueryRow(ctx, "SELECT version()").Scan(&version); err != nil {
+		t.Fatalf("read server version: %v", err)
+	}
+	line := strings.Join(strings.SplitN(version, ".", 3)[:2], ".")
+	floorMiB, ok := memorySlopeFloorMiB[line]
+	if !ok {
+		t.Fatalf("ClickHouse %s has no frozen slope floor: measure the clean statement's spread on it and add it to memorySlopeFloorMiB", version)
+	}
+	floor := floorMiB * mib
+	t.Logf("ClickHouse %s: frozen slope floor %d MiB, measured spread this run %.2f MiB", version, floorMiB, float64(spread)/mib)
 	for _, state := range states {
 		if grew := func() int64 {
 			a, _ := warm(state, "org-300k", "unnarrowed")
@@ -330,7 +349,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		t.Logf("%s: organization-size slope at %d candidates: %.2f MiB at 30k, %.2f MiB at 300k work items, floor %d MiB (spread %.2f)",
 			state, candidateCount["org-30k"], float64(small)/mib, float64(large)/mib, floor/mib, float64(spread)/mib)
 		if float64(large) > memorySlopeRatio*float64(small) && large > small+floor {
-			t.Errorf("%s: candidates relation grew with organization size at %d candidates: %.2f MiB at 30k, %.2f MiB at 300k work items, want at most x%.2f or +%d MiB (its own spread)",
+			t.Errorf("%s: candidates relation grew with organization size at %d candidates: %.2f MiB at 30k, %.2f MiB at 300k work items, want at most x%.2f or +%d MiB (frozen floor)",
 				state, candidateCount["org-30k"], float64(small)/mib, float64(large)/mib, memorySlopeRatio, floor/mib)
 		}
 
