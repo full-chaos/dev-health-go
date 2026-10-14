@@ -28,7 +28,11 @@ import (
 //     to neither. Unlike ReadProjectThemeMix this reader does not fail closed
 //     on the collision, because its result is the ops Investment view's
 //     majority vote and must not diverge from it.
-func TestIntegrationReadTeamThemeMixItemIDUnderTwoRepositories(t *testing.T) {
+//
+// ttmClient builds a fresh database with the team theme mix tables, runs the
+// seed statements and returns a query client on it.
+func ttmClient(t *testing.T, prefix string, seedStatements []string) *clickhouse.Client {
+	t.Helper()
 	required := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1"
 	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
 	if dsn == "" || os.Getenv("ACR_CLICKHOUSE_INTEGRATION_ISOLATED") != "1" {
@@ -41,7 +45,7 @@ func TestIntegrationReadTeamThemeMixItemIDUnderTwoRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database := fmt.Sprintf("ttm_dup_%d", rand.Uint64())
+	database := fmt.Sprintf("%s_%d", prefix, rand.Uint64())
 	options, err := clickhousedriver.ParseDSN(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -64,25 +68,7 @@ func TestIntegrationReadTeamThemeMixItemIDUnderTwoRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = seed.Close() })
-	const org = "ttm-dup-org"
-	const at = "'2026-03-01 00:00:00'"
-	stmts := schema.DDL("work_unit_investments", "repos", "work_item_team_attributions")
-	attribution := func(repo, item, team string) string {
-		return fmt.Sprintf("INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at) VALUES ('%s', '%s', '%s', '%s', '%s', 'linked_issue', 1, 'high', %s)", org, repo, item, team, team, at)
-	}
-	const repoA, repoB = "33333333-3333-4333-8333-000000000001", "33333333-3333-4333-8333-000000000002"
-	unit := func(id, item string) string {
-		return fmt.Sprintf(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES ('%s', '2026-02-01 00:00:00', '2026-04-01 00:00:00', 10, map('risk', 1), map(), '{"issues":["%s"],"prs":[]}', %s, '%s')`, id, item, at, org)
-	}
-	stmts = append(stmts,
-		// Same team under both repositories.
-		attribution(repoA, "linear:SAME-1", "team-same"), attribution(repoB, "linear:SAME-1", "team-same"),
-		unit("u-same", "linear:SAME-1"),
-		// Two different teams under the two repositories.
-		attribution(repoA, "linear:SPLIT-1", "team-a"), attribution(repoB, "linear:SPLIT-1", "team-b"),
-		unit("u-split", "linear:SPLIT-1"),
-	)
-	for _, stmt := range stmts {
+	for _, stmt := range append(schema.DDL("work_unit_investments", "repos", "work_item_team_attributions"), seedStatements...) {
 		if err := seed.Exec(ctx, stmt); err != nil {
 			t.Fatalf("seed %q: %v", stmt, err)
 		}
@@ -93,21 +79,80 @@ func TestIntegrationReadTeamThemeMixItemIDUnderTwoRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
 
-	rows, err := readers.ReadTeamThemeMix(ctx, client, org, []string{"team-same", "team-a", "team-b"}, readers.TimeBound{})
+func ttmAttribution(org, repo, item, team string) string {
+	return fmt.Sprintf("INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at) VALUES ('%s', '%s', '%s', '%s', '%s', 'linked_issue', 1, 'high', '2026-03-01 00:00:00')", org, repo, item, team, team)
+}
+
+func ttmUnit(org, id, item string, effort float64, theme string) string {
+	return fmt.Sprintf(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES ('%s', '2026-02-01 00:00:00', '2026-04-01 00:00:00', %g, map('%s', 1), map(), '{"issues":["%s"],"prs":[]}', '2026-03-01 00:00:00', '%s')`, id, effort, theme, item, org)
+}
+
+func TestIntegrationReadTeamThemeMixItemIDUnderTwoRepositories(t *testing.T) {
+	const org = "ttm-dup-org"
+	const repoA, repoB = "33333333-3333-4333-8333-000000000001", "33333333-3333-4333-8333-000000000002"
+	client := ttmClient(t, "ttm_dup", []string{
+		// Same team under both repositories.
+		ttmAttribution(org, repoA, "linear:SAME-1", "team-same"), ttmAttribution(org, repoB, "linear:SAME-1", "team-same"),
+		ttmUnit(org, "u-same", "linear:SAME-1", 10, "risk"),
+		// Two different teams under the two repositories.
+		ttmAttribution(org, repoA, "linear:SPLIT-1", "team-a"), ttmAttribution(org, repoB, "linear:SPLIT-1", "team-b"),
+		ttmUnit(org, "u-split", "linear:SPLIT-1", 10, "risk"),
+	})
+	rows, err := readers.ReadTeamThemeMix(context.Background(), client, org, []string{"team-same", "team-a", "team-b"}, readers.TimeBound{})
 	if err != nil {
 		t.Fatalf("ReadTeamThemeMix() error = %v", err)
 	}
 	risk := map[string]float64{}
 	for _, row := range rows {
 		if row.Kind == "theme" && row.Key == "risk" {
-			risk[row.TeamID] += row.WeightedEffort
+			risk[row.TeamID] += row.WorkUnits
 		}
 	}
-	if risk["team-same"] != 10 {
-		t.Errorf("same team under two repositories = %v, want the unit counted once (10)", risk["team-same"])
+	if risk["team-same"] != 1 {
+		t.Errorf("same team under two repositories = %v, want the unit counted once (1)", risk["team-same"])
 	}
-	if risk["team-b"] != 10 || risk["team-a"] != 0 {
-		t.Errorf("two teams = a:%v b:%v, want the whole unit on the larger team id (b:10, a:0)", risk["team-a"], risk["team-b"])
+	if risk["team-b"] != 1 || risk["team-a"] != 0 {
+		t.Errorf("two teams = a:%v b:%v, want the whole unit on the larger team id (b:1, a:0)", risk["team-a"], risk["team-b"])
+	}
+}
+
+// The team mix is a work-unit count: the stored effort_value (lines changed
+// by default) is never read. Two teams hold one feature delivery unit and one
+// risk unit each; one team's risk unit carries a stored effort of a billion.
+// Both teams must read the same counts, so the planted unit cannot move a
+// share, and a unit with zero stored effort still counts once.
+func TestIntegrationReadTeamThemeMixIgnoresStoredEffortValue(t *testing.T) {
+	const org = "ttm-effort-org"
+	const repo = "33333333-3333-4333-8333-000000000003"
+	client := ttmClient(t, "ttm_effort", []string{
+		ttmAttribution(org, repo, "linear:S-1", "team-small"), ttmAttribution(org, repo, "linear:S-2", "team-small"), ttmAttribution(org, repo, "linear:S-3", "team-small"),
+		ttmAttribution(org, repo, "linear:B-1", "team-big"), ttmAttribution(org, repo, "linear:B-2", "team-big"), ttmAttribution(org, repo, "linear:B-3", "team-big"),
+		ttmUnit(org, "u-s-feature", "linear:S-1", 1, "feature_delivery"),
+		ttmUnit(org, "u-s-risk", "linear:S-2", 1, "risk"),
+		ttmUnit(org, "u-s-unsized", "linear:S-3", 0, "operational"),
+		ttmUnit(org, "u-b-feature", "linear:B-1", 1, "feature_delivery"),
+		// The planted large-LOC unit: still one work unit.
+		ttmUnit(org, "u-b-risk", "linear:B-2", 1e9, "risk"),
+		ttmUnit(org, "u-b-unsized", "linear:B-3", -5, "operational"),
+	})
+	rows, err := readers.ReadTeamThemeMix(context.Background(), client, org, []string{"team-small", "team-big"}, readers.TimeBound{})
+	if err != nil {
+		t.Fatalf("ReadTeamThemeMix() error = %v", err)
+	}
+	got := map[string]map[string]float64{"team-small": {}, "team-big": {}}
+	for _, row := range rows {
+		if row.Kind == "theme" {
+			got[row.TeamID][row.Key] += row.WorkUnits
+		}
+	}
+	for team, themes := range got {
+		for theme, want := range map[string]float64{"feature_delivery": 1, "risk": 1, "operational": 1} {
+			if themes[theme] != want {
+				t.Errorf("%s %s = %v, want %v whatever each unit's stored effort", team, theme, themes[theme], want)
+			}
+		}
 	}
 }

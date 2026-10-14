@@ -405,7 +405,7 @@ func TestIntegrationTeamMetricsReadersSumRepositoriesAfterFullKeyDedupe(t *testi
 	// wins, whole (counts of the winner, ratios recomputed from them).
 	for i := 0; i < tmTieTeams; i++ {
 		team := fmt.Sprintf("t-same-computed-at-%02d", i)
-		var commits, ah, wk uint32
+		var commits, ah, wk float64
 		row := seed.QueryRow(ctx, fmt.Sprintf("SELECT commits_count, after_hours_commits_count, weekend_commits_count FROM team_metrics_daily WHERE team_id = '%s' ORDER BY cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC LIMIT 1", team))
 		if err := row.Scan(&commits, &ah, &wk); err != nil {
 			t.Fatal(err)

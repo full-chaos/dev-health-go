@@ -6,7 +6,9 @@ import (
 )
 
 // teamComplexityDailyDDL is the ops migration this table is declared from,
-// copied verbatim (CHAOS-4365 item 3 / 4347-C,
+// copied verbatim, with the four counter columns at their type after ops
+// migration 124 (a co-owning team holds a share of the counts, so they are
+// Float64; 124 ALTERs them from UInt64) (CHAOS-4365 item 3 / 4347-C,
 // src/dev_health_ops/migrations/clickhouse/082_team_complexity_daily.sql in
 // full-chaos/dev-health-ops). Same pin-and-parse contract as
 // teamCognitiveLoadDailyDDL in schema_test.go: this package has no access to
@@ -23,11 +25,11 @@ CREATE TABLE IF NOT EXISTS team_complexity_daily
     team_id                         String,
     day                             Date,
 
-    loc_total                       UInt64,
-    cyclomatic_total                UInt64,
+    loc_total                       Float64,
+    cyclomatic_total                Float64,
     cyclomatic_per_kloc             Float64,
-    high_complexity_functions       UInt64,
-    very_high_complexity_functions  UInt64,
+    high_complexity_functions       Float64,
+    very_high_complexity_functions  Float64,
 
     contributing_repo_count         UInt32,
 
