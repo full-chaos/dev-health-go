@@ -69,7 +69,19 @@ func TestReadRepositoryMetrics(t *testing.T) {
 }
 
 func teamMetricsRow(teamID string) []any {
-	return []any{teamID, "2026-02-21", int64(10), int64(2), int64(1), float64(0.2), float64(0.1)}
+	return []any{teamID, "2026-02-21", float64(10), float64(2), float64(1), float64(0.2), float64(0.1)}
+}
+
+func TestReadTeamMetricsKeepsFractionalShares(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_metrics_daily", rows: [][]any{{"team-1", "2026-02-21", 0.3, 0.1, 0.2, 0.2, 0.1}}}}}
+	rows, err := readers.ReadTeamMetrics(context.Background(), client, "org-1", []string{"team-1"}, readers.TimeBound{})
+	if err != nil {
+		t.Fatalf("ReadTeamMetrics() error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].CommitsCount != 0.3 || rows[0].AfterHoursCommitsCount != 0.1 || rows[0].WeekendCommitsCount != 0.2 {
+		t.Fatalf("rows = %#v, want the 0.3 / 0.1 / 0.2 shares unrounded", rows)
+	}
 }
 
 func TestReadTeamMetrics(t *testing.T) {
@@ -89,7 +101,7 @@ func TestReadTeamMetrics(t *testing.T) {
 	}
 }
 
-func projectRollupRow(provider, projectID, teamID, teamName string, commits, afterHoursCommits, weekendCommits int64, afterHoursRatio, weekendRatio float64) []any {
+func projectRollupRow(provider, projectID, teamID, teamName string, commits, afterHoursCommits, weekendCommits float64, afterHoursRatio, weekendRatio float64) []any {
 	return []any{provider + ":" + projectID, teamID, teamName, "2026-02-21", commits, afterHoursCommits, weekendCommits, afterHoursRatio, weekendRatio}
 }
 

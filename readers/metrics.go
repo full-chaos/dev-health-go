@@ -77,9 +77,9 @@ ORDER BY day DESC, repo_id`, DefaultRowLimit)
 type TeamMetricsRow struct {
 	TeamID                 string
 	Day                    string
-	CommitsCount           int64
-	AfterHoursCommitsCount int64
-	WeekendCommitsCount    int64
+	CommitsCount           float64
+	AfterHoursCommitsCount float64
+	WeekendCommitsCount    float64
 	AfterHoursCommitRatio  float64
 	WeekendCommitRatio     float64
 }
@@ -102,7 +102,10 @@ type TeamMetricsRow struct {
 //  2. per (team, day) the legacy empty-repo_id bucket is dropped once any real repository
 //     row exists (CHAOS-4342);
 //  3. the day rule is unchanged: the team's latest day over all its kept rows;
-//  4. commits, after-hours and weekend counts are summed over repositories;
+//  4. commits, after-hours and weekend counts are summed over repositories as
+//     Float64: a team that co-owns a repository holds a share of its counters,
+//     so the sum can be fractional (the column is UInt32 before ops migration
+//     124 and Float64 after; toFloat64 serves both, nothing is truncated);
 //  5. both ratios are recomputed from the sums, never averaged or served from a
 //     stored row; zero commits gives 0.0 (as in ops);
 //  6. team_name is the name of the newest kept row of the served day (ops has no
@@ -114,9 +117,9 @@ func teamMetricsLatestDaySQL(filters string) string {
 	FROM (
 		SELECT team_id, day,
 			argMax(team_name, (computed_at, row_hash)) AS team_name,
-			toInt64(sum(commits_count)) AS total_commits,
-			toInt64(sum(after_hours_commits_count)) AS total_after_hours,
-			toInt64(sum(weekend_commits_count)) AS total_weekend
+			toFloat64(sum(commits_count)) AS total_commits,
+			toFloat64(sum(after_hours_commits_count)) AS total_after_hours,
+			toFloat64(sum(weekend_commits_count)) AS total_weekend
 		FROM (
 			SELECT team_id, team_name, day, repo_id, commits_count, after_hours_commits_count, weekend_commits_count, computed_at, row_hash,
 				dense_rank() OVER (PARTITION BY team_id ORDER BY day DESC) AS day_rn
@@ -147,7 +150,7 @@ func ReadTeamMetrics(ctx context.Context, client QueryClient, orgID string, team
 	if len(teamIDs) == 0 {
 		return nil, nil
 	}
-	statement := WithRowLimit(`SELECT toString(team_id), toString(day), toInt64(total_commits), toInt64(total_after_hours), toInt64(total_weekend), toFloat64(after_hours_commit_ratio), toFloat64(weekend_commit_ratio)
+	statement := WithRowLimit(`SELECT toString(team_id), toString(day), toFloat64(total_commits), toFloat64(total_after_hours), toFloat64(total_weekend), toFloat64(after_hours_commit_ratio), toFloat64(weekend_commit_ratio)
 FROM (
 `+teamMetricsLatestDaySQL(" AND toString(team_id) IN {ids:Array(String)}"+timeBound.DayPredicate("day"))+`
 )
@@ -187,7 +190,7 @@ func ReadProjectMetricsBreakdown(ctx context.Context, client QueryClient, orgID 
 		return nil, nil
 	}
 	ownershipPredicate := OwnershipValidityPredicate(timeBound)
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toInt64(tm.total_commits), toInt64(tm.total_after_hours), toInt64(tm.total_weekend), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toFloat64(tm.total_commits), toFloat64(tm.total_after_hours), toFloat64(tm.total_weekend), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
 FROM `+ProjectOwnershipJoinSQL(ownershipPredicate)+`
 INNER JOIN (
 `+teamMetricsLatestDaySQL(timeBound.DayPredicate("day"))+`
@@ -213,9 +216,9 @@ ORDER BY p.id, p.provider, tm.team_id`, DefaultRowLimit)
 type ProjectMetricsRollup struct {
 	ProjectKey             string
 	TeamCount              int
-	CommitsCount           int64
-	AfterHoursCommitsCount int64
-	WeekendCommitsCount    int64
+	CommitsCount           float64
+	AfterHoursCommitsCount float64
+	WeekendCommitsCount    float64
 	TeamBreakdown          []ProjectTeamMetricsRow
 }
 
