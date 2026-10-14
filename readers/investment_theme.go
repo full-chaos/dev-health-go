@@ -3,7 +3,7 @@ package readers
 import "context"
 
 // TeamThemeMixRow is one (team, canonical-theme-or-tracked-subcategory)
-// weighted-effort contribution, scanned off ReadTeamThemeMix's query.
+// work-unit count, scanned off ReadTeamThemeMix's query.
 //
 // Key is either one of the five canonical investment themes
 // (feature_delivery, operational, maintenance, quality, risk --
@@ -14,17 +14,20 @@ import "context"
 // reactive-share signal needs (a team's unplanned/bug work is theme
 // `operational` PLUS this one bugfix subcategory share; see
 // ops/.../investment_mix_explain.py's deterministic label pattern this
-// mirrors). WeightedEffort is `effort_value * theme_share` (or
-// `effort_value * subcategory_share`) summed across every work unit
-// attributed to the team inside the requested window -- a caller
+// mirrors). WorkUnits is the work-unit count behind the row: the theme share
+// (or the subcategory share) summed across every work unit attributed to the
+// team inside the requested window, one weight per work unit. The stored
+// effort_value (lines changed by default) is never read: lines of code are
+// not a measure of investment effort, and a unit with no size must not drop
+// out of the mix (D5999). A caller
 // normalizes by the team's own theme total (the sum of the five "theme"
 // rows) to get a share in [0,1], never by a cross-team total.
 type TeamThemeMixRow struct {
-	TeamID         string
-	TeamName       string
-	Kind           string // "theme" | "subcategory"
-	Key            string
-	WeightedEffort float64
+	TeamID    string
+	TeamName  string
+	Kind      string // "theme" | "subcategory"
+	Key       string
+	WorkUnits float64
 }
 
 // BugfixSubcategoryKey is the one subcategory ReadTeamThemeMix tracks
@@ -35,7 +38,7 @@ const BugfixSubcategoryKey = "quality.bugfix"
 // (`latest_work_unit_investments`' `theme_distribution_json` /
 // `subcategory_distribution_json` -- computed once at categorization time,
 // never recomputed here) attributed to the given teams over timeBound,
-// weighted by each work unit's `effort_value`.
+// counted once per work unit (never weighted by `effort_value`).
 //
 // CHAOS-4398 §0 (cohort-answer-plan.md): this is a NEW acr producer join,
 // not a reuse of the retired investment_metrics_daily reader
@@ -77,13 +80,12 @@ func ReadTeamThemeMix(ctx context.Context, client QueryClient, orgID string, tea
 		return nil, nil
 	}
 	statement := WithRowLimit(`
-SELECT team_id, team_name, kind, key, weighted_effort FROM (
+SELECT team_id, team_name, kind, key, work_units FROM (
 WITH latest AS (
     SELECT
         work_unit_id,
         argMax(from_ts, computed_at) AS from_ts,
         argMax(to_ts, computed_at) AS to_ts,
-        argMax(effort_value, computed_at) AS effort_value,
         argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
         argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
         argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
@@ -155,19 +157,18 @@ attributed AS (
     SELECT
         votes.team_id AS team_id,
         votes.team_name AS team_name,
-        windowed.effort_value AS effort_value,
         windowed.theme_distribution_json AS theme_distribution_json,
         ifNull(windowed.subcategory_distribution_json[{bugfix_key:String}], 0.0) AS bugfix_share
     FROM votes
     JOIN windowed ON windowed.work_unit_id = votes.work_unit_id
     WHERE votes.team_id != '' AND votes.team_id IN {ids:Array(String)}
 )
-SELECT team_id, max(team_name) AS team_name, 'theme' AS kind, theme_kv.1 AS key, sum(theme_kv.2 * effort_value) AS weighted_effort
+SELECT team_id, max(team_name) AS team_name, 'theme' AS kind, theme_kv.1 AS key, sum(theme_kv.2) AS work_units
 FROM attributed
 ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float64))) AS theme_kv
 GROUP BY team_id, key
 UNION ALL
-SELECT team_id, max(team_name) AS team_name, 'subcategory' AS kind, {bugfix_key:String} AS key, sum(bugfix_share * effort_value) AS weighted_effort
+SELECT team_id, max(team_name) AS team_name, 'subcategory' AS kind, {bugfix_key:String} AS key, sum(bugfix_share) AS work_units
 FROM attributed
 GROUP BY team_id
 )
@@ -177,7 +178,7 @@ ORDER BY team_id, kind, key`, DefaultRowLimit)
 	var rows []TeamThemeMixRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamThemeMix", statement, orgID, teamIDs, func(row RowScanner) error {
 		var r TeamThemeMixRow
-		if scanErr := row.Scan(&r.TeamID, &r.TeamName, &r.Kind, &r.Key, &r.WeightedEffort); scanErr != nil {
+		if scanErr := row.Scan(&r.TeamID, &r.TeamName, &r.Kind, &r.Key, &r.WorkUnits); scanErr != nil {
 			return scanErr
 		}
 		rows = append(rows, r)
