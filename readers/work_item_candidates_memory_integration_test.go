@@ -195,7 +195,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	runPeaks := map[string]int64{}
 	var queryIDs []string
 	for _, name := range scenarioNames {
-		sc := scenarios[name]
+		_ = scenarios[name]
 		for rep := 0; rep < memoryWarmRuns; rep++ {
 			baseCount, _, baseID := run(name, "baseline", rep, readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})
 			oldCount, oldAdmitted, oldID := run(name, "unnarrowed", rep, readers.WorkItemScopeSQL(scope))
