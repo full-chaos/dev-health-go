@@ -35,10 +35,15 @@ jobs:
         run: go build ./...
 
   readers-integration:
+    name: readers-integration (clickhouse ${{ matrix.clickhouse }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        clickhouse: ['24.8', '26.7']
     services:
       clickhouse:
-        image: clickhouse/clickhouse-server:24.8
+        image: clickhouse/clickhouse-server:${{ matrix.clickhouse }}
         env:
           CLICKHOUSE_USER: ci_reader
           CLICKHOUSE_PASSWORD: ci_reader_pw
@@ -147,6 +152,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: readers-integration-test-json
+          name: readers-integration-test-json-${{ matrix.clickhouse }}
           path: test-results/readers-integration.json
           if-no-files-found: error
