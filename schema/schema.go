@@ -324,7 +324,9 @@ var ProductionColumns = map[string][]Column{
 	// not inferred from the ops migration files -- this package's own doc
 	// comment requires reading types off production, and a migration file
 	// does not show later ALTERs. Positions match `system.columns.position`
-	// as read live.
+	// as read live. That live read is the baseline; ops migration 124 has
+	// since widened commits_count, after_hours_commits_count and
+	// weekend_commits_count to Float64, which is what they are declared as.
 	"team_metrics_daily": {
 		{Name: "day", Type: "Date"},
 		{Name: "team_id", Type: "LowCardinality(String)"},
