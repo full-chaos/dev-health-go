@@ -42,9 +42,9 @@ type tmRow struct {
 
 type tmWant struct {
 	day     string
-	commits int64
-	ah      int64
-	wk      int64
+	commits float64
+	ah      float64
+	wk      float64
 	ahRatio float64
 	wkRatio float64
 	name    string // "" = not checked
@@ -193,6 +193,14 @@ func tmSeedInsert(team string, r tmRow) string {
 
 func tmClient(t *testing.T) (*clickhouse.Client, clickhousedriver.Conn) {
 	t.Helper()
+	return tmClientWithCounters(t, "")
+}
+
+// tmClientWithCounters is tmClient with the three team counter columns forced
+// to counterType (UInt32 before ops migration 124, Float64 after it); empty
+// keeps the schema package's declaration.
+func tmClientWithCounters(t *testing.T, counterType string) (*clickhouse.Client, clickhousedriver.Conn) {
+	t.Helper()
 	required := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1"
 	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
 	if dsn == "" || os.Getenv("ACR_CLICKHOUSE_INTEGRATION_ISOLATED") != "1" {
@@ -231,6 +239,11 @@ func tmClient(t *testing.T) (*clickhouse.Client, clickhousedriver.Conn) {
 	for _, stmt := range schema.DDL("team_metrics_daily", "projects", "team_project_ownership", "teams") {
 		if err := seed.Exec(ctx, stmt); err != nil {
 			t.Fatalf("ddl %q: %v", stmt, err)
+		}
+	}
+	if counterType != "" {
+		if err := seed.Exec(ctx, "ALTER TABLE team_metrics_daily MODIFY COLUMN commits_count "+counterType+", MODIFY COLUMN after_hours_commits_count "+counterType+", MODIFY COLUMN weekend_commits_count "+counterType); err != nil {
+			t.Fatalf("set counter columns to %s: %v", counterType, err)
 		}
 	}
 	// The production table is a ReplacingMergeTree: a background merge could
@@ -298,7 +311,7 @@ func TestIntegrationTeamMetricsReadersSumRepositoriesAfterFullKeyDedupe(t *testi
 		cases = append(cases, tmCase{name: fmt.Sprintf("same-computed-at-%02d", i), rows: tmTieRows(i)})
 	}
 	for i := 0; i < tmNameTimeTeams; i++ {
-		cases = append(cases, tmCase{name: fmt.Sprintf("name-time-%02d", i), rows: tmNameTimeRows(i), want: &tmWant{day: "2026-03-01", commits: int64(52 + 8*i), ah: int64(i + 1), wk: 1, ahRatio: float64(i+1) / float64(52+8*i), wkRatio: 1 / float64(52+8*i), name: fmt.Sprintf("Newer %d", i)}})
+		cases = append(cases, tmCase{name: fmt.Sprintf("name-time-%02d", i), rows: tmNameTimeRows(i), want: &tmWant{day: "2026-03-01", commits: float64(52 + 8*i), ah: float64(i + 1), wk: 1, ahRatio: float64(i+1) / float64(52+8*i), wkRatio: 1 / float64(52+8*i), name: fmt.Sprintf("Newer %d", i)}})
 	}
 	for i := 0; i < tmNameTieTeams; i++ {
 		cases = append(cases, tmCase{name: fmt.Sprintf("name-tie-%02d", i), rows: tmNameTieRows(i)})
@@ -397,7 +410,7 @@ func TestIntegrationTeamMetricsReadersSumRepositoriesAfterFullKeyDedupe(t *testi
 		if err := row.Scan(&commits, &ah, &wk); err != nil {
 			t.Fatal(err)
 		}
-		want := &tmWant{day: "2026-03-01", commits: int64(commits), ah: int64(ah), wk: int64(wk), ahRatio: float64(ah) / float64(commits), wkRatio: float64(wk) / float64(commits)}
+		want := &tmWant{day: "2026-03-01", commits: float64(commits), ah: float64(ah), wk: float64(wk), ahRatio: float64(ah) / float64(commits), wkRatio: float64(wk) / float64(commits)}
 		tmCheck(t, "ReadTeamMetrics "+team, one(team, teamGot[team]), want)
 		tmCheck(t, "ReadProjectMetricsBreakdown "+team, one(team, projectGot[team]), want)
 	}
@@ -411,7 +424,7 @@ func TestIntegrationTeamMetricsReadersSumRepositoriesAfterFullKeyDedupe(t *testi
 			t.Fatal(err)
 		}
 		commits := int64(3+i) + int64(5+2*i)
-		want := &tmWant{day: "2026-03-01", commits: commits, ah: 3, wk: 1, ahRatio: 3 / float64(commits), wkRatio: 1 / float64(commits), name: winner}
+		want := &tmWant{day: "2026-03-01", commits: float64(commits), ah: 3, wk: 1, ahRatio: 3 / float64(commits), wkRatio: 1 / float64(commits), name: winner}
 		cw := *want
 		cw.name = ""
 		tmCheck(t, "ReadTeamMetrics "+team, one(team, teamGot[team]), &cw)
@@ -510,7 +523,7 @@ func TestIntegrationTeamMetricsReadersTieAfterMergeServesOneWholeRow(t *testing.
 			}
 			ok := false
 			for _, c := range candidates {
-				w := tmWant{day: c.day, commits: int64(c.commits), ah: int64(c.ah), wk: int64(c.wk), ahRatio: float64(c.ah) / float64(c.commits), wkRatio: float64(c.wk) / float64(c.commits)}
+				w := tmWant{day: c.day, commits: float64(c.commits), ah: float64(c.ah), wk: float64(c.wk), ahRatio: float64(c.ah) / float64(c.commits), wkRatio: float64(c.wk) / float64(c.commits)}
 				if rows[0] == w {
 					ok = true
 				}
