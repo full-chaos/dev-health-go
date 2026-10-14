@@ -7,17 +7,19 @@ import "context"
 // ReadProjectThemeMix. It is one row per project that has at least one
 // attributed work unit; a project with none has no row.
 //
-// The five theme fields are `effort_value * theme_share` summed across the
-// project's work units with positive effort; a caller normalizes by their
-// sum. BugfixWeighted is the same weighting over the one tracked
-// subcategory (BugfixSubcategoryKey).
+// The five theme fields are the theme shares summed across the project's
+// work units, one weight per work unit: every unit in the window counts 1, so
+// a theme's field is the number of work units the project spent on that theme
+// (fractionally, per the unit's persisted distribution); a caller normalizes
+// by their sum. The stored effort_value (lines changed by default) is never
+// read: lines of code are not a measure of investment effort, and a unit with
+// no size must not drop out of the mix (D5999). BugfixWeighted is the same
+// count over the one tracked subcategory (BugfixSubcategoryKey).
 //
 // The population fields are computed by the same uncapped aggregate as the
 // theme sums, never from the capped output rows:
 //
 //   - WorkUnits: distinct work units attributed to the project.
-//   - EffortUnits: the subset with effort_value > 0 (the only units that
-//     carry weight in the theme sums).
 //   - SpanningUnits: the subset that is ALSO attributed to at least one
 //     other project in the organization. Each project's mix counts a
 //     spanning unit in full: a project owns the mix of the work that touches
@@ -31,7 +33,6 @@ type ProjectThemeMixRow struct {
 	Risk              float64
 	BugfixWeighted    float64
 	WorkUnits         uint64
-	EffortUnits       uint64
 	SpanningUnits     uint64
 	// MultiPlacedUnits counts the work units attributed to this project
 	// through at least one work item id that project membership places under
@@ -63,8 +64,7 @@ type ProjectThemeMixRow struct {
 // touches several projects counts in full for each of them; one work unit is
 // never counted twice within one project (a work unit naming several items of
 // one project, or one item under both the project's id and its key, is one
-// unit). Work units with no positive effort
-// add nothing to the sums and are reported in WorkUnits only.
+// unit).
 //
 // timeBound is expected to be Active; the work unit's own [from_ts, to_ts)
 // validity range is tested for overlap with the window, the same test
@@ -82,13 +82,12 @@ func ReadProjectThemeMixWithRowLimit(ctx context.Context, client QueryClient, or
 		return nil, nil
 	}
 	statement := WithRowLimit(`
-SELECT project_key, feature_delivery, operational, maintenance, quality, risk, bugfix_weighted, work_units, effort_units, spanning_units, multi_placed_units FROM (
+SELECT project_key, feature_delivery, operational, maintenance, quality, risk, bugfix_weighted, work_units, spanning_units, multi_placed_units FROM (
 WITH latest AS (
     SELECT
         work_unit_id,
         argMax(from_ts, computed_at) AS from_ts,
         argMax(to_ts, computed_at) AS to_ts,
-        argMax(effort_value, computed_at) AS effort_value,
         argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
         argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
         argMax(structural_evidence_json, computed_at) AS structural_evidence_json
@@ -139,14 +138,13 @@ attributed AS (
 )
 SELECT
     concat(a.project_provider, ':', a.project_id) AS project_key,
-    sumIf(w.theme_distribution_json['feature_delivery'] * w.effort_value, w.effort_value > 0) AS feature_delivery,
-    sumIf(w.theme_distribution_json['operational'] * w.effort_value, w.effort_value > 0) AS operational,
-    sumIf(w.theme_distribution_json['maintenance'] * w.effort_value, w.effort_value > 0) AS maintenance,
-    sumIf(w.theme_distribution_json['quality'] * w.effort_value, w.effort_value > 0) AS quality,
-    sumIf(w.theme_distribution_json['risk'] * w.effort_value, w.effort_value > 0) AS risk,
-    sumIf(ifNull(w.subcategory_distribution_json[{bugfix_key:String}], 0.0) * w.effort_value, w.effort_value > 0) AS bugfix_weighted,
+    sum(w.theme_distribution_json['feature_delivery']) AS feature_delivery,
+    sum(w.theme_distribution_json['operational']) AS operational,
+    sum(w.theme_distribution_json['maintenance']) AS maintenance,
+    sum(w.theme_distribution_json['quality']) AS quality,
+    sum(w.theme_distribution_json['risk']) AS risk,
+    sum(ifNull(w.subcategory_distribution_json[{bugfix_key:String}], 0.0)) AS bugfix_weighted,
     count() AS work_units,
-    countIf(w.effort_value > 0) AS effort_units,
     countIf(s.project_count > 1) AS spanning_units,
     countIf(a.multi_placed = 1) AS multi_placed_units
 FROM attributed AS a
@@ -161,7 +159,7 @@ ORDER BY project_key`, rowLimit)
 	var rows []ProjectThemeMixRow
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMix", statement, orgID, ids, func(row RowScanner) error {
 		var r ProjectThemeMixRow
-		if scanErr := row.Scan(&r.ProjectSubjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.BugfixWeighted, &r.WorkUnits, &r.EffortUnits, &r.SpanningUnits, &r.MultiPlacedUnits); scanErr != nil {
+		if scanErr := row.Scan(&r.ProjectSubjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.BugfixWeighted, &r.WorkUnits, &r.SpanningUnits, &r.MultiPlacedUnits); scanErr != nil {
 			return scanErr
 		}
 		rows = append(rows, r)

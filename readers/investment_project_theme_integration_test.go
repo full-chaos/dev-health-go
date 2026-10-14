@@ -63,7 +63,7 @@ func ptmTheme(key string) map[string]float64 {
 	return out
 }
 
-var ptmProjects = []string{"proj-a", "proj-b", "proj-zero-effort", "proj-no-units", "proj-keyed", "proj-dup", "proj-amb-a", "proj-amb-b", "proj-multi-a", "proj-multi-b"}
+var ptmProjects = []string{"proj-a", "proj-b", "proj-zero-effort", "proj-no-units", "proj-keyed", "proj-dup", "proj-amb-a", "proj-amb-b", "proj-multi-a", "proj-multi-b", "proj-small", "proj-big"}
 
 func ptmItems() []ptmItem {
 	return []ptmItem{
@@ -119,7 +119,7 @@ func ptmBaseUnits() []ptmUnit {
 		{id: "u-b-versioned", org: ptmOrg, effort: 3, themes: ptmTheme("quality"), issues: []string{"linear:B-1"}, version: 2},
 		// The same issue named twice: one unit.
 		{id: "u-dup-ref", org: ptmOrg, effort: 5, themes: ptmTheme("feature_delivery"), issues: []string{"linear:A-2", "linear:A-2"}, version: 1},
-		// Negative effort is not weight: it is reported and adds nothing.
+		// A negative stored effort changes nothing: every work unit counts once.
 		{id: "u-negative", org: ptmOrg, effort: -30, themes: map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}, bugfix: 1, issues: []string{"linear:B-1"}, version: 1},
 		{id: "u-multi", org: ptmOrg, effort: 12, themes: ptmTheme("maintenance"), issues: []string{"linear:MULTI-1"}, version: 1},
 		// Evidence naming an item id that sits under two repositories.
@@ -141,7 +141,7 @@ func ptmBaseUnits() []ptmUnit {
 		{id: "u-span", org: ptmOrg, effort: 10, themes: ptmTheme("risk"), issues: []string{"linear:A-1", "linear:B-1"}, version: 1},
 		// Mixed distribution, only proj-b.
 		{id: "u-b-mixed", org: ptmOrg, effort: 20, themes: map[string]float64{"feature_delivery": 0.25, "operational": 0.25, "maintenance": 0.25, "quality": 0.25, "risk": 0}, issues: []string{"linear:B-1"}, version: 1},
-		// Zero effort: reported in work_units, adds nothing to the sums.
+		// Zero stored effort: a unit with no size still counts once.
 		{id: "u-zero-effort", org: ptmOrg, effort: 0, themes: map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}, issues: []string{"linear:Z-1"}, version: 1},
 		// Evidence names only a project-less item: attributed to no project.
 		{id: "u-no-project", org: ptmOrg, effort: 70, themes: ptmTheme("maintenance"), issues: []string{"linear:NOPROJ-1"}, version: 1},
@@ -155,9 +155,9 @@ func ptmBaseUnits() []ptmUnit {
 }
 
 type ptmWant struct {
-	sums                                          map[string]float64
-	bugfix                                        float64
-	workUnits, effortUnits, spanning, multiPlaced uint64
+	sums                             map[string]float64
+	bugfix                           float64
+	workUnits, spanning, multiPlaced uint64
 }
 
 // ptmOracle models the attribution rule over the fixture only.
@@ -225,13 +225,10 @@ func ptmOracle(units []ptmUnit, items []ptmItem) map[string]ptmWant {
 				w = ptmWant{sums: map[string]float64{}}
 			}
 			w.workUnits++
-			if unit.effort > 0 {
-				w.effortUnits++
-				for k, share := range unit.themes {
-					w.sums[k] += share * unit.effort
-				}
-				w.bugfix += unit.bugfix * unit.effort
+			for k, share := range unit.themes {
+				w.sums[k] += share
 			}
+			w.bugfix += unit.bugfix
 			if len(projects) > 1 {
 				w.spanning++
 			}
@@ -399,8 +396,8 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 		if !ptmClose(row.BugfixWeighted, w.bugfix) {
 			t.Errorf("%s bugfix = %v, want %v", project, row.BugfixWeighted, w.bugfix)
 		}
-		if row.WorkUnits != w.workUnits || row.EffortUnits != w.effortUnits || row.SpanningUnits != w.spanning || row.MultiPlacedUnits != w.multiPlaced {
-			t.Errorf("%s population = (%d,%d,%d,%d), want (%d,%d,%d,%d)", project, row.WorkUnits, row.EffortUnits, row.SpanningUnits, row.MultiPlacedUnits, w.workUnits, w.effortUnits, w.spanning, w.multiPlaced)
+		if row.WorkUnits != w.workUnits || row.SpanningUnits != w.spanning || row.MultiPlacedUnits != w.multiPlaced {
+			t.Errorf("%s population = (%d,%d,%d), want (%d,%d,%d)", project, row.WorkUnits, row.SpanningUnits, row.MultiPlacedUnits, w.workUnits, w.spanning, w.multiPlaced)
 		}
 	}
 	// Named absences: a project with no units, a project whose only unit
@@ -411,10 +408,11 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 			t.Errorf("project %s has a row; it has no attributable unit in this organization", absent)
 		}
 	}
-	// A project whose only unit carries zero effort reports the unit and no weight.
+	// A project whose only unit carries zero stored effort still counts that
+	// unit once: its theme shares are the unit's own, never dropped.
 	zero := got["linear:proj-zero-effort"]
-	if zero.WorkUnits != 1 || zero.EffortUnits != 0 || zero.FeatureDelivery != 0 {
-		t.Errorf("zero-effort project row = %#v", zero)
+	if zero.WorkUnits != 1 || !ptmClose(zero.FeatureDelivery, 0.2) || !ptmClose(zero.Risk, 0.2) {
+		t.Errorf("zero-effort project row = %#v, want its one unit counted with its 0.2 shares", zero)
 	}
 	// A multi-placed item's units count in full for every placement and the
 	// count is disclosed on each. u-ambiguous, u-amb-mixed, u-amb-solo and
@@ -425,7 +423,7 @@ func TestIntegrationReadProjectThemeMix(t *testing.T) {
 			t.Errorf("%s = %#v, want multi-placed units disclosed and counted", project, row)
 		}
 	}
-	if got["linear:proj-amb-b"].WorkUnits != 4 || got["linear:proj-amb-b"].MultiPlacedUnits != 4 || got["linear:proj-amb-b"].EffortUnits != 4 {
+	if got["linear:proj-amb-b"].WorkUnits != 4 || got["linear:proj-amb-b"].MultiPlacedUnits != 4 {
 		t.Errorf("proj-amb-b = %#v, want the 4 units naming the multi-placed item, all counted", got["linear:proj-amb-b"])
 	}
 	// A project that only shares a unit with a multi-placed item's placements
@@ -466,5 +464,44 @@ func TestIntegrationReadProjectThemeMixOrgScope(t *testing.T) {
 	own, err := readers.ReadProjectThemeMix(context.Background(), client, ptmOrg, []string{"linear:proj-a"}, readers.TimeBound{})
 	if err != nil || len(own) != 1 || own[0].Risk > 10.0+1e-9 {
 		t.Fatalf("rows = %#v, err = %v, want this organization's proj-a without the other organization's weight", own, err)
+	}
+}
+
+// The mix is a work-unit count: the stored effort_value (lines changed by
+// default) is never read. Two projects hold the same units except that one
+// carries a planted unit whose effort_value is a billion; the share of every
+// theme must be the same as in the project whose unit carries effort 1.
+func TestIntegrationReadProjectThemeMixIgnoresStoredEffortValue(t *testing.T) {
+	items := []ptmItem{
+		{id: "linear:SMALL-1", org: ptmOrg, project: "proj-small"},
+		{id: "linear:SMALL-2", org: ptmOrg, project: "proj-small"},
+		{id: "linear:BIG-1", org: ptmOrg, project: "proj-big"},
+		{id: "linear:BIG-2", org: ptmOrg, project: "proj-big"},
+	}
+	units := []ptmUnit{
+		{id: "u-small-feature", org: ptmOrg, effort: 1, themes: ptmTheme("feature_delivery"), issues: []string{"linear:SMALL-1"}, version: 1},
+		{id: "u-small-risk", org: ptmOrg, effort: 1, themes: ptmTheme("risk"), issues: []string{"linear:SMALL-2"}, version: 1},
+		{id: "u-big-feature", org: ptmOrg, effort: 1, themes: ptmTheme("feature_delivery"), issues: []string{"linear:BIG-1"}, version: 1},
+		// The planted large-LOC unit: same one work unit as its sibling.
+		{id: "u-big-risk", org: ptmOrg, effort: 1e9, themes: ptmTheme("risk"), issues: []string{"linear:BIG-2"}, version: 1},
+	}
+	client := ptmDatabase(t, items, units)
+	rows, err := readers.ReadProjectThemeMix(context.Background(), client, ptmOrg, []string{"linear:proj-small", "linear:proj-big"}, readers.TimeBound{})
+	if err != nil {
+		t.Fatalf("ReadProjectThemeMix() error = %v", err)
+	}
+	got := map[string]readers.ProjectThemeMixRow{}
+	for _, row := range rows {
+		got[row.ProjectSubjectKey] = row
+	}
+	small, big := got["linear:proj-small"], got["linear:proj-big"]
+	for name, row := range map[string]readers.ProjectThemeMixRow{"small": small, "big": big} {
+		if row.WorkUnits != 2 || !ptmClose(row.FeatureDelivery, 1) || !ptmClose(row.Risk, 1) {
+			t.Errorf("%s = %#v, want 2 work units, one feature delivery and one risk, whatever each unit's stored effort", name, row)
+		}
+	}
+	total := big.FeatureDelivery + big.Operational + big.Maintenance + big.Quality + big.Risk
+	if !ptmClose(big.Risk/total, 0.5) {
+		t.Errorf("risk share of the planted-effort project = %v, want 0.5: a unit's stored effort must not move the share", big.Risk/total)
 	}
 }
