@@ -50,7 +50,6 @@ const biggestTeamCandidates = 20000
 const (
 	memoryWarmRuns          = 3
 	memorySlopeRatio        = 1.15
-	memorySlopeFloor        = 2 * mib
 	memoryBytesPerCandidate = 4096
 	memoryRelationCap       = 32 * mib
 )
@@ -273,10 +272,35 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	if a, b := candidateCount["org-30k"], candidateCount["org-300k-equal"]; a*10 < b*9 || b*10 < a*9 {
 		t.Fatalf("equal-candidate scenarios hold %d and %d candidates, want within 10%%", a, b)
 	}
-	small, large := share("org-30k", "candidates"), share("org-300k-equal", "candidates")
-	if float64(large) > memorySlopeRatio*float64(small) && large > small+memorySlopeFloor {
-		t.Errorf("candidates relation grew with organization size at %d candidates: %.2f MiB at 30k, %.2f MiB at 300k work items, want at most x%.2f or +%.0f MiB",
-			candidateCount["org-30k"], float64(small)/mib, float64(large)/mib, memorySlopeRatio, float64(memorySlopeFloor)/mib)
+	// The slope is read on the candidates statement itself: the smallest of
+	// the warm reads per size, and the floor is that statement's own spread
+	// (largest less smallest warm read, both sizes, rounded up to a whole
+	// MiB), so the row fails only on growth the repeat noise cannot explain.
+	warmReads := func(name, mode string) (smallest, spread int64) {
+		var lo, hi int64 = -1, 0
+		for rep := 0; rep < memoryWarmRuns; rep++ {
+			peak := runPeaks[fmt.Sprintf("%s-%s-%d", name, mode, rep)]
+			if lo < 0 || peak < lo {
+				lo = peak
+			}
+			if peak > hi {
+				hi = peak
+			}
+		}
+		return lo, hi - lo
+	}
+	small, smallSpread := warmReads("org-30k", "candidates")
+	large, largeSpread := warmReads("org-300k-equal", "candidates")
+	floor := smallSpread
+	if largeSpread > floor {
+		floor = largeSpread
+	}
+	floor = (floor + mib - 1) / mib * mib
+	t.Logf("organization-size slope at %d candidates: %.2f MiB at 30k (spread %.2f), %.2f MiB at 300k (spread %.2f), floor %d MiB",
+		candidateCount["org-30k"], float64(small)/mib, float64(smallSpread)/mib, float64(large)/mib, float64(largeSpread)/mib, floor/mib)
+	if float64(large) > memorySlopeRatio*float64(small) && large > small+floor {
+		t.Errorf("candidates statement grew with organization size at %d candidates: %.2f MiB at 30k, %.2f MiB at 300k work items, want at most x%.2f or +%d MiB (its own spread)",
+			candidateCount["org-30k"], float64(small)/mib, float64(large)/mib, memorySlopeRatio, floor/mib)
 	}
 
 	// Candidate count: a bigger team is a real input, so the relation may
