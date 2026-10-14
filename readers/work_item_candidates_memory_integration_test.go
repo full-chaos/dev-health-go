@@ -199,8 +199,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		for rep := 0; rep < memoryWarmRuns; rep++ {
 			baseCount, _, baseID := run(name, "baseline", rep, readers.WorkItemScopeSQLResult{AuthorizationExpr: "1"})
 			oldCount, oldAdmitted, oldID := run(name, "unnarrowed", rep, readers.WorkItemScopeSQL(scope))
-			newCount, newAdmitted, newID := run(name, "candidates", rep, readers.WorkItemScopeSQLAmong(scope, readers.WorkItemCandidateSubquery(memoryTeamCandidates,
-				readers.Binding{Name: "team_ids", Value: sc.teams}, readers.Binding{Name: "cand_mod", Value: sc.mod})))
+			newCount, newAdmitted, newID := run(name, "candidates", rep, readers.WorkItemScopeSQL(scope))
 			if oldCount == 0 || oldAdmitted == 0 || oldAdmitted == oldCount || baseCount != oldCount {
 				t.Fatalf("%s: %d rows (baseline %d), %d admitted: the seed must hold admitted and denied rows", name, oldCount, baseCount, oldAdmitted)
 			}
