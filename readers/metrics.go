@@ -150,7 +150,7 @@ func ReadTeamMetrics(ctx context.Context, client QueryClient, orgID string, team
 	if len(teamIDs) == 0 {
 		return nil, nil
 	}
-	statement := WithRowLimit(`SELECT toString(team_id), toString(day), toInt64(total_commits), toInt64(total_after_hours), toInt64(total_weekend), toFloat64(after_hours_commit_ratio), toFloat64(weekend_commit_ratio)
+	statement := WithRowLimit(`SELECT toString(team_id), toString(day), toFloat64(total_commits), toFloat64(total_after_hours), toFloat64(total_weekend), toFloat64(after_hours_commit_ratio), toFloat64(weekend_commit_ratio)
 FROM (
 `+teamMetricsLatestDaySQL(" AND toString(team_id) IN {ids:Array(String)}"+timeBound.DayPredicate("day"))+`
 )
@@ -190,7 +190,7 @@ func ReadProjectMetricsBreakdown(ctx context.Context, client QueryClient, orgID 
 		return nil, nil
 	}
 	ownershipPredicate := OwnershipValidityPredicate(timeBound)
-	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toInt64(tm.total_commits), toInt64(tm.total_after_hours), toInt64(tm.total_weekend), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toFloat64(tm.total_commits), toFloat64(tm.total_after_hours), toFloat64(tm.total_weekend), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
 FROM `+ProjectOwnershipJoinSQL(ownershipPredicate)+`
 INNER JOIN (
 `+teamMetricsLatestDaySQL(timeBound.DayPredicate("day"))+`
