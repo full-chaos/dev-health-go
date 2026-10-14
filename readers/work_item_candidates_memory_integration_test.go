@@ -58,8 +58,13 @@ var memorySlopeFloorMiB = map[string]int64{"24.8": 5, "26.7": 4}
 // is the highest of five reads over both part states, rounded up to a whole
 // MiB, plus 1 MiB, and the line above it cites the measuring run. On 26.7 (the
 // prod version) no entry exists: every absolute row asserts the cap itself.
+//
+// statement-300k on 24.8: the highest of five reads measured 32.36 MiB merged
+// and 32.68 MiB unmerged (hosted CI run 38508030344), above the 32 MiB cap;
+// rounded up to 33 MiB plus 1 MiB makes the guard 34 MiB. It is not a claim
+// that the statement is within the cap on 24.8.
 var memoryAbsoluteBoundMiB = map[string]map[string]int64{
-	"statement-300k": {"24.8": 33},
+	"statement-300k": {"24.8": 34},
 }
 
 // biggestTeamCandidates is the candidate count of the largest team the
