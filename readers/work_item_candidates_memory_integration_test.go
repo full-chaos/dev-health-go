@@ -306,6 +306,10 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	// Organization size alone: the same number of candidates in a 30k and a
 	// 300k organization. The floor is the statement's own spread over both
 	// sizes and both part states, rounded up to a whole MiB.
+	if got, extra := candidateCount["org-300k-biggest"], candidateCount["org-300k-biggest"]-candidateCount["org-300k"]; got < biggestTeamCandidates || extra <= 0 {
+		t.Fatalf("the biggest-team scenario reads %d candidates (%d more than the 300k scenario), want at least %d and more than the 300k scenario: the cap row would run on a smaller set than it claims",
+			got, extra, biggestTeamCandidates)
+	}
 	if a, b := candidateCount["org-30k"], candidateCount["org-300k-equal"]; a*10 < b*9 || b*10 < a*9 {
 		t.Fatalf("equal-candidate scenarios hold %d and %d candidates, want within 10%%", a, b)
 	}
@@ -362,12 +366,10 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		if biggest >= memoryRelationCap {
 			t.Errorf("%s: candidates relation for %d candidates = %.2f MiB, want < 32", state, candidateCount["org-300k-biggest"], float64(biggest)/mib)
 		}
-		if extra := candidateCount["org-300k-biggest"] - candidateCount["org-300k"]; extra > 0 {
-			perCandidate := float64(biggest-atScale) / float64(extra)
-			if perCandidate > memoryBytesPerCandidate {
-				t.Errorf("%s: candidates relation grows %.0f bytes per extra candidate (%d to %d candidates), want at most %d",
-					state, perCandidate, candidateCount["org-300k"], candidateCount["org-300k-biggest"], memoryBytesPerCandidate)
-			}
+		extra := candidateCount["org-300k-biggest"] - candidateCount["org-300k"]
+		if perCandidate := float64(biggest-atScale) / float64(extra); perCandidate > memoryBytesPerCandidate {
+			t.Errorf("%s: candidates relation grows %.0f bytes per extra candidate (%d to %d candidates), want at most %d",
+				state, perCandidate, candidateCount["org-300k"], candidateCount["org-300k-biggest"], memoryBytesPerCandidate)
 		}
 		// The project side reads the whole project catalog (its key-ambiguity
 		// count is organization-wide), so it grows with the catalog, not with
