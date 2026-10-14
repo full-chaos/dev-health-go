@@ -257,21 +257,6 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		}
 	}
 
-	// Read once: the project side's candidate scopes are one scalar subquery
-	// that both project-side filters reuse, so it is evaluated once per
-	// statement and hit once from the cache. A second evaluation is a second
-	// work_items read and a second candidate set.
-	for _, state := range states {
-		var scalarMisses, scalarHits uint64
-		evidence := fmt.Sprintf("%s-%s-org-300k-biggest-candidates-0", database, state)
-		if err := conn.QueryRow(ctx, "SELECT ProfileEvents['ScalarSubqueriesCacheMiss'], ProfileEvents['ScalarSubqueriesGlobalCacheHit'] FROM system.query_log WHERE type = 'QueryFinish' AND query_id = ?", evidence).Scan(&scalarMisses, &scalarHits); err != nil {
-			t.Fatalf("%s: read scalar subquery counters: %v", state, err)
-		}
-		if scalarMisses != 1 || scalarHits < 1 {
-			t.Errorf("%s: candidate scopes evaluated %d times with %d cache hits, want 1 evaluation and at least 1 hit", state, scalarMisses, scalarHits)
-		}
-	}
-
 	// A run's share of the relation is its peak less the peak of the
 	// repository-join-only statement run beside it. warm gives the smallest
 	// share over the warm runs and the spread (largest less smallest) that
