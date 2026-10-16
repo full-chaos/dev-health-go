@@ -6,6 +6,11 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // The response bodies in this package's tests are hand-written in each API's
@@ -72,3 +77,32 @@ func scriptedServer(t *testing.T, steps ...step) (*httptest.Server, *capture) {
 }
 
 func intp(v int) *int { return &v }
+
+// recordSpans installs a recording tracer provider for the test.
+func recordSpans(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)))
+	t.Cleanup(func() { otel.SetTracerProvider(previous) })
+	return recorder
+}
+
+// llmSpans is every ended provider span, in end order.
+func llmSpans(recorder *tracetest.SpanRecorder) []sdktrace.ReadOnlySpan {
+	var spans []sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == spanName {
+			spans = append(spans, span)
+		}
+	}
+	return spans
+}
+
+func spanAttrs(span sdktrace.ReadOnlySpan) map[attribute.Key]attribute.Value {
+	attrs := map[attribute.Key]attribute.Value{}
+	for _, kv := range span.Attributes() {
+		attrs[kv.Key] = kv.Value
+	}
+	return attrs
+}
