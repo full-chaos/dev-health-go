@@ -15,10 +15,14 @@ type BatchJobStatus string
 const (
 	BatchJobSubmitted BatchJobStatus = "submitted"
 	BatchJobRunning   BatchJobStatus = "running"
-	BatchJobSucceeded BatchJobStatus = "succeeded"
-	BatchJobFailed    BatchJobStatus = "failed"
-	BatchJobCancelled BatchJobStatus = "cancelled"
-	BatchJobExpired   BatchJobStatus = "expired"
+	// BatchJobCancelling is a cancel the provider has not finished: results
+	// can still arrive, so it is not terminal (openai.py folded it into
+	// cancelled, which told a caller to stop polling too early).
+	BatchJobCancelling BatchJobStatus = "cancelling"
+	BatchJobSucceeded  BatchJobStatus = "succeeded"
+	BatchJobFailed     BatchJobStatus = "failed"
+	BatchJobCancelled  BatchJobStatus = "cancelled"
+	BatchJobExpired    BatchJobStatus = "expired"
 )
 
 // Terminal reports whether the provider will not change the job any more.
@@ -167,7 +171,11 @@ func BatchItemFailure(result BatchItemResult, provider Kind, model string) error
 	if result.StatusCode != nil {
 		status = *result.StatusCode
 	}
-	return classify(&statusError{statusCode: status, body: result.ErrorCode + " " + result.ErrorMessage}, provider, model)
+	// The line's error type rides along with its code: a code like
+	// invalid_prompt says nothing a classifier knows, its type
+	// invalid_request_error does.
+	return classify(&statusError{statusCode: status, body: strings.Join([]string{
+		result.ErrorCode, result.ProviderErrorType, result.ErrorMessage}, " ")}, provider, model)
 }
 
 // BatchMissingResultError is the error of a request whose custom id is in no

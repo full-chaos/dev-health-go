@@ -48,9 +48,6 @@ type openAIBatchLine struct {
 // Each line's body is the synchronous request body, from the same builder,
 // at the first attempt's output cap.
 func (p *OpenAI) SubmitBatch(ctx context.Context, batch BatchRequest) (BatchSubmission, error) {
-	if err := admitBatch(ctx, p.cfg.Budget, KindOpenAI, p.cfg.Model, p.cfg.BaseURL); err != nil {
-		return BatchSubmission{}, err
-	}
 	if err := validateBatchItems(batch.Items); err != nil {
 		return BatchSubmission{}, err
 	}
@@ -71,6 +68,11 @@ func (p *OpenAI) SubmitBatch(ctx context.Context, batch BatchRequest) (BatchSubm
 		payload.Write(line)
 	}
 
+	// Admitted only once the batch is known to be sendable, so a budget is
+	// never asked to admit a batch that then fails before any upload.
+	if err := admitBatch(ctx, p.cfg.Budget, KindOpenAI, p.cfg.Model, p.cfg.BaseURL); err != nil {
+		return BatchSubmission{}, err
+	}
 	fileName := batch.FileName
 	if fileName == "" {
 		fileName = openAIBatchDefaultFileName
@@ -258,7 +260,9 @@ func mapOpenAIBatchStatus(status string) BatchJobStatus {
 		return BatchJobFailed
 	case "expired":
 		return BatchJobExpired
-	case "cancelling", "cancelled":
+	case "cancelling":
+		return BatchJobCancelling
+	case "cancelled":
 		return BatchJobCancelled
 	}
 	return BatchJobSubmitted

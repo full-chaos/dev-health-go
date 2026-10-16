@@ -36,9 +36,12 @@ LLM_ORACLE_OUT=$PWD/openai_sync.oracle.json LLM_ORACLE_OPS_SHA=<sha> \
   `batchLine`, `parseOpenAIBatchLines` and `mapOpenAIBatchStatus` at
   `ops_sha`.
 - Generator: `ops_openai_batch_generator.go.txt`.
-- Test: `oracle_batch_test.go`. It checks llm against the ops port byte for
-  byte on lines and field for field on parse and status. It checks llm against
-  Python with ops' comparator. ops' six named divergences must still differ.
+- Test: `oracle_batch_test.go`. This is a no-regression guard for the ops
+  adoption, not a Python-parity claim. It checks llm against the ops port byte
+  for byte on lines, and field for field on parse and status, which are
+  caller-relied. The Python answer is compared as well, with ops' six named
+  divergences. A deliberate improvement (`cancelling` is not terminal) is
+  named in the test.
 
 To record it again, follow the sync recipe above with this generator, test
 `TestZZGenerateLLMBatchOracle` and variable `LLM_BATCH_ORACLE_OUT`.

@@ -268,7 +268,7 @@ func TestBatchPollMapsStatusAndCounts(t *testing.T) {
 		{map[string]any{"status": "failed", "request_counts": nil},
 			BatchState{ProviderJobID: "batch_1", Status: BatchJobFailed, ProviderStatus: "failed"}},
 		{map[string]any{"status": "expired"}, BatchState{ProviderJobID: "batch_1", Status: BatchJobExpired, ProviderStatus: "expired"}},
-		{map[string]any{"status": "cancelling"}, BatchState{ProviderJobID: "batch_1", Status: BatchJobCancelled, ProviderStatus: "cancelling"}},
+		{map[string]any{"status": "cancelling"}, BatchState{ProviderJobID: "batch_1", Status: BatchJobCancelling, ProviderStatus: "cancelling"}},
 		{map[string]any{"status": "cancelled"}, BatchState{ProviderJobID: "batch_1", Status: BatchJobCancelled, ProviderStatus: "cancelled"}},
 	}
 	for _, tc := range cases {
@@ -282,7 +282,7 @@ func TestBatchPollMapsStatusAndCounts(t *testing.T) {
 		if state != tc.want {
 			t.Errorf("poll %v = %+v, want %+v", tc.batch["status"], state, tc.want)
 		}
-		if state.Status.Terminal() != (tc.want.Status != BatchJobRunning) {
+		if state.Status.Terminal() != (tc.want.Status != BatchJobRunning && tc.want.Status != BatchJobCancelling) {
 			t.Errorf("%s: Terminal() = %v", state.Status, state.Status.Terminal())
 		}
 	}
@@ -534,5 +534,24 @@ func TestBatchSubmitWithNoLabelsSendsNoMetadata(t *testing.T) {
 	}
 	if _, present := fake.creates[0]["metadata"]; present || fake.uploadName != "batch.jsonl" {
 		t.Fatalf("create = %v upload name %q", fake.creates[0], fake.uploadName)
+	}
+}
+
+func TestBatchItemFailureReadsTheLinesErrorType(t *testing.T) {
+	err := BatchItemFailure(BatchItemResult{ErrorCode: "invalid_prompt", ProviderErrorType: "invalid_request_error", ErrorMessage: "rejected"}, KindOpenAI, "m")
+	if class, _ := ClassOf(err); class != ClassInvalidRequest {
+		t.Fatalf("class = %q, want invalid_request from the line's error type", class)
+	}
+}
+
+func TestBatchBudgetIsNotAskedForAnInvalidBatch(t *testing.T) {
+	fake, server := newFakeBatchAPI(t)
+	budget := &batchBudget{}
+	provider, _ := NewOpenAI(Config{APIKey: NewSecret(fakeBatchKey), BaseURL: server.URL, Budget: budget})
+	if _, err := provider.SubmitBatch(context.Background(), BatchRequest{Items: []BatchItem{{CustomID: "a b", Request: categorizationRequest("x")}}}); err == nil {
+		t.Fatal("an invalid batch was accepted")
+	}
+	if len(budget.admitted) != 0 || len(fake.callList()) != 0 {
+		t.Fatalf("admitted=%v calls=%v: an invalid batch reached the budget or the provider", budget.admitted, fake.callList())
 	}
 }

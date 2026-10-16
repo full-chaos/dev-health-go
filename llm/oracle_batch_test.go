@@ -10,13 +10,17 @@ import (
 	"testing"
 )
 
-// The differential oracle of the Batch API: testdata/openai_batch.oracle.json
-// holds, for ops' frozen-Python batch corpus, both the frozen Python answer
-// (ops testdata/golden/batch.golden.json, recorded from openai.py at
-// python_build) and the ops Go port's answer at ops_sha, with the request
-// inputs each line was built from. llm must equal the ops port byte for byte
-// (lines) and field for field (parse, statuses), and equal Python everywhere
-// except ops' named divergences, which must still differ.
+// No-regression guard for the ops adoption of this package (not a Python-parity
+// claim): testdata/openai_batch.oracle.json holds, for ops' frozen-Python
+// batch corpus, the ops Go port's answer at ops_sha with the request inputs
+// each line was built from. llm must equal the ops port byte for byte on
+// lines (so ops' batches do not change on the wire) and field for field on
+// the parse and the statuses, which are caller-relied: text and JSON, usage,
+// error codes, status. The frozen Python answer (ops
+// testdata/golden/batch.golden.json, recorded from openai.py at
+// python_build) is in the file too; comparing to it is informational, with
+// ops' named divergences. Where this package improves on the ops port, the
+// case is named in batchImprovements and must still differ.
 
 const openAIBatchOracleDigest = "1dc0cda0ae0dfd79b36835d28783a45fb9f042a25c5710d90b68ec30f0d0aac8"
 
@@ -50,6 +54,12 @@ type batchOracleFile struct {
 	MetadataKeys []string                     `json:"metadata_keys"`
 }
 
+// batchImprovements are the cases this package answers better than the ops
+// port (and Python) on purpose.
+var batchImprovements = map[string]string{
+	"status/cancelling": "a cancel in progress is not terminal: results can still arrive (ops and openai.py folded it into cancelled)",
+}
+
 // opsBatchItemResult is the ops port's BatchItemResult as it marshals.
 type opsBatchItemResult struct {
 	CustomID, Text, ErrorCode, ErrorMessage, LineID, RequestID string
@@ -57,7 +67,7 @@ type opsBatchItemResult struct {
 	ProviderErrorCode, ProviderErrorType                       string
 }
 
-func TestBatchMatchesTheOpsPortAndFrozenPython(t *testing.T) {
+func TestBatchCallerReliedNoRegressionAgainstTheOpsPort(t *testing.T) {
 	var oracle batchOracleFile
 	loadOracle(t, "testdata/openai_batch.oracle.json", openAIBatchOracleDigest, &oracle)
 	if oracle.Header["ops_sha"] == "" || oracle.Header["python_build"] == "" {
@@ -76,6 +86,8 @@ func TestBatchMatchesTheOpsPortAndFrozenPython(t *testing.T) {
 		case divergence && equal:
 			t.Errorf("%s: a named divergence from Python is no longer found (the comparison or the case broke)", name)
 		case !divergence && !equal:
+			// Informational would hide a real drift from the recorded Python
+			// answer that the ops port does not show; both must hold.
 			t.Errorf("%s: differs from Python: %s", name, detail)
 		}
 	}
@@ -158,10 +170,18 @@ func TestBatchMatchesTheOpsPortAndFrozenPython(t *testing.T) {
 	}
 	for status, want := range oracle.Statuses {
 		got := string(mapOpenAIBatchStatus(status))
-		if got != want["ops"] || got != want["python"] {
+		same := got == want["ops"] && got == want["python"]
+		if reason, improved := batchImprovements["status/"+status]; improved {
+			if same {
+				t.Errorf("status %q: named improvement (%s) no longer differs", status, reason)
+			}
+		} else if !same {
 			t.Errorf("status %q: %q, ops %q, python %q", status, got, want["ops"], want["python"])
 		}
 		compared++
+	}
+	if len(oracle.Lines) != 8 || len(oracle.Parse) != 21 || len(oracle.Statuses) != 12 {
+		t.Fatalf("lines=%d parse=%d statuses=%d: the oracle is not the 8/21/12 recording", len(oracle.Lines), len(oracle.Parse), len(oracle.Statuses))
 	}
 	t.Logf("compared %d cases (%d lines, %d parse, %d statuses)", compared, len(oracle.Lines), len(oracle.Parse), len(oracle.Statuses))
 }
