@@ -108,7 +108,7 @@ func (s scanner) Scan(dest ...any) error {
 
 // The statements are byte-equal to ops' analytics.IssueSizedSource and
 // LatestWorkUnitIssueSizeSource at the time they moved here (ops main
-// 1fb3e6c83c); a change to either must change these pins on purpose.
+// 2dc9f47c03); a change to either must change these pins on purpose.
 func TestIssueSizeSourceIsByteEqualToTheOpsSourceItMovedFrom(t *testing.T) {
 	sized, err := readers.IssueSizedSource("(SELECT 1) AS wui", "wui")
 	if err != nil {
