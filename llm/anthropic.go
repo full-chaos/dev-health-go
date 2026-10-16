@@ -411,6 +411,7 @@ func stripSchema(value any) any {
 			}
 			out[key] = stripSchema(inner)
 		}
+		enumWithoutTypeList(out)
 		return out
 	case []any:
 		out := make([]any, len(typed))
@@ -420,4 +421,49 @@ func stripSchema(value any) any {
 		return out
 	}
 	return value
+}
+
+// enumWithoutTypeList rewrites an enum under a type list, such as
+// {"type": ["string", "null"], "enum": ["high", null]}: structured outputs
+// answer 400 to that shape ("Enum value 'high' does not match declared type
+// '['string', 'null']'", measured 2026-10-16 on claude-haiku-5-5, with and
+// without null in the enum) and accept the enum alone. The enum keeps only
+// the values the type list allows, so the accepted values are the same.
+func enumWithoutTypeList(schema map[string]any) {
+	types, list := schema["type"].([]any)
+	values, enum := schema["enum"].([]any)
+	if !list || !enum {
+		return
+	}
+	kept := make([]any, 0, len(values))
+	for _, value := range values {
+		for _, name := range types {
+			if jsonTypeAllows(name, value) {
+				kept = append(kept, value)
+				break
+			}
+		}
+	}
+	schema["enum"] = kept
+	delete(schema, "type")
+}
+
+func jsonTypeAllows(name any, value any) bool {
+	switch name {
+	case "null":
+		return value == nil
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "number":
+		_, ok := value.(float64)
+		return ok
+	case "integer":
+		number, ok := value.(float64)
+		return ok && number == float64(int64(number))
+	}
+	return false
 }
