@@ -156,9 +156,6 @@ func validateBatchItems(items []BatchItem) error {
 		if item.Request.Prompt == "" {
 			return fmt.Errorf("llm: batch item %d: prompt is required", index)
 		}
-		if item.Request.Seed != nil {
-			return fmt.Errorf("llm: batch item %d: the batch API takes no seed", index)
-		}
 		if _, dup := seen[item.CustomID]; dup {
 			return fmt.Errorf("llm: batch item %d: custom id %q appears twice", index, item.CustomID)
 		}

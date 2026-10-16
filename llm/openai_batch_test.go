@@ -235,16 +235,12 @@ func TestBatchSubmitRefusesInvalidItemsWithoutACall(t *testing.T) {
 	fake, server := newFakeBatchAPI(t)
 	provider := batchTestProvider(server.URL)
 	good := categorizationRequest("x")
-	seed := int64(7)
-	seeded := categorizationRequest("x")
-	seeded.Seed = &seed
 	cases := map[string][]BatchItem{
 		"empty":           nil,
 		"blank id":        {{CustomID: "  ", Request: good}},
 		"id with a space": {{CustomID: "run 1", Request: good}},
 		"empty prompt":    {{CustomID: "run1-0", Request: Request{}}},
 		"duplicate id":    {{CustomID: "run1-0", Request: good}, {CustomID: "run1-0", Request: good}},
-		"seed":            {{CustomID: "run1-0", Request: seeded}},
 	}
 	for name, items := range cases {
 		if _, err := provider.SubmitBatch(context.Background(), batchOf(items)); err == nil {
@@ -582,5 +578,21 @@ func TestBatchResultFileThatIsNotJSONIsATypedError(t *testing.T) {
 	_, err := parseOpenAIBatchLines([]byte("{\"custom_id\":\"a\"}\nnot json\n"))
 	if _, ok := ClassOf(err); !ok {
 		t.Fatalf("err = %v: a malformed result file must be an *Error", err)
+	}
+}
+
+func TestBatchSubmitRefusesASeedAsAnInvalidRequestWithoutACall(t *testing.T) {
+	fake, server := newFakeBatchAPI(t)
+	provider := batchTestProvider(server.URL)
+	seed := int64(7)
+	seeded := categorizationRequest("x")
+	seeded.Seed = &seed
+	_, err := provider.SubmitBatch(context.Background(), batchOf([]BatchItem{{CustomID: "run1-0", Request: categorizationRequest("y")}, {CustomID: "run1-1", Request: seeded}}))
+	var typed *Error
+	if class, ok := ClassOf(err); !ok || class != ClassInvalidRequest || !errors.As(err, &typed) || typed.StatusCode() != 0 {
+		t.Fatalf("err = %v, want class %q with status 0", err, ClassInvalidRequest)
+	}
+	if calls := fake.callList(); len(calls) != 0 {
+		t.Fatalf("calls = %v, want none", calls)
 	}
 }

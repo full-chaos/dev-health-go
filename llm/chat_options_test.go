@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,76 @@ func TestCompatibleTemperatureModes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestTemperatureZeroValueIsTheDefault(t *testing.T) {
+	if TemperatureDefault != 0 || TemperatureOmit == TemperatureDefault {
+		t.Fatalf("TemperatureDefault = %d, TemperatureOmit = %d: the zero value must be the default", TemperatureDefault, TemperatureOmit)
+	}
+	server, c := scriptedServer(t, step{status: 200, body: chatOK(`{"a":1}`)})
+	provider, err := NewCompatible(Config{Kind: KindLocal, BaseURL: server.URL, Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.request(0)["temperature"]; got != 0.3 {
+		t.Fatalf("a Config{} sent temperature %v, want 0.3", got)
+	}
+}
+
+// TestCompatibleZeroConfigBodyIsByteIdenticalToV0230 pins the exact bytes a
+// zero-value Config with no seed sends: the request struct as v0.23.0 had
+// it (temperature a plain float64 field, no seed field), marshalled.
+func TestCompatibleZeroConfigBodyIsByteIdenticalToV0230(t *testing.T) {
+	type v0230ChatRequest struct {
+		Model               string              `json:"model"`
+		Messages            []chatMessage       `json:"messages"`
+		MaxCompletionTokens int                 `json:"max_completion_tokens"`
+		Temperature         float64             `json:"temperature"`
+		ResponseFormat      *chatResponseFormat `json:"response_format,omitempty"`
+	}
+	for _, format := range []*JSONFormat{testFormat, nil} {
+		provider, c := newTestCompatible(t, KindQwen, step{status: 200, body: chatOK(`{"a":1}`)})
+		if _, err := provider.Complete(context.Background(), Request{System: "sys", Prompt: "p", Format: format}); err != nil {
+			t.Fatal(err)
+		}
+		responseFormat := &chatResponseFormat{Type: "json_object"}
+		if format != nil {
+			responseFormat = &chatResponseFormat{Type: "json_schema", JSONSchema: &chatJSONSchema{Name: format.Name, Schema: format.Schema, Strict: true}}
+		}
+		want, err := json.Marshal(v0230ChatRequest{
+			Model: "m-qwen", Messages: []chatMessage{{Role: "system", Content: "sys"}, {Role: "user", Content: "p"}},
+			MaxCompletionTokens: 4096, Temperature: 0.3, ResponseFormat: responseFormat,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(c.bodies[0]); got != string(want) {
+			t.Fatalf("body = %s\nwant %s", got, want)
+		}
+	}
+}
+
+func TestCompatibleDoesNotRetryASeedRejection(t *testing.T) {
+	seed := int64(5)
+	provider, c := newTestCompatible(t, KindLocal,
+		step{status: 400, body: `{"error":{"message":"Invalid JSON payload received. Unknown name \"seed\": Cannot find field."}}`},
+		step{status: 200, body: chatOK(`{"a":2}`)},
+	)
+	_, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat, Seed: &seed})
+	if class, ok := ClassOf(err); !ok || class != ClassInvalidRequest || c.calls() != 1 {
+		t.Fatalf("err = %v, calls = %d, want one call and class %q", err, c.calls(), ClassInvalidRequest)
+	}
+}
+
+func TestOpenAISchemaFreeReplyHasNoUnparsed(t *testing.T) {
+	provider, _ := newTestOpenAI(t, step{status: 200, body: openAIOK("not json")})
+	result, err := provider.Complete(context.Background(), Request{Prompt: "p"})
+	if err != nil || result.Unparsed != "" {
+		t.Fatalf("result = %+v err = %v, want no Unparsed without a Format", result, err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -181,7 +182,7 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			if IsBudgetRefusal(err) || ctx.Err() != nil {
 				return Result{}, err
 			}
-			if statusCodeOf(err) == http.StatusBadRequest && format.Type != "text" && attempt < compatibleMaxRetries {
+			if statusCodeOf(err) == http.StatusBadRequest && format.Type != "text" && attempt < compatibleMaxRetries && !rejectsSeed(err, request.Seed) {
 				// A server without Structured Outputs: plain text, once.
 				format = &chatResponseFormat{Type: "text"}
 				continue
@@ -256,4 +257,10 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 	}
 	answer.text, answer.finish = decoded.Choices[0].Message.Content, decoded.Choices[0].FinishReason
 	return answer, nil
+}
+
+// rejectsSeed reports a 400 that names the seed field of a seeded request: the
+// text-format retry would send the same seed and fail the same way.
+func rejectsSeed(err error, seed *int64) bool {
+	return seed != nil && strings.Contains(strings.ToLower(responseBodyOf(err)), "seed")
 }

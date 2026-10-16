@@ -142,6 +142,9 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 			return Result{}, classified
 		}
 		text, unparsed := gateJSON(answer.text)
+		if request.Format == nil {
+			unparsed = ""
+		}
 		if text == "" && answer.reason == "max_output_tokens" && attempt < openAIMaxRetries {
 			// Doubled up to 8192; a cap already above 8192 is kept, never
 			// lowered (the ops port's min() lowered it).
