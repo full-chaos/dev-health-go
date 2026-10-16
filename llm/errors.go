@@ -54,7 +54,7 @@ func NewError(class ErrorClass, provider Kind, model, message string) *Error {
 	return &Error{Class: class, Provider: provider, Model: model, message: message}
 }
 
-func (e *Error) Error() string {
+func (e Error) Error() string {
 	parts := []string{sanitizeMessage(e.message)}
 	if e.Provider != "" {
 		parts = append(parts, "provider="+string(e.Provider))
@@ -70,13 +70,13 @@ func (e *Error) Error() string {
 
 // Format prints Error() for every verb: the struct's own fields hold the
 // unsanitized message, which %#v would otherwise print.
-func (e *Error) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte(e.Error())) }
+func (e Error) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte(e.Error())) }
 
 // GoString is Error(), for the same reason.
-func (e *Error) GoString() string { return e.Error() }
+func (e Error) GoString() string { return e.Error() }
 
-// Unwrap returns the cause with any provider response body sanitized: a caller
-// that unwraps never reaches text Error() would have redacted.
+// Unwrap returns the cause without any provider text: a status error keeps
+// its status code only, a transport error its operation and class.
 func (e *Error) Unwrap() error { return e.cause }
 
 // Retryable is errors.py's is_retryable.
@@ -156,7 +156,9 @@ func classify(err error, provider Kind, model string) *Error {
 	cause := err
 	var statusErr *statusError
 	if errors.As(err, &statusErr) {
-		cause = &statusError{statusCode: statusErr.statusCode, header: statusErr.header, body: sanitizeMessage(statusErr.body)}
+		// The unwrapped cause keeps the status only: a provider can echo the
+		// key in a header or in its body, in a shape no pattern recognises.
+		cause = &statusError{statusCode: statusErr.statusCode}
 	}
 	build := func(class ErrorClass, message string) *Error {
 		return &Error{Class: class, Provider: provider, Model: model, message: message, cause: cause}

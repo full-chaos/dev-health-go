@@ -260,7 +260,7 @@ func transportFailure(err error) error {
 	// the request, header included) is kept: the chain holds the operation,
 	// the scheme and host, the sanitized text, and what errors.Is/As need
 	// (Timeout, context.Canceled, context.DeadlineExceeded).
-	safe := &safeTransportError{text: sanitizeMessage(err.Error()), timeout: isTimeout(err)}
+	safe := &safeTransportError{text: class, timeout: isTimeout(err)}
 	switch {
 	case errors.Is(err, context.Canceled):
 		safe.sentinel = context.Canceled
@@ -270,7 +270,6 @@ func transportFailure(err error) error {
 	target := "<redacted>"
 	if urlErr != nil {
 		target = redactedURL(urlErr.URL)
-		safe.text = class
 	}
 	return &classifiedError{text: op + " request " + class, cause: &url.Error{Op: op, URL: target, Err: safe}}
 }
