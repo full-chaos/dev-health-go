@@ -172,7 +172,7 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 	// schema is billed for its input tokens, so a refusal is an error, never
 	// a reason to try another mode.
 	mode, reason := anthropicStructured, ""
-	if request.Format != nil {
+	if request.Format.schema() {
 		if fits, why := anthropicSchemaFit(anthropicSchema(request.Format.Schema)); !fits {
 			mode, reason = anthropicForcedTool, why
 		}
@@ -223,6 +223,9 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 			if mode == anthropicForcedTool {
 				result.FormatPath = FormatPathTool
 			}
+			if request.Format.object() {
+				result.FormatPath = FormatPathObject
+			}
 		}
 		return result, nil
 	}
@@ -235,7 +238,7 @@ func (p *Anthropic) messagesBody(request Request, maxTokens int, mode anthropicM
 		System:    request.System,
 		Messages:  []anthropicMessage{{Role: "user", Content: request.Prompt}},
 	}
-	if request.Format == nil {
+	if !request.Format.schema() {
 		return body
 	}
 	switch mode {

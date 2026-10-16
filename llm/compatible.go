@@ -40,10 +40,11 @@ const (
 //   - qwen: Alibaba DashScope's compatible mode; a key is required. qwen.py's
 //     Batch API path is not ported.
 //
-// A Format is sent as response_format json_schema (strict), and no Format as
-// json_object; support varies by server, so a 400 on either is retried once
-// with a plain text format, as local.py did for json_schema. The JSON gate
-// applies only under a Format: a schema-free answer comes back as written,
+// A schema Format is sent as response_format json_schema (strict) and an object
+// Format as json_object; no Format is json_object for Gemini and Qwen and no
+// response_format for local. A 400 on a format is a final invalid_request,
+// never retried in another format (D6044). The JSON gate applies only under a
+// Format: a schema-free answer comes back as written,
 // which the explanation callers parse themselves. Temperature 0.3, local.py's
 // default, unless Config.Temperature is TemperatureOmit; Request.Seed is sent
 // as seed, except to Gemini, which refuses the field: a Gemini request with a
@@ -148,16 +149,21 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 		// that carries seed, whatever its value.
 		return Result{}, errSeedUnsupported(KindGemini, p.cfg.Model)
 	}
-	// A Format is json_schema (strict); no Format asks for a JSON object,
-	// which every one of these APIs documents (local.py sent no format at
-	// all, so a JSON prompt could still be answered in prose). A server that
-	// rejects either with a 400 has refused the format: that is a final
+	// A schema Format is json_schema (strict) and an object Format is
+	// json_object, on every kind. No Format asks Gemini and Qwen for a JSON
+	// object, which their APIs document, and asks a local server for
+	// nothing: a self-hosted server's modes are unknown (an LM Studio-style
+	// server answers 400 to json_object; local.py sent no format). A server
+	// that rejects a format with a 400 has refused it: that is a final
 	// invalid_request, never a second, billed call with another format.
-	format := &chatResponseFormat{Type: "json_object"}
-	if request.Format != nil {
+	var format *chatResponseFormat
+	switch {
+	case request.Format.schema():
 		format = &chatResponseFormat{Type: "json_schema", JSONSchema: &chatJSONSchema{
 			Name: request.Format.Name, Schema: request.Format.Schema, Strict: true,
 		}}
+	case request.Format.object(), p.cfg.Kind != KindLocal:
+		format = &chatResponseFormat{Type: "json_object"}
 	}
 	var maxCompletionTokens *int
 	if p.cfg.OutputCap != OutputCapOmit {
@@ -202,6 +208,9 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 		if request.Format != nil {
 			result.Text, result.Unparsed = gateJSON(answer.text)
 			result.FormatPath = FormatPathSchema
+			if request.Format.object() {
+				result.FormatPath = FormatPathObject
+			}
 		}
 		return result, nil
 	}
