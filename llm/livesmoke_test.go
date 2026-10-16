@@ -23,6 +23,8 @@ import (
 var liveSmokeKeys = map[Kind]string{
 	KindOpenAI:    "OPENAI_API_KEY",
 	KindAnthropic: "ANTHROPIC_API_KEY",
+	KindGemini:    "GEMINI_API_KEY",
+	KindQwen:      "DASHSCOPE_API_KEY",
 }
 
 func runLiveSmoke(t smokeT, kind Kind) {

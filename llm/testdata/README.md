@@ -59,3 +59,15 @@ To record it again, follow the sync recipe above with this generator, test
   Each place where this client now answers better is named there with its
   reason and must still differ.
 - Request shape is not compared. The client follows the current API.
+
+## compatible_responses.golden.json
+
+- These are Chat Completions answers in the documented OpenAI-compatible
+  shape. They are not live recordings, because no Gemini, DashScope or local
+  key exists where they were made.
+- Each answer is stored with the parsed outcome of the previous local, Gemini
+  and Qwen clients, which was recorded once.
+- Test: `oracle_compatible_test.go`, caller-relied. For the same answer, the
+  Result must give the callers what they got before: text and JSON, usage
+  (nil means not reported), stop reason, and error class. Request shape is not
+  compared.

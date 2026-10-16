@@ -14,6 +14,10 @@ type Kind string
 const (
 	KindOpenAI    Kind = "openai"
 	KindAnthropic Kind = "anthropic"
+	// KindLocal is any self-hosted OpenAI-compatible server.
+	KindLocal  Kind = "local"
+	KindGemini Kind = "gemini"
+	KindQwen   Kind = "qwen"
 )
 
 // defaultModels is the model each Kind uses when Config.Model is empty. Every
@@ -28,6 +32,18 @@ var defaultModels = map[Kind]string{
 	// claude-3-haiku-20240307 was retired in April 2026; this is the same
 	// low-cost tier.
 	KindAnthropic: "claude-haiku-5-5",
+	// https://ai.google.dev/gemini-api/docs/models and
+	// https://ai.google.dev/gemini-api/docs/openai, 2026-10-16: a stable
+	// Flash model, the one Google's OpenAI-compatibility guide uses. base.py's
+	// "gemini-3" is no Gemini API model id.
+	KindGemini: "gemini-3.8-flash",
+	// https://www.alibabacloud.com/help/en/model-studio/qwen-plus (updated
+	// 2026-10-11): listed, equivalent to snapshot qwen-plus-2025-12-01.
+	// base.py's DEFAULT_MODEL_BY_PROVIDER["qwen"].
+	KindQwen: "qwen-plus",
+	// https://ollama.com/library/llama3.2, 2026-10-16: listed. base.py's
+	// DEFAULT_MODEL_BY_PROVIDER["local"]; a self-hosted server names its own.
+	KindLocal: "llama3.2",
 }
 
 // DefaultModel is the model kind uses when none is named, "" for an unknown
@@ -35,7 +51,7 @@ var defaultModels = map[Kind]string{
 func DefaultModel(kind Kind) string { return defaultModels[kind] }
 
 // Kinds is every Kind New can build, sorted.
-func Kinds() []Kind { return []Kind{KindAnthropic, KindOpenAI} }
+func Kinds() []Kind { return []Kind{KindAnthropic, KindGemini, KindLocal, KindOpenAI, KindQwen} }
 
 // JSONFormat asks for strict JSON matching Schema. Name is the schema's name
 // on the wire where the API has one.
@@ -44,11 +60,13 @@ type JSONFormat struct {
 	Schema map[string]any
 }
 
-// Request is one completion. A nil Format is each Python provider's
-// schema-free branch: the OpenAI client asks for a JSON object (json_object),
-// as openai.py did; a provider whose Python original sent no response format
-// sends none. Under a Format the answer passes the strict JSON gate; with no
-// Format, only the OpenAI client's answer does (openai.py validated it).
+// Request is one completion. With no Format, the OpenAI client asks for a
+// JSON object (json_object), as openai.py did, and so does the Chat
+// Completions client for local, Gemini and Qwen (with one retry as text when
+// a server rejects it); the Anthropic client sends no format, the Messages
+// API having none without a schema. Under a Format every answer passes the
+// strict JSON gate; with no Format, only the OpenAI client's does
+// (openai.py validated it).
 type Request struct {
 	System string
 	Prompt string
@@ -118,6 +136,8 @@ func New(cfg Config) (Provider, error) {
 		return NewOpenAI(cfg)
 	case KindAnthropic:
 		return NewAnthropic(cfg)
+	case KindLocal, KindGemini, KindQwen:
+		return NewCompatible(cfg)
 	}
 	return nil, fmt.Errorf("llm: unknown provider kind %q", cfg.Kind)
 }
