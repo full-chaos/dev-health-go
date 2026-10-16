@@ -193,3 +193,60 @@ func TestAReplacedDefaultTransportDoesNotPanic(t *testing.T) {
 		t.Fatalf("err = %v calls = %d", err, c.calls())
 	}
 }
+
+// An opaque key no pattern recognises, echoed by a provider in a header and
+// in its body: no unwrapped layer may carry it, in any print form.
+const opaqueKey = "plainkey7Q"
+
+func assertChainFreeOf(t *testing.T, err error, secret string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for layer := err; layer != nil; layer = errors.Unwrap(layer) {
+		for _, form := range []string{layer.Error(), fmt.Sprintf("%#v", layer), fmt.Sprintf("%+v", layer)} {
+			if strings.Contains(form, secret) {
+				t.Errorf("layer %T carries the key: %s", layer, form)
+			}
+		}
+	}
+}
+
+func TestAProviderEchoOfTheKeyIsNotKept(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Echo", r.Header.Get("Authorization"))
+		w.WriteHeader(418)
+		_, _ = w.Write([]byte("rejected credential " + opaqueKey))
+	}))
+	t.Cleanup(server.Close)
+	provider, _ := NewOpenAI(Config{APIKey: NewSecret(opaqueKey), BaseURL: server.URL})
+	_, err := provider.Complete(context.Background(), Request{Prompt: "p"})
+	assertChainFreeOf(t, err, opaqueKey)
+}
+
+type echoingBody struct{}
+
+func (echoingBody) Read([]byte) (int, error) { return 0, errors.New("read failed for " + opaqueKey) }
+func (echoingBody) Close() error             { return nil }
+
+type bodyFailingTransport struct{}
+
+func (bodyFailingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: echoingBody{}}, nil
+}
+
+func TestABodyReadErrorTextIsNotKept(t *testing.T) {
+	provider, _ := NewOpenAI(Config{APIKey: NewSecret(opaqueKey), BaseURL: "https://api.example/v1",
+		HTTPClient: &http.Client{Transport: bodyFailingTransport{}}})
+	_, err := provider.Complete(context.Background(), Request{Prompt: "p"})
+	assertChainFreeOf(t, err, opaqueKey)
+}
+
+func TestAnErrorValuePrintsOnlyItsSanitizedText(t *testing.T) {
+	value := *NewError(ClassGeneric, KindOpenAI, "m", "upstream said "+testKey)
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+		if got := fmt.Sprintf(verb, value); strings.Contains(got, testKey) {
+			t.Errorf("%s of an Error value prints the key: %s", verb, got)
+		}
+	}
+}
