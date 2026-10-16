@@ -156,7 +156,11 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 		}
 		// An answer that is not JSON is an empty completion, not an error:
 		// the caller's repair handles it (openai.py's own contract).
-		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed}, nil
+		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed}
+		if request.Format != nil {
+			result.FormatPath = FormatPathSchema
+		}
+		return result, nil
 	}
 	if lastErr != nil {
 		return Result{}, lastErr
