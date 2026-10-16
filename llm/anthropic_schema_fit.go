@@ -2,8 +2,8 @@ package llm
 
 import (
 	"fmt"
-	"sort"
 	"regexp"
+	"sort"
 	"strings"
 )
 
