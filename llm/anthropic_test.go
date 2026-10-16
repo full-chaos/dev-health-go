@@ -119,29 +119,6 @@ func TestAnthropicJoinsTextBlocksAndCountsCachedTokens(t *testing.T) {
 	}
 }
 
-func TestAnthropicRetriesWithoutOutputConfigAfterA400(t *testing.T) {
-	provider, c := newTestAnthropic(t,
-		step{status: 400, body: `{"type":"error","error":{"type":"invalid_request_error","message":"output_config: not supported"}}`},
-		step{status: 200, body: anthropicText("```json\n{\"ok\": 1}\n```", "end_turn")},
-	)
-	result, err := provider.Complete(context.Background(), Request{System: "sys", Prompt: "p", Format: testFormat})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.calls() != 2 {
-		t.Fatalf("calls = %d", c.calls())
-	}
-	if _, present := c.request(0)["output_config"]; !present {
-		t.Error("the first attempt carries no output_config")
-	}
-	if _, present := c.request(1)["output_config"]; present || c.request(1)["system"] != "sys" {
-		t.Error("the retry kept output_config or lost the system message")
-	}
-	if result.Text != "" {
-		t.Errorf("Text = %q, want empty: a fenced answer is not JSON, the caller repairs", result.Text)
-	}
-}
-
 func TestAnthropicDoublesTheCapWhenCut(t *testing.T) {
 	provider, c := newTestAnthropic(t,
 		step{status: 200, body: anthropicText(`{"cut": `, "max_tokens")},

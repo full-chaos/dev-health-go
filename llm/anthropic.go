@@ -107,7 +107,7 @@ type anthropicTool struct {
 
 type anthropicToolChoice struct {
 	Type string `json:"type"`
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 }
 
 type anthropicRequest struct {
@@ -120,17 +120,15 @@ type anthropicRequest struct {
 	ToolChoice   *anthropicToolChoice   `json:"tool_choice,omitempty"`
 }
 
-// anthropicMode is how a request asks for a Format's JSON. Structured
-// outputs refuse many schemas (a map field, more than 24 optional
-// properties, an untyped property); a forced tool call takes the schema as
-// the tool's input_schema without those limits; plain text is the last
-// resort, with the JSON gate deciding.
+// anthropicMode is how a request asks for a Format's JSON: structured
+// outputs when the schema fits their documented limits, otherwise one tool
+// call whose input_schema is the schema (no such limits apply to a
+// non-strict tool). The mode is picked once, before the call.
 type anthropicMode int
 
 const (
 	anthropicStructured anthropicMode = iota
 	anthropicForcedTool
-	anthropicPlain
 )
 
 // anthropicToolName is a valid Messages API tool name for the Format.
@@ -170,10 +168,18 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 		return Result{}, errSeedUnsupported(KindAnthropic, p.cfg.Model)
 	}
 	maxTokens := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
-	mode := anthropicStructured
+	// One mode, picked before any call from the documented limits: a refused
+	// schema is billed for its input tokens, so a refusal is an error, never
+	// a reason to try another mode.
+	mode, reason := anthropicStructured, ""
+	if request.Format != nil {
+		if fits, why := anthropicSchemaFit(anthropicSchema(request.Format.Schema)); !fits {
+			mode, reason = anthropicForcedTool, why
+		}
+	}
 	requestKey := "shared:" + randomID()
 	// retries counts the transient and cut-answer retries (anthropic.py's
-	// max_retries=1); a refused format falls back without spending one.
+	// max_retries=1).
 	retries := 0
 	for call := 1; ; call++ {
 		body := p.messagesBody(request, maxTokens, mode)
@@ -181,10 +187,6 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 		if err != nil {
 			if IsBudgetRefusal(err) || ctx.Err() != nil {
 				return Result{}, err
-			}
-			if statusCodeOf(err) == http.StatusBadRequest && request.Format != nil && mode != anthropicPlain {
-				mode++
-				continue
 			}
 			classified := classify(err, KindAnthropic, p.cfg.Model)
 			if classified.Retryable() && retries < anthropicMaxRetries {
@@ -217,7 +219,10 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 		}
 		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.stopReason, Usage: answer.usage, Unparsed: unparsed}
 		if request.Format != nil {
-			result.FormatPath = [...]string{anthropicStructured: FormatPathSchema, anthropicForcedTool: FormatPathTool, anthropicPlain: FormatPathText}[mode]
+			result.FormatPath, result.FormatReason = FormatPathSchema, reason
+			if mode == anthropicForcedTool {
+				result.FormatPath = FormatPathTool
+			}
 		}
 		return result, nil
 	}
@@ -242,6 +247,11 @@ func (p *Anthropic) messagesBody(request Request, maxTokens int, mode anthropicM
 		name := anthropicToolName(request.Format)
 		body.Tools = []anthropicTool{{Name: name, Description: "Return the answer as this tool's input. Give each property at the level the input schema defines it: never move a top-level property inside an object property, and add no property the schema does not list.", InputSchema: copySchema(request.Format.Schema)}}
 		body.ToolChoice = &anthropicToolChoice{Type: "tool", Name: name}
+		if !anthropicForcesTools(p.cfg.Model) {
+			// These models answer 400 to a forced tool_choice; with the one
+			// tool and its description they still call it.
+			body.ToolChoice = &anthropicToolChoice{Type: "auto"}
+		}
 	}
 	return body
 }
