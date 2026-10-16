@@ -72,6 +72,15 @@ func TestIssueSizedSourceKeepsTheSourceAndAddsTheTwoColumns(t *testing.T) {
 	}
 }
 
+func TestSizeExpressionsAreTheOnesTheSizedSourceUses(t *testing.T) {
+	if got, want := readers.UnitSizeWeightExpr("u"), "if(u.issue_size > 0, u.issue_size, 1.0)"; got != want {
+		t.Errorf("UnitSizeWeightExpr = %q, want %q", got, want)
+	}
+	if got, want := readers.UnitIssueSizeExpr("u"), "if(u.issue_size > 0, u.issue_size, 0.0)"; got != want {
+		t.Errorf("UnitIssueSizeExpr = %q, want %q", got, want)
+	}
+}
+
 func TestSizingCoverageSelectListAndScan(t *testing.T) {
 	list := readers.SizingCoverageSelectList("work_unit_investments.work_unit_id")
 	for _, want := range []string{

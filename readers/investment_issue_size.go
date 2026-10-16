@@ -14,6 +14,21 @@ const UnitSizeWeightColumn = "unit_size_weight"
 // unsized one.
 const UnitIssueSizeColumn = "unit_issue_size"
 
+// UnitSizeWeightExpr is the weight of a work unit in ISSUE_SIZE over a row of
+// LatestWorkUnitIssueSizeSource joined as alias: its issue size, or 1.0 when
+// it has none or no size row. IssueSizedSource and every reader that joins the
+// size source itself use it, so the rule is written once.
+func UnitSizeWeightExpr(alias string) string {
+	return fmt.Sprintf("if(%[1]s.issue_size > 0, %[1]s.issue_size, 1.0)", alias)
+}
+
+// UnitIssueSizeExpr is the unit's issue size over a row of
+// LatestWorkUnitIssueSizeSource joined as alias: the size, or 0.0 when it has
+// none or no size row (0 means unsized, D6027).
+func UnitIssueSizeExpr(alias string) string {
+	return fmt.Sprintf("if(%[1]s.issue_size > 0, %[1]s.issue_size, 0.0)", alias)
+}
+
 // LatestWorkUnitIssueSizeSource is the newest issue size of each work unit of
 // the organization (work_unit_issue_size, ops migration 130): argMax over
 // computed_at per (org_id, work_unit_id). It binds {org_id:String}.
@@ -43,13 +58,13 @@ func IssueSizedSource(aliasedSource, alias string) (string, error) {
 	}
 	inner := strings.TrimSuffix(aliasedSource, suffix)
 	return fmt.Sprintf(`(
-            SELECT sized_unit.*, if(unit_size.issue_size > 0, unit_size.issue_size, 1.0) AS %s,
-                if(unit_size.issue_size > 0, unit_size.issue_size, 0.0) AS %s
+            SELECT sized_unit.*, %s AS %s,
+                %s AS %s
             FROM %s AS sized_unit
             LEFT JOIN %s AS unit_size
                 ON unit_size.org_id = sized_unit.org_id
                 AND unit_size.work_unit_id = sized_unit.work_unit_id
-        )%s`, UnitSizeWeightColumn, UnitIssueSizeColumn, inner, LatestWorkUnitIssueSizeSource(), suffix), nil
+        )%s`, UnitSizeWeightExpr("unit_size"), UnitSizeWeightColumn, UnitIssueSizeExpr("unit_size"), UnitIssueSizeColumn, inner, LatestWorkUnitIssueSizeSource(), suffix), nil
 }
 
 // SizingCoverageSelectList is the select list of a sizing-coverage read over a
