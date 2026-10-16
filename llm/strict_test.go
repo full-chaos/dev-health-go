@@ -82,3 +82,42 @@ func TestCompactJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestCompleteStrictRepairSeesTheReplyTheJSONGateRefused(t *testing.T) {
+	provider := &scriptedProvider{results: []Result{{Text: "", Unparsed: "Sure! Here is the answer: a=1"}, {Text: `{"a":1}`}}}
+	var got string
+	_, outcome, _, err := CompleteStrict(context.Background(), provider, Request{Prompt: "p"}, func(string) error { return nil },
+		func(rejected string, reason error) Request {
+			got = rejected
+			if !errors.Is(reason, ErrEmptyAnswer) {
+				t.Errorf("reason = %v, want ErrEmptyAnswer", reason)
+			}
+			return Request{Prompt: "repair"}
+		})
+	if err != nil || outcome != OutcomeRepaired {
+		t.Fatalf("outcome = %q err = %v", outcome, err)
+	}
+	if got != "Sure! Here is the answer: a=1" {
+		t.Fatalf("repair saw %q, want the unparsed reply", got)
+	}
+}
+
+func TestCompleteStrictRepairSeesTheTextWhenItWasJSON(t *testing.T) {
+	provider := &scriptedProvider{results: []Result{{Text: `{"b":2}`, Unparsed: "ignored"}, {Text: `{"a":1}`}}}
+	var got string
+	validate := func(text string) error {
+		if text != `{"a":1}` {
+			return errors.New("missing a")
+		}
+		return nil
+	}
+	if _, _, _, err := CompleteStrict(context.Background(), provider, Request{}, validate, func(rejected string, _ error) Request {
+		got = rejected
+		return Request{}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got != `{"b":2}` {
+		t.Fatalf("repair saw %q, want the JSON text", got)
+	}
+}
