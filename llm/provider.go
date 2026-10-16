@@ -38,8 +38,11 @@ type JSONFormat struct {
 	Schema map[string]any
 }
 
-// Request is one completion. A nil Format asks for a JSON object with no
-// schema (OpenAI's json_object), the Python providers' schema-free branch.
+// Request is one completion. A nil Format is each Python provider's
+// schema-free branch: the OpenAI client asks for a JSON object (json_object),
+// as openai.py did; a provider whose Python original sent no response format
+// sends none. Under a Format the answer passes the strict JSON gate; with no
+// Format, only the OpenAI client's answer does (openai.py validated it).
 type Request struct {
 	System string
 	Prompt string
