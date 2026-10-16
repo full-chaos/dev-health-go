@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"sort"
 	"regexp"
 	"strings"
 )
@@ -81,7 +82,7 @@ func fitNode(node any, path string, counts *fitCounts, depth int) string {
 	if !ok {
 		return ""
 	}
-	for key := range schema {
+	for _, key := range sortedKeys(schema) {
 		if _, ok := anthropicStructuredKeywords[key]; !ok {
 			return "unsupported_keyword " + key + ": " + path
 		}
@@ -120,7 +121,8 @@ func fitNode(node any, path string, counts *fitCounts, depth int) string {
 		}
 	}
 	if properties, ok := schema["properties"].(map[string]any); ok {
-		for name, property := range properties {
+		for _, name := range sortedKeys(properties) {
+			property := properties[name]
 			propertyPath := path + "." + name
 			child, ok := property.(map[string]any)
 			if !ok {
@@ -158,7 +160,8 @@ func fitNode(node any, path string, counts *fitCounts, depth int) string {
 	}
 	for _, key := range []string{"$defs", "definitions"} {
 		if defs, ok := schema[key].(map[string]any); ok {
-			for name, child := range defs {
+			for _, name := range sortedKeys(defs) {
+				child := defs[name]
 				if reason := fitNode(child, path+"."+key+"."+name, counts, depth+1); reason != "" {
 					return reason
 				}
@@ -183,4 +186,15 @@ func isUnion(schema map[string]any) bool {
 	}
 	_, list := schema["type"].([]any)
 	return list
+}
+
+// sortedKeys keeps the first reported limit the same on every call, so a
+// caller can key a once-per-schema log on it.
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

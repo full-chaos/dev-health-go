@@ -79,3 +79,21 @@ func TestAnthropicForcesToolsExceptOnTheDocumentedModels(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicSchemaFitReportsTheSameFirstLimitEveryTime(t *testing.T) {
+	str := map[string]any{"type": "string"}
+	schema := object(map[string]any{
+		"z_map": map[string]any{"type": "object", "additionalProperties": str},
+		"a_untyped": map[string]any{"description": "x"},
+		"m_if": map[string]any{"type": "string", "if": map[string]any{}},
+	})
+	_, first := anthropicSchemaFit(schema)
+	for i := 0; i < 50; i++ {
+		if _, again := anthropicSchemaFit(schema); again != first {
+			t.Fatalf("run %d reported %q, the first run %q", i, again, first)
+		}
+	}
+	if first != "property_without_type: $.a_untyped" {
+		t.Fatalf("first = %q, want the alphabetically first property's limit", first)
+	}
+}
