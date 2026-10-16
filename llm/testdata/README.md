@@ -27,27 +27,28 @@ LLM_ORACLE_OUT=$PWD/openai_sync.oracle.json LLM_ORACLE_OPS_SHA=<sha> \
   go test -count=1 -run TestZZGenerateLLMOracle ./internal/jobs/investment/categorize/
 ```
 
-## python_oracle/compatible.oracle.json
+## anthropic_responses.golden.json
 
-- Producer: the frozen Python `LocalProvider`, `GeminiProvider` and
-  `QwenProvider`, from `llm/providers/local.py`, `gemini.py` and `qwen.py`.
-  They were executed with the openai SDK at the header's `ops_sha`, which is
-  `9fb387470e4ab360f88bc052694c891d586824ce`. The header lists each source
-  file's sha256.
-- Driver: `python_oracle/driver.py`, suite `compatible`. The in-memory
-  transport serves the recorded answers. Nothing reaches the network.
-- Test: `oracle_compatible_test.go`. Every case equals the Python provider,
-  and no divergence is declared.
+- These are Messages API answers in the documented shape. They are not live
+  recordings, because no Anthropic key exists where they were made.
+- Each answer is stored with the parsed outcome of the previous Anthropic
+  client, which was recorded once: text, model, input and output tokens, and
+  error class.
+- Test: `oracle_anthropic_test.go`, caller-relied. For the same answer, the
+  Result must give the categorize and explain callers what they got before:
+  text and JSON, usage (nil means not reported), stop reason, and error class.
+  Each place where this client now answers better is named there with its
+  reason and must still differ.
+- Request shape is not compared. The client follows the current API.
 
-To record it again, use the steps under the next heading with suite
-`compatible`. `LLM_PYTHON_ORACLE_OPS=<worktree> go test ./llm -run PythonOracleReExecutes`
-runs the driver again and requires byte-equal output.
+## compatible_responses.golden.json
 
-## Re-recording an executed Python oracle
-
-```bash
-git -C <ops> worktree add --detach /tmp/ops-py 9fb387470e4ab360f88bc052694c891d586824ce
-cd /tmp/ops-py && uv sync --frozen --no-install-project
-.venv/bin/python -I <this repo>/llm/testdata/python_oracle/driver.py /tmp/ops-py/src <suite> \
-  9fb387470e4ab360f88bc052694c891d586824ce > <suite>.oracle.json
-```
+- These are Chat Completions answers in the documented OpenAI-compatible
+  shape. They are not live recordings, because no Gemini, DashScope or local
+  key exists where they were made.
+- Each answer is stored with the parsed outcome of the previous local, Gemini
+  and Qwen clients, which was recorded once.
+- Test: `oracle_compatible_test.go`, caller-relied. For the same answer, the
+  Result must give the callers what they got before: text and JSON, usage
+  (nil means not reported), stop reason, and error class. Request shape is not
+  compared.

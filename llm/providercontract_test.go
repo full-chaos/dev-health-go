@@ -25,6 +25,10 @@ var chatCompletionsWire = providerWire{path: "/chat/completions", answer: func(t
 }}
 
 var providerWires = map[Kind]providerWire{
+	KindAnthropic: {path: "/v1/messages", answer: func(text string, input, output int) any {
+		return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "stop_reason": "end_turn",
+			"usage": map[string]any{"input_tokens": input, "output_tokens": output}}
+	}},
 	KindLocal:  chatCompletionsWire,
 	KindGemini: chatCompletionsWire,
 	KindQwen:   chatCompletionsWire,

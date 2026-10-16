@@ -12,7 +12,8 @@ import (
 type Kind string
 
 const (
-	KindOpenAI Kind = "openai"
+	KindOpenAI    Kind = "openai"
+	KindAnthropic Kind = "anthropic"
 	// KindLocal is any self-hosted OpenAI-compatible server.
 	KindLocal  Kind = "local"
 	KindGemini Kind = "gemini"
@@ -26,6 +27,11 @@ var defaultModels = map[Kind]string{
 	// https://developers.openai.com/api/docs/models/all, 2026-10-16: listed,
 	// not deprecated. base.py's DEFAULT_MODEL_BY_PROVIDER["openai"].
 	KindOpenAI: "gpt-5-mini",
+	// https://platform.claude.com/docs/en/models/overview, 2026-10-16:
+	// current, retirement not sooner than 2027-10-07. base.py's
+	// claude-3-haiku-20240307 was retired in April 2026; this is the same
+	// low-cost tier.
+	KindAnthropic: "claude-haiku-5-5",
 	// https://ai.google.dev/gemini-api/docs/models and
 	// https://ai.google.dev/gemini-api/docs/openai, 2026-10-16: a stable
 	// Flash model, the one Google's OpenAI-compatibility guide uses. base.py's
@@ -45,7 +51,7 @@ var defaultModels = map[Kind]string{
 func DefaultModel(kind Kind) string { return defaultModels[kind] }
 
 // Kinds is every Kind New can build, sorted.
-func Kinds() []Kind { return []Kind{KindGemini, KindLocal, KindOpenAI, KindQwen} }
+func Kinds() []Kind { return []Kind{KindAnthropic, KindGemini, KindLocal, KindOpenAI, KindQwen} }
 
 // JSONFormat asks for strict JSON matching Schema. Name is the schema's name
 // on the wire where the API has one.
@@ -126,6 +132,8 @@ func New(cfg Config) (Provider, error) {
 	switch cfg.Kind {
 	case KindOpenAI:
 		return NewOpenAI(cfg)
+	case KindAnthropic:
+		return NewAnthropic(cfg)
 	case KindLocal, KindGemini, KindQwen:
 		return NewCompatible(cfg)
 	}
