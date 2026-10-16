@@ -156,7 +156,8 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 		if request.Format != nil {
 			text = CompactJSON(answer.text)
 			if text == "" && answer.stopReason == "max_tokens" && attempt < anthropicMaxRetries {
-				maxTokens = min(anthropicMaxOutputTokens, maxTokens*2)
+				// Doubled up to 16000; a cap already above it is kept.
+				maxTokens = max(maxTokens, min(anthropicMaxOutputTokens, maxTokens*2))
 				if !sleepFor(ctx, 500*time.Millisecond) {
 					return Result{}, ctx.Err()
 				}

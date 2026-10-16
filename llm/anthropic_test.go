@@ -228,3 +228,17 @@ func TestNewAnthropicDefaults(t *testing.T) {
 	}
 	assertNoKey(t, "Anthropic", *a)
 }
+
+func TestAnthropicCapAboveTheRetryCeilingIsKept(t *testing.T) {
+	server, c := scriptedServer(t,
+		step{status: 200, body: anthropicText(`{"cut": `, "max_tokens")},
+		step{status: 200, body: anthropicText(`{"cut": false}`, "end_turn")},
+	)
+	provider, _ := NewAnthropic(Config{APIKey: NewSecret(testKey), BaseURL: server.URL, MaxOutputTokens: 20000})
+	if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.request(1)["max_tokens"]; got != float64(20000) {
+		t.Errorf("retry max_tokens = %v, want 20000 kept", got)
+	}
+}
