@@ -45,4 +45,31 @@
 //     http.response.status_code, error.class).
 //   - No redirect is followed and no ambient proxy is used; the API key never
 //     appears in an error, a log value or a printed Config.
+//
+// Structured output by provider (sources read 2026-10-16):
+//
+//   - OpenAI (Responses API) and Chat Completions (local, Gemini, Qwen): the
+//     Format goes as a strict json_schema. These clients check no schema
+//     limit before the call. A Chat Completions server that answers 400 is
+//     asked once more as text (a second billed call), as local.py did; that
+//     retry stays because ops relies on it.
+//   - Anthropic (Messages API): the client checks the Format's schema
+//     against the documented structured-output limits before the call
+//     (https://platform.claude.com/docs/en/build-with-claude/structured-outputs):
+//     additionalProperties must be false on every object; at most 24
+//     optional and 16 union-typed parameters; supported keywords only (no
+//     if/then/else, not, oneOf, numeric or string bounds, array bounds
+//     beyond minItems 0 or 1); scalar enums; internal $ref only; known
+//     string formats; regex without backreferences, lookaround or word
+//     boundaries. A schema that fits goes as output_config.format; one that
+//     does not goes as the input_schema of one tool, forced with
+//     tool_choice "tool", or "auto" on the models the tool-use docs list as
+//     refusing a forced tool (Opus 5.5, Sonnet 5.5, Fable 5.1, Mythos 5.1;
+//     https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).
+//     The mode is picked once: a 400 is an invalid_request *Error and is
+//     never retried in another mode, because a refused call is billed for
+//     its input tokens. Result.FormatPath and Result.FormatReason say which
+//     mode was used and why.
+//   - Gemini (OpenAI-compatible endpoint) answers 400 to any request that
+//     carries seed, so its client refuses Request.Seed before the call.
 package llm

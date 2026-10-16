@@ -105,6 +105,9 @@ type Result struct {
 	// FormatPath is how the answer's JSON was asked for, for logs: one of
 	// the FormatPath constants; "" for a request with no Format.
 	FormatPath string
+	// FormatReason is why a client did not use the API's own schema mode:
+	// the first documented limit the Format's schema breaks ("" when it fits).
+	FormatReason string
 }
 
 // FormatPath values.
@@ -114,7 +117,8 @@ const (
 	FormatPathSchema = "schema"
 	// FormatPathTool: an Anthropic forced tool call carrying the schema.
 	FormatPathTool = "tool"
-	// FormatPathText: no schema reached the API; the JSON gate decided.
+	// FormatPathText: no schema reached the API; the JSON gate decided
+	// (the Chat Completions retry as text after a 400).
 	FormatPathText = "text"
 )
 

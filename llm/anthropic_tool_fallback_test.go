@@ -39,71 +39,81 @@ type rawJSON string
 
 func (r rawJSON) MarshalJSON() ([]byte, error) { return []byte(r), nil }
 
-func TestAnthropicFallsBackToAForcedToolCallWhenTheSchemaIsRefused(t *testing.T) {
-	provider, c := newTestAnthropic(t,
-		step{status: 400, body: schemaRefused},
-		step{status: 200, body: anthropicToolUse("categorization", `{"a": 1}`, "tool_use")},
-	)
-	result, err := provider.Complete(context.Background(), Request{System: "sys", Prompt: "p", Format: testFormat})
+// mapFormat has a map field: structured outputs refuse an
+// additionalProperties schema, so it never fits.
+var mapFormat = &JSONFormat{Name: "categorization", Schema: map[string]any{
+	"type": "object", "additionalProperties": false, "required": []any{"a"},
+	"properties": map[string]any{
+		"a":      map[string]any{"type": "number"},
+		"labels": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+	},
+}}
+
+func TestAnthropicSendsAToolCallWhenTheSchemaDoesNotFit(t *testing.T) {
+	provider, c := newTestAnthropic(t, step{status: 200, body: anthropicToolUse("categorization", `{"a": 1}`, "tool_use")})
+	result, err := provider.Complete(context.Background(), Request{System: "sys", Prompt: "p", Format: mapFormat})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.calls() != 2 || result.Text != `{"a":1}` || result.Unparsed != "" || *result.Usage.OutputTokens != 9 || result.FormatPath != FormatPathTool {
+	if c.calls() != 1 || result.Text != `{"a":1}` || result.FormatPath != FormatPathTool || !strings.HasPrefix(result.FormatReason, "additional_properties_not_false") {
 		t.Fatalf("calls = %d, result = %+v", c.calls(), result)
 	}
-	retry := c.request(1)
-	if _, present := retry["output_config"]; present || retry["system"] != "sys" {
-		t.Fatalf("the tool call kept output_config or lost the system message: %v", retry)
+	sent := c.request(0)
+	if _, present := sent["output_config"]; present || sent["system"] != "sys" {
+		t.Fatalf("the tool call carries output_config or lost the system message: %v", sent)
 	}
-	tools, _ := retry["tools"].([]any)
-	if len(tools) != 1 {
-		t.Fatalf("tools = %v, want one", retry["tools"])
-	}
-	tool := tools[0].(map[string]any)
-	if tool["name"] != "categorization" {
-		t.Fatalf("tool = %v, want name categorization", tool)
+	tool := sent["tools"].([]any)[0].(map[string]any)
+	if tool["name"] != "categorization" || !reflect.DeepEqual(tool["input_schema"], roundTrip(t, mapFormat.Schema)) {
+		t.Fatalf("tool = %v, want the Format's schema as given", tool)
 	}
 	if description, _ := tool["description"].(string); !strings.Contains(description, "never move a top-level property inside an object property") {
-		t.Fatalf("description = %q, want the placement rule (live: without it, a model nested top-level fields)", description)
+		t.Fatalf("description = %q, want the placement rule", description)
 	}
-	if !reflect.DeepEqual(tool["input_schema"], roundTrip(t, testFormat.Schema)) {
-		t.Fatalf("input_schema = %v, want the Format's schema as given", tool["input_schema"])
-	}
-	if !reflect.DeepEqual(retry["tool_choice"], map[string]any{"type": "tool", "name": "categorization"}) {
-		t.Fatalf("tool_choice = %v", retry["tool_choice"])
+	if !reflect.DeepEqual(sent["tool_choice"], map[string]any{"type": "tool", "name": "categorization"}) {
+		t.Fatalf("tool_choice = %v", sent["tool_choice"])
 	}
 }
 
-func TestAnthropicFallsBackToPlainTextWhenTheToolCallIsRefusedToo(t *testing.T) {
-	provider, c := newTestAnthropic(t,
-		step{status: 400, body: schemaRefused},
-		step{status: 400, body: `{"type":"error","error":{"type":"invalid_request_error","message":"tools.0.input_schema: invalid"}}`},
-		step{status: 200, body: anthropicText(`{"a": 3}`, "end_turn")},
-	)
+func TestAnthropicUsesStructuredOutputsWhenTheSchemaFits(t *testing.T) {
+	provider, c := newTestAnthropic(t, step{status: 200, body: anthropicText(`{"a": 1}`, "end_turn")})
 	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
-	if err != nil || result.Text != `{"a":3}` || c.calls() != 3 || result.FormatPath != FormatPathText {
+	if err != nil || c.calls() != 1 || result.FormatPath != FormatPathSchema || result.FormatReason != "" {
 		t.Fatalf("result = %+v err = %v calls = %d", result, err, c.calls())
 	}
-	last := c.request(2)
-	for _, field := range []string{"output_config", "tools", "tool_choice"} {
-		if _, present := last[field]; present {
-			t.Errorf("the plain-text call still carries %s", field)
-		}
+	if _, present := c.request(0)["output_config"]; !present {
+		t.Fatal("a fitting schema was not sent as output_config")
+	}
+	if _, present := c.request(0)["tools"]; present {
+		t.Fatal("a fitting schema also sent a tool")
 	}
 }
 
-func TestAnthropicFormatFallbacksDoNotSpendTheTransientRetry(t *testing.T) {
-	provider, c := newTestAnthropic(t,
-		step{status: 400, body: schemaRefused},
-		step{status: 503, body: `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`},
-		step{status: 200, body: anthropicToolUse("categorization", `{"a": 2}`, "tool_use")},
-	)
-	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
-	if err != nil || result.Text != `{"a":2}` || c.calls() != 3 {
-		t.Fatalf("result = %+v err = %v calls = %d", result, err, c.calls())
+func TestAnthropicARefusedSchemaIsOneCallAndAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		format *JSONFormat
+	}{{"structured outputs", testFormat}, {"tool call", mapFormat}} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, c := newTestAnthropic(t, step{status: 400, body: schemaRefused}, step{status: 200, body: anthropicText(`{"a": 1}`, "end_turn")})
+			_, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: tc.format})
+			if class, ok := ClassOf(err); !ok || class != ClassInvalidRequest || c.calls() != 1 {
+				t.Fatalf("err = %v calls = %d, want one call and class %q", err, c.calls(), ClassInvalidRequest)
+			}
+		})
 	}
-	if _, present := c.request(2)["tools"]; !present {
-		t.Fatal("the transient retry dropped back from the tool call")
+}
+
+func TestAnthropicModelsWithoutForcedToolsGetToolChoiceAuto(t *testing.T) {
+	server, c := scriptedServer(t, step{status: 200, body: anthropicToolUse("categorization", `{"a": 1}`, "tool_use")})
+	provider, err := NewAnthropic(Config{APIKey: NewSecret(testKey), BaseURL: server.URL, Model: "claude-sonnet-5-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: mapFormat}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(c.request(0)["tool_choice"], map[string]any{"type": "auto"}) {
+		t.Fatalf("tool_choice = %v, want auto for a model the docs list as refusing forced tools", c.request(0)["tool_choice"])
 	}
 }
 
@@ -126,33 +136,28 @@ func TestAnthropicToolNameFallsBackToOutput(t *testing.T) {
 }
 
 func TestAnthropicToolCallKeepsTheKeywordsStructuredOutputsDrop(t *testing.T) {
-	provider, c := newTestAnthropic(t,
-		step{status: 400, body: schemaRefused},
-		step{status: 200, body: anthropicToolUse("bounded", `{"maximum": 1}`, "tool_use")},
-	)
-	format := boundedFormat()
+	format := &JSONFormat{Name: "bounded", Schema: roundTrip(t, boundedFormat().Schema).(map[string]any)}
+	format.Schema["properties"].(map[string]any)["labels"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
+	provider, c := newTestAnthropic(t, step{status: 200, body: anthropicToolUse("bounded", `{"maximum": 1}`, "tool_use")})
 	if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: format}); err != nil {
 		t.Fatal(err)
 	}
-	tool := c.request(1)["tools"].([]any)[0].(map[string]any)
+	tool := c.request(0)["tools"].([]any)[0].(map[string]any)
 	if !reflect.DeepEqual(tool["input_schema"], roundTrip(t, format.Schema)) {
 		t.Fatalf("input_schema = %v, want the Format's schema with its bounds", tool["input_schema"])
 	}
-	if reflect.DeepEqual(c.request(0)["output_config"].(map[string]any)["format"].(map[string]any)["schema"], roundTrip(t, format.Schema)) {
-		t.Fatal("the bounded schema was not stripped for structured outputs; this test proves nothing")
-	}
 }
 
-func TestAnthropicTransientRetryStaysOneAfterAFormatFallback(t *testing.T) {
-	provider, c := newTestAnthropic(t,
-		step{status: 400, body: schemaRefused},
-		step{status: 503, body: `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`},
-	)
+func TestAnthropicTransientRetryIsStillOne(t *testing.T) {
+	provider, c := newTestAnthropic(t, step{status: 503, body: `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	_, err := provider.Complete(ctx, Request{Prompt: "p", Format: testFormat})
-	if class, ok := ClassOf(err); !ok || class != ClassServer || c.calls() != 3 {
-		t.Fatalf("err = %v calls = %d, want a server error after 3 calls (schema, tool, one retry)", err, c.calls())
+	_, err := provider.Complete(ctx, Request{Prompt: "p", Format: mapFormat})
+	if class, ok := ClassOf(err); !ok || class != ClassServer || c.calls() != 2 {
+		t.Fatalf("err = %v calls = %d, want a server error after 2 calls", err, c.calls())
+	}
+	if _, present := c.request(1)["tools"]; !present {
+		t.Fatal("the transient retry changed the mode")
 	}
 }
 
