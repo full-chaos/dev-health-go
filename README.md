@@ -17,7 +17,7 @@ no consumer principal type.
 | `schema`    | Declared ClickHouse column-type contracts                            | `internal/contextfabric/devhealthschema`       |
 | `readers`   | Neutral, column-level ClickHouse row readers over `schema` types, plus a store-level OTel instrumentation hook (see [Boundary corrections](#boundary-corrections-vs-plan-36)) | beneath `internal/contextfabric/devhealthfacts` |
 | `authverify`| JWKS, k8s TokenReview, workload-token-exchange verification mechanisms| `internal/auth` (mechanism subset)             |
-| `llm`       | Shared LLM provider clients (OpenAI first), error classes, spans, strict-JSON/repair helper; credentials passed in by the caller (scope amended by chris 2026-10-16, CHAOS-8719) | ops `internal/jobs/investment/categorize` (OpenAI port) |
+| `llm`       | Shared LLM provider clients (OpenAI, Anthropic), error classes, spans, strict-JSON/repair helper; credentials passed in by the caller (scope amended by chris 2026-10-16, CHAOS-8719) | ops `internal/jobs/investment/categorize` (OpenAI port) |
 
 There is no `contracts` package in this repo -- see [Boundary corrections](#boundary-corrections-vs-plan-36).
 
