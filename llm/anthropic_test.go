@@ -259,3 +259,33 @@ func TestAnthropicRefusalWithTextIsStillEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicEmptyCutAnswerIsRetriedWithADoubledCap(t *testing.T) {
+	provider, c := newTestAnthropic(t,
+		step{status: 200, body: map[string]any{"content": []any{}, "stop_reason": "max_tokens", "usage": map[string]any{"input_tokens": 5, "output_tokens": 4096}}},
+		step{status: 200, body: anthropicText(`{"a": 1}`, "end_turn")},
+	)
+	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
+	if err != nil || result.Text != `{"a":1}` || c.calls() != 2 {
+		t.Fatalf("result = %+v err = %v calls = %d, want the doubled retry to answer", result, err, c.calls())
+	}
+}
+
+func TestAnthropicSchemaKeepsDataAndDropsArrayAndObjectBounds(t *testing.T) {
+	got := anthropicSchema(map[string]any{
+		"type": "object", "additionalProperties": false, "minProperties": 1, "maxProperties": 3,
+		"properties": map[string]any{
+			"tags":  map[string]any{"type": "array", "uniqueItems": true, "items": map[string]any{"type": "string"}},
+			"limit": map[string]any{"type": "number", "default": map[string]any{"maximum": 1}, "enum": []any{map[string]any{"minimum": 2}}},
+		},
+	})
+	encoded, _ := json.Marshal(got)
+	for _, dropped := range []string{"uniqueItems", "minProperties", "maxProperties"} {
+		if strings.Contains(string(encoded), dropped) {
+			t.Errorf("%s was sent: %s", dropped, encoded)
+		}
+	}
+	if !strings.Contains(string(encoded), `"default":{"maximum":1}`) || !strings.Contains(string(encoded), `"enum":[{"minimum":2}]`) {
+		t.Errorf("a default or enum value was changed: %s", encoded)
+	}
+}

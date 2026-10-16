@@ -30,6 +30,8 @@ func TestClassifyFollowsThePythonOrder(t *testing.T) {
 		{"404 is model not found", &statusError{statusCode: 404, body: `{}`}, ClassModelNotFound, false},
 		{"408 is a timeout", &statusError{statusCode: 408, body: `{}`}, ClassTimeout, true},
 		{"413 is an invalid request", &statusError{statusCode: 413, body: `{}`}, ClassInvalidRequest, false},
+		{"413 stays invalid whatever its body says", &statusError{statusCode: 413, body: `request too big: too many tokens`}, ClassInvalidRequest, false},
+		{"404 stays model not found whatever its body says", &statusError{statusCode: 404, body: `invalid request path`}, ClassModelNotFound, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
