@@ -40,11 +40,12 @@ const (
 //   - qwen: Alibaba DashScope's compatible mode; a key is required. qwen.py's
 //     Batch API path is not ported.
 //
-// A Format is sent as response_format json_schema (strict); Structured
-// Outputs support varies by server, so a 400 on that request is retried once
-// with a plain text format, exactly as local.py did. The JSON gate applies
-// only under a Format (local.py: `validate_json_or_empty(content) if
-// is_schema_prompt else content`). Temperature 0.3, local.py's default.
+// A Format is sent as response_format json_schema (strict), and no Format as
+// json_object; support varies by server, so a 400 on either is retried once
+// with a plain text format, as local.py did for json_schema. The JSON gate
+// applies only under a Format: a schema-free answer comes back as written,
+// which the explanation callers parse themselves. Temperature 0.3, local.py's
+// default.
 type Compatible struct {
 	cfg    Config
 	client *http.Client
@@ -138,7 +139,11 @@ type chatAnswer struct {
 
 // Complete is local.py's LocalProvider.complete.
 func (p *Compatible) Complete(ctx context.Context, request Request) (Result, error) {
-	var format *chatResponseFormat
+	// A Format is json_schema (strict); no Format asks for a JSON object,
+	// which every one of these APIs documents (local.py sent no format at
+	// all, so a JSON prompt could still be answered in prose). A server that
+	// rejects either with a 400 is asked once more with a text format.
+	format := &chatResponseFormat{Type: "json_object"}
 	if request.Format != nil {
 		format = &chatResponseFormat{Type: "json_schema", JSONSchema: &chatJSONSchema{
 			Name: request.Format.Name, Schema: request.Format.Schema, Strict: true,
@@ -162,7 +167,7 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			if IsBudgetRefusal(err) || ctx.Err() != nil {
 				return Result{}, err
 			}
-			if statusCodeOf(err) == http.StatusBadRequest && format != nil && format.Type != "text" && attempt < compatibleMaxRetries {
+			if statusCodeOf(err) == http.StatusBadRequest && format.Type != "text" && attempt < compatibleMaxRetries {
 				// A server without Structured Outputs: plain text, once.
 				format = &chatResponseFormat{Type: "text"}
 				continue

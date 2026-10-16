@@ -82,8 +82,22 @@ func TestCompatibleSchemaFreeRequestReturnsTheTextAsWritten(t *testing.T) {
 	if err != nil || result.Text != "plain words" {
 		t.Fatalf("result = %+v err = %v", result, err)
 	}
-	if _, present := c.request(0)["response_format"]; present {
-		t.Error("a schema-free request carries response_format")
+	if format := c.request(0)["response_format"]; !reflect.DeepEqual(format, map[string]any{"type": "json_object"}) {
+		t.Errorf("schema-free response_format = %v, want json_object", format)
+	}
+}
+
+func TestCompatibleSchemaFreeFallsBackToTextAfterA400(t *testing.T) {
+	provider, c := newTestCompatible(t, KindLocal,
+		step{status: 400, body: `{"error":{"message":"response_format json_object is not supported"}}`},
+		step{status: 200, body: chatOK("prose answer")},
+	)
+	result, err := provider.Complete(context.Background(), Request{Prompt: "p"})
+	if err != nil || result.Text != "prose answer" || c.calls() != 2 {
+		t.Fatalf("result = %+v err = %v calls = %d", result, err, c.calls())
+	}
+	if format := c.request(1)["response_format"]; !reflect.DeepEqual(format, map[string]any{"type": "text"}) {
+		t.Errorf("retry response_format = %v, want text", format)
 	}
 }
 
