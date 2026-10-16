@@ -68,6 +68,13 @@ func (e *Error) Error() string {
 	return strings.Join(parts, " | ")
 }
 
+// Format prints Error() for every verb: the struct's own fields hold the
+// unsanitized message, which %#v would otherwise print.
+func (e *Error) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte(e.Error())) }
+
+// GoString is Error(), for the same reason.
+func (e *Error) GoString() string { return e.Error() }
+
 // Unwrap returns the cause with any provider response body sanitized: a caller
 // that unwraps never reaches text Error() would have redacted.
 func (e *Error) Unwrap() error { return e.cause }

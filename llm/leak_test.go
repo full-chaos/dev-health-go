@@ -16,7 +16,14 @@ import (
 // verb, slog (text and JSON handlers, as a value and as a field) and
 // encoding/json. A Secret field, a Config or a provider printed whole by a
 // caller must never show the key.
-func assertNoKey(t *testing.T, name string, subject any) {
+// reporter is the part of *testing.T assertNoKey uses, so a test can prove
+// the check fails without failing itself.
+type reporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+func assertNoKey(t reporter, name string, subject any) {
 	t.Helper()
 	var forms []string
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
@@ -66,23 +73,22 @@ func TestSecretAndConfigNeverPrintTheKey(t *testing.T) {
 // matched anything would pass every test above.
 func TestPlantedLeakIsCaught(t *testing.T) {
 	planted := struct{ APIKey string }{APIKey: testKey}
-	probe := &testing.T{}
-	assertNoKeyInto(probe, planted)
-	if !probe.Failed() {
+	probe := &recordingReporter{}
+	assertNoKey(probe, "planted", planted)
+	if probe.failures == 0 {
 		t.Fatal("assertNoKey did not catch a struct that prints the key")
+	}
+	clean := &recordingReporter{}
+	assertNoKey(clean, "secret", NewSecret(testKey))
+	if clean.failures != 0 {
+		t.Fatalf("assertNoKey reported a Secret %d times", clean.failures)
 	}
 }
 
-// assertNoKeyInto runs assertNoKey against a throwaway T in its own goroutine
-// so a failure there does not fail this test.
-func assertNoKeyInto(probe *testing.T, subject any) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		assertNoKey(probe, "planted", subject)
-	}()
-	<-done
-}
+type recordingReporter struct{ failures int }
+
+func (r *recordingReporter) Helper()               {}
+func (r *recordingReporter) Errorf(string, ...any) { r.failures++ }
 
 // recordingBudget admits every attempt, records what it was shown, and
 // settles from the reported usage.

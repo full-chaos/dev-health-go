@@ -140,7 +140,9 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 		}
 		text := CompactJSON(answer.text)
 		if text == "" && answer.reason == "max_output_tokens" && attempt < openAIMaxRetries {
-			maxTokens = min(openAIMaxOutputTokens, maxTokens*2)
+			// Doubled up to 8192; a cap already above 8192 is kept, never
+			// lowered (the ops port's min() lowered it).
+			maxTokens = max(maxTokens, min(openAIMaxOutputTokens, maxTokens*2))
 			if !sleepFor(ctx, 500*time.Millisecond) {
 				return Result{}, ctx.Err()
 			}
