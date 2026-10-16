@@ -79,6 +79,11 @@ func (e Error) GoString() string { return e.Error() }
 // its status code only, a transport error its operation and class.
 func (e *Error) Unwrap() error { return e.cause }
 
+// StatusCode is the HTTP status of the provider's response, 0 when the
+// failure got no response (a transport error, a timeout) or came from this
+// package (a refused seed, a batch result).
+func (e *Error) StatusCode() int { return statusCodeOf(e.cause) }
+
 // Retryable is errors.py's is_retryable.
 func (e *Error) Retryable() bool {
 	_, ok := retryableClasses[e.Class]

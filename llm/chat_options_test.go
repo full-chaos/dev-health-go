@@ -104,3 +104,36 @@ func TestAnthropicRefusalLeavesUnparsedEmpty(t *testing.T) {
 		t.Fatalf("result = %+v err = %v", result, err)
 	}
 }
+
+func TestErrorStatusCodeIsTheResponseStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+	}{
+		{429, `{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}`},
+		{429, `{"error":{"message":"Rate limit reached"}}`},
+		{401, `{"error":{"message":"bad key"}}`},
+		{503, `{"error":{"message":"overloaded"}}`},
+	} {
+		provider, _ := newTestCompatible(t, KindLocal, step{status: tc.status, body: tc.body})
+		_, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
+		var typed *Error
+		if !asError(err, &typed) || typed.StatusCode() != tc.status {
+			t.Errorf("status %d: err = %v, StatusCode = %d", tc.status, err, statusOrZero(typed))
+		}
+	}
+	seed := int64(1)
+	openAI, _ := newTestOpenAI(t, step{status: 200, body: openAIOK(`{"a":1}`)})
+	_, err := openAI.Complete(context.Background(), Request{Prompt: "p", Seed: &seed})
+	var refused *Error
+	if !asError(err, &refused) || refused.StatusCode() != 0 {
+		t.Errorf("a refused seed: err = %v, StatusCode = %d, want 0", err, statusOrZero(refused))
+	}
+}
+
+func statusOrZero(err *Error) int {
+	if err == nil {
+		return 0
+	}
+	return err.StatusCode()
+}
