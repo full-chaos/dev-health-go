@@ -13,15 +13,20 @@ import (
 	"time"
 )
 
-// The differential oracle of the OpenAI client: testdata/openai_sync.oracle.json
-// holds what the ops Go port (dev-health-ops
-// internal/jobs/investment/categorize OpenAIProvider.Complete, at the
-// header's ops_sha) sent and returned for each case, recorded by running that
-// code against scripted servers (testdata/README.md). Each case runs here
-// through llm.OpenAI against the same scripted answers: every request body
-// must be byte-equal, and the call count, text, model, usage and error class
-// equal. The oracle file is pinned by digest: a changed byte is a new
-// recording, not an edit.
+// No-regression guard for the ops adoption of this package (not a Python-parity
+// claim): testdata/openai_sync.oracle.json holds what the ops Go port
+// (dev-health-ops internal/jobs/investment/categorize OpenAIProvider.Complete,
+// at the header's ops_sha) sent and returned for each case, recorded by running
+// that code against scripted servers (testdata/README.md). Each case runs here
+// through llm.OpenAI against the same scripted answers. Every request body must
+// be byte-equal, so swapping ops onto this package changes nothing on the wire.
+// The response side is caller-relied: text and JSON (the categorization
+// parse), Usage (input, output, cached; nil = not reported, for budget and
+// spend accounting), and the error class (retry and fallback decisions) must
+// equal what ops' callers get today. A deliberate improvement over the ops
+// port is named in the pull request and gets its own case outside this file.
+// The oracle file is pinned by digest: a changed byte is a new recording, not
+// an edit.
 
 const openAISyncOracleDigest = "42480d41492fbaa147f4fe78f88be5a8e1edabf994cb2a6dfacb7e8151b3b6b5"
 
@@ -68,7 +73,7 @@ func loadOracle(t *testing.T, path, digest string, into any) {
 	}
 }
 
-func TestOpenAIMatchesTheOpsPortOracle(t *testing.T) {
+func TestOpenAICallerReliedNoRegressionAgainstTheOpsPort(t *testing.T) {
 	var oracle struct {
 		Header map[string]string `json:"header"`
 		Cases  []syncOracleCase  `json:"cases"`
