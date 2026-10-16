@@ -2,52 +2,53 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 )
 
-// The differential oracle of the Anthropic client:
-// testdata/python_oracle/anthropic.oracle.json holds what the frozen Python
-// AnthropicProvider (dev-health-ops llm/providers/anthropic.py at the
-// header's ops_sha, with its anthropic SDK) sent and returned for each case,
-// recorded by executing it (driver.py, ../README.md). Each case runs here
-// through llm.Anthropic against the same recorded answers. The Python body is
-// the oracle for the request (path, x-api-key, anthropic-version, every body
-// field); the Python result is the oracle for the parse (text, model, usage,
-// error class, number of HTTP calls).
+// Caller-relied response checks of the Anthropic client. The ops categorize
+// and explain callers consume Result's text (and the JSON in it), Usage
+// (input, output; nil = not reported, for budget and spend accounting), the
+// stop reason, and the error class (retry and fallback decisions). For each
+// recorded Messages API answer in testdata/anthropic_responses.golden.json,
+// the parsed Result must give those callers what they got from the previous
+// Anthropic client, the deleted anthropic.py (its parsed outcomes were
+// recorded once with the answers). The answers are documented-shape bodies
+// (https://platform.claude.com/docs/en/api/messages), not live recordings: no
+// Anthropic key exists where they were made.
 //
-// The request inputs a Python provider derived from the prompt (its system
-// text, picked by sniffing the prompt) are caller inputs in this package, so
-// the Go request takes the system text the Python one sent.
+// Request shape is not compared: this client builds its request from the
+// current API (structured outputs included), not from the old one.
+//
+// Where this client now answers better than the old one, the case is named
+// below with the reason and must still differ; a better answer that stops
+// differing means the case broke.
 
-const anthropicPythonOracleDigest = "db6fdf0b019531ce7b237f64e0f657a31f2b04b7d995c254dcd2176c5e46ac36"
+const anthropicResponsesGoldenDigest = "db6fdf0b019531ce7b237f64e0f657a31f2b04b7d995c254dcd2176c5e46ac36"
 
-// anthropicDivergences are the cases this client differs on, on purpose.
-var anthropicDivergences = map[string]string{
-	"divergence_cache_tokens": "input tokens count cache reads and writes, as the OpenAI client's do; " +
-		"anthropic.py reported input_tokens alone",
-	"divergence_two_text_blocks": "every text block is joined; anthropic.py read content[0] only",
-	"divergence_thinking_first":  "thinking blocks are skipped; anthropic.py failed on a thinking block at content[0]",
-	"divergence_overloaded_retries": "one retry in all (call_with_retry); the Anthropic SDK's own two internal " +
-		"retries per attempt are not ported, so 2 calls, not 6",
-	"divergence_rate_limit_retries": "same: 2 calls, not 6",
+var anthropicImprovements = map[string]string{
+	"divergence_cache_tokens": "input tokens count cache reads and writes too, the same meaning as the OpenAI " +
+		"client's input tokens; the old client under-reported cached prompts",
+	"divergence_two_text_blocks": "every text block is joined; the old client kept the first block only",
+	"divergence_thinking_first":  "thinking blocks are skipped; the old client failed on a thinking block at content[0]",
 }
 
-func TestAnthropicMatchesThePythonProvider(t *testing.T) {
-	header, cases := loadPythonOracle(t, "testdata/python_oracle/anthropic.oracle.json", anthropicPythonOracleDigest)
-	t.Logf("oracle: %v at ops %v, sdk %v", header["producer"], header["ops_sha"], header["sdk"])
+func TestAnthropicCallerReliedResponses(t *testing.T) {
+	_, cases := loadRecordedCases(t, "testdata/anthropic_responses.golden.json", anthropicResponsesGoldenDigest)
+	if len(cases) < 15 {
+		t.Fatalf("%d cases: the golden is not the recording", len(cases))
+	}
 	seen := map[string]bool{}
 	for _, oc := range cases {
 		seen[oc.Name] = true
-		server, sent := servePythonAnswers(t, oc.Answers)
-		first := oc.Requests[0]["body"].(map[string]any)
-		provider, err := NewAnthropic(Config{APIKey: NewSecret("oracle-placeholder"), BaseURL: server.URL, Model: first["model"].(string)})
+		server, _ := serveRecordedAnswers(t, oc.Answers)
+		model := oc.Requests[0]["body"].(map[string]any)["model"].(string)
+		provider, err := NewAnthropic(Config{APIKey: NewSecret("oracle-placeholder"), BaseURL: server.URL, Model: model})
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := Request{System: first["system"].(string), Prompt: oc.Prompt}
-		result, err := provider.Complete(context.Background(), request)
-		got := sent()
+		result, err := provider.Complete(context.Background(), Request{Prompt: oc.Prompt})
 
 		equal, detail := true, ""
 		fail := func(format string, args ...any) {
@@ -55,79 +56,76 @@ func TestAnthropicMatchesThePythonProvider(t *testing.T) {
 				equal, detail = false, fmt.Sprintf(format, args...)
 			}
 		}
-		if len(got) != len(oc.Requests) {
-			fail("calls go=%d python=%d", len(got), len(oc.Requests))
-		}
-		for i := 0; i < min(len(got), len(oc.Requests)); i++ {
-			python := oc.Requests[i]
-			headers := python["headers"].(map[string]any)
-			if got[i].path != python["path"] {
-				fail("request %d path go=%s python=%s", i, got[i].path, python["path"])
-			}
-			for _, name := range []string{"x-api-key", "anthropic-version", "content-type"} {
-				if got[i].header.Get(name) != headers[name] {
-					fail("request %d header %s go=%q python=%q", i, name, got[i].header.Get(name), headers[name])
-				}
-			}
-			if got[i].header.Get("Authorization") != "" {
-				fail("request %d sends an Authorization header", i)
-			}
-			if ok, why := sameJSON(got[i].body, plainJSON(t, python["body"])); !ok {
-				fail("request %d body: %s", i, why)
-			}
-		}
 		class, _ := ClassOf(err)
-		if want := oc.Outcome["error_class"].(string); string(class) != want {
-			fail("error class go=%q python=%q (err %v)", class, want, err)
-		} else if want == "" {
+		want := oc.Outcome["error_class"].(string)
+		switch {
+		case string(class) != want:
+			fail("error class go=%q recorded=%q (err %v)", class, want, err)
+		case want == "":
 			if !sameText(result.Text, oc.Outcome["text"].(string)) {
-				fail("text go=%q python=%q", result.Text, oc.Outcome["text"])
+				fail("text go=%q recorded=%q", result.Text, oc.Outcome["text"])
 			}
 			if result.Model != oc.Outcome["model"] {
-				fail("model go=%q python=%q", result.Model, oc.Outcome["model"])
+				fail("model go=%q recorded=%q", result.Model, oc.Outcome["model"])
 			}
 			if !sameTokens(result.Usage.InputTokens, oc.Outcome["input_tokens"]) || !sameTokens(result.Usage.OutputTokens, oc.Outcome["output_tokens"]) {
-				fail("tokens go=%v/%v python=%v/%v", deref(result.Usage.InputTokens), deref(result.Usage.OutputTokens), oc.Outcome["input_tokens"], oc.Outcome["output_tokens"])
+				fail("tokens go=%v/%v recorded=%v/%v", deref(result.Usage.InputTokens), deref(result.Usage.OutputTokens), oc.Outcome["input_tokens"], oc.Outcome["output_tokens"])
+			}
+			// The stop reason is the answer's own, carried as it is.
+			var body struct {
+				StopReason string `json:"stop_reason"`
+			}
+			_ = json.Unmarshal([]byte(oc.Answers[len(oc.Answers)-1]["body"].(string)), &body)
+			if result.StopReason != body.StopReason {
+				fail("stop reason go=%q answer=%q", result.StopReason, body.StopReason)
 			}
 		}
-		divergenceCheck(t, anthropicDivergences, oc.Name, equal, detail)
+		divergenceCheck(t, anthropicImprovements, oc.Name, equal, detail)
 	}
-	for name := range anthropicDivergences {
+	for name := range anthropicImprovements {
 		if !seen[name] {
-			t.Errorf("%s: declared divergence has no case", name)
+			t.Errorf("%s: named improvement has no case", name)
 		}
 	}
-	t.Logf("compared %d executed Python cases, %d declared divergences", len(cases), len(anthropicDivergences))
 }
 
-// TestAnthropicStructuredOutputIsTheOnlyRequestDifference: anthropic.py had
-// no structured outputs. Under a Format this client adds output_config and
-// nothing else; every other body field is the Python body's.
-func TestAnthropicStructuredOutputIsTheOnlyRequestDifference(t *testing.T) {
-	_, cases := loadPythonOracle(t, "testdata/python_oracle/anthropic.oracle.json", anthropicPythonOracleDigest)
-	for _, oc := range cases {
-		if oc.Name != "categorization_prompt_json" {
-			continue
-		}
-		server, sent := servePythonAnswers(t, oc.Answers)
-		python := plainJSON(t, oc.Requests[0]["body"]).(map[string]any)
-		provider, _ := NewAnthropic(Config{APIKey: NewSecret("oracle-placeholder"), BaseURL: server.URL, Model: python["model"].(string)})
-		if _, err := provider.Complete(context.Background(), Request{System: python["system"].(string), Prompt: oc.Prompt, Format: testFormat}); err != nil {
-			t.Fatal(err)
-		}
-		body := sent()[0].body.(map[string]any)
-		if _, ok := body["output_config"]; !ok {
-			t.Fatal("no output_config under a Format")
-		}
-		delete(body, "output_config")
-		if ok, why := sameJSON(body, python); !ok {
-			t.Errorf("beyond output_config the body differs from Python: %s", why)
-		}
-		return
+// TestAnthropicCallerReliedErrorClasses maps each documented Messages API
+// error (https://platform.claude.com/docs/en/api/errors) to the class the
+// callers' retry and fallback decisions read. The bodies are the documented
+// examples, not live recordings.
+func TestAnthropicCallerReliedErrorClasses(t *testing.T) {
+	cases := []struct {
+		status    int
+		kind      string
+		message   string
+		wantClass ErrorClass
+		wantCalls int
+	}{
+		{400, "invalid_request_error", "messages: field required", ClassInvalidRequest, 1},
+		{400, "invalid_request_error", "prompt is too long: 250000 tokens > 200000 maximum", ClassContextLength, 1},
+		{401, "authentication_error", "invalid x-api-key", ClassAuth, 1},
+		{402, "billing_error", "Your credit balance is too low", ClassAuth, 1},
+		{403, "permission_error", "Your API key does not have permission to use the specified resource.", ClassAuth, 1},
+		{404, "not_found_error", "model: claude-nope", ClassModelNotFound, 1},
+		{408, "timeout_error", "Request timed out", ClassTimeout, 2},
+		{413, "request_too_large", "Request exceeds the maximum allowed number of bytes.", ClassInvalidRequest, 1},
+		{429, "rate_limit_error", "Number of request tokens has exceeded your per-minute rate limit", ClassRateLimit, 2},
+		{500, "api_error", "An unexpected error has occurred internal to Anthropic's systems.", ClassServer, 2},
+		{504, "timeout_error", "Gateway timeout", ClassTimeout, 2},
+		{529, "overloaded_error", "Anthropic's API is temporarily overloaded.", ClassServer, 2},
 	}
-	t.Fatal("the oracle has no categorization_prompt_json case")
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%d_%s", tc.status, tc.kind), func(t *testing.T) {
+			body := fmt.Sprintf(`{"type":"error","error":{"type":%q,"message":%q},"request_id":"req_011CSHoEeqs5C35K2UUqR7Fy"}`, tc.kind, tc.message)
+			server, c := scriptedServer(t, step{status: tc.status, body: body, header: map[string][]string{"Retry-After": {"0"}}})
+			provider, _ := NewAnthropic(Config{APIKey: NewSecret(testKey), BaseURL: server.URL})
+			_, err := provider.Complete(context.Background(), Request{Prompt: "p"})
+			class, ok := ClassOf(err)
+			if !ok || class != tc.wantClass || c.calls() != tc.wantCalls {
+				t.Errorf("class = %q calls = %d, want %q %d (err %v)", class, c.calls(), tc.wantClass, tc.wantCalls, err)
+			}
+		})
+	}
 }
 
-func TestAnthropicPythonOracleReExecutes(t *testing.T) {
-	reExecutePythonOracle(t, "anthropic", "testdata/python_oracle/anthropic.oracle.json")
-}
+func TestAnthropicLiveSmoke(t *testing.T) { runLiveSmoke(t, KindAnthropic) }
