@@ -163,3 +163,15 @@ func TestCompatibleDefaults(t *testing.T) {
 		t.Error("NewCompatible built an openai client")
 	}
 }
+
+func TestCompatibleNoChoiceStillReportsItsUsage(t *testing.T) {
+	budget := &recordingBudget{}
+	server, _ := scriptedServer(t, step{status: 200, body: map[string]any{"choices": []any{}, "usage": map[string]any{"prompt_tokens": 11, "completion_tokens": 7}}})
+	provider, _ := NewCompatible(Config{Kind: KindGemini, APIKey: NewSecret(testKey), BaseURL: server.URL, Budget: budget})
+	if _, err := provider.Complete(context.Background(), Request{Prompt: "p"}); err == nil {
+		t.Fatal("a reply with no choice answered as success")
+	}
+	if len(budget.usages) != 1 || budget.usages[0].InputTokens == nil || *budget.usages[0].InputTokens != 11 {
+		t.Fatalf("budget settled with %+v, want the reported 11 input tokens", budget.usages)
+	}
+}

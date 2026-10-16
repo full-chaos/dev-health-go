@@ -231,12 +231,15 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return chatAnswer{}, err
 	}
-	if len(decoded.Choices) == 0 {
-		return chatAnswer{}, errNoChoices
-	}
-	answer := chatAnswer{text: decoded.Choices[0].Message.Content, finish: decoded.Choices[0].FinishReason}
+	var answer chatAnswer
 	if usage := decoded.Usage; usage != nil {
+		// Read before the choices: a reply with no choice can still have
+		// been billed, and the budget settles from what was reported.
 		answer.usage = usageOf(usage.PromptTokens, usage.CompletionTokens, nil)
 	}
+	if len(decoded.Choices) == 0 {
+		return answer, errNoChoices
+	}
+	answer.text, answer.finish = decoded.Choices[0].Message.Content, decoded.Choices[0].FinishReason
 	return answer, nil
 }
