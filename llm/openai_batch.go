@@ -194,7 +194,15 @@ func multipartUpload(payload []byte, fileName string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("llm: encode upload: %w", err)
 	}
 	header := make(textproto.MIMEHeader)
-	header.Set("Content-Disposition", `form-data; name="file"; filename="`+strings.ReplaceAll(fileName, `"`, "")+`"`)
+	// The caller's file name is a label: anything that could end or break a
+	// MIME header line is dropped.
+	safeName := strings.Map(func(r rune) rune {
+		if r == '"' || r == '\\' || r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, fileName)
+	header.Set("Content-Disposition", `form-data; name="file"; filename="`+safeName+`"`)
 	header.Set("Content-Type", "application/jsonl")
 	part, err := form.CreatePart(header)
 	if err != nil {
@@ -305,7 +313,7 @@ func parseOpenAIBatchLines(content []byte) ([]BatchItemResult, error) {
 		}
 		var line openAIBatchOutputLine
 		if trimmed[0] != '{' || json.Unmarshal(trimmed, &line) != nil {
-			return nil, fmt.Errorf("llm: batch result line %d is not a JSON object", lineNumber)
+			return nil, NewError(ClassGeneric, KindOpenAI, "", fmt.Sprintf("LLM provider batch result line %d is not a JSON object.", lineNumber))
 		}
 		result := BatchItemResult{CustomID: jsonScalarText(line.CustomID), LineID: jsonScalarText(line.ID)}
 
@@ -346,7 +354,7 @@ func parseOpenAIBatchLines(content []byte) ([]BatchItemResult, error) {
 		results = append(results, result)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("llm: batch result file: %w", err)
+		return nil, NewError(ClassGeneric, KindOpenAI, "", "LLM provider batch result file could not be read.")
 	}
 	return results, nil
 }

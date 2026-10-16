@@ -555,3 +555,28 @@ func TestBatchBudgetIsNotAskedForAnInvalidBatch(t *testing.T) {
 		t.Fatalf("admitted=%v calls=%v: an invalid batch reached the budget or the provider", budget.admitted, fake.callList())
 	}
 }
+
+func TestBatchLineWithNoCompletionIsAnOutputFailure(t *testing.T) {
+	status := 200
+	err := BatchItemFailure(BatchItemResult{ErrorCode: "http_200", ErrorMessage: "Batch response did not contain completion text", StatusCode: &status}, KindOpenAI, "m")
+	if class, _ := ClassOf(err); class != ClassOutput {
+		t.Fatalf("class = %q, want output: a 200 with no completion is no usable answer", class)
+	}
+}
+
+func TestBatchFileNameCannotBreakTheUploadHeaders(t *testing.T) {
+	body, contentType, err := multipartUpload([]byte("{}"), "evil\r\nX-Injected: 1\r\n\"name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "\r\nX-Injected") || !strings.Contains(contentType, "multipart/form-data") {
+		t.Fatalf("the file name reached the part headers raw:\n%s", body)
+	}
+}
+
+func TestBatchResultFileThatIsNotJSONIsATypedError(t *testing.T) {
+	_, err := parseOpenAIBatchLines([]byte("{\"custom_id\":\"a\"}\nnot json\n"))
+	if _, ok := ClassOf(err); !ok {
+		t.Fatalf("err = %v: a malformed result file must be an *Error", err)
+	}
+}

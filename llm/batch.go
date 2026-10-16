@@ -171,6 +171,11 @@ func BatchItemFailure(result BatchItemResult, provider Kind, model string) error
 	if result.StatusCode != nil {
 		status = *result.StatusCode
 	}
+	// A 2xx line with no completion text and no provider error is a reply
+	// with no usable answer: an output failure, which a caller may retry.
+	if status >= 200 && status < 300 && result.ProviderErrorCode == "" && result.ProviderErrorType == "" {
+		return NewError(ClassOutput, provider, model, "LLM provider batch line held no completion text.")
+	}
 	// The line's error type rides along with its code: a code like
 	// invalid_prompt says nothing a classifier knows, its type
 	// invalid_request_error does.
