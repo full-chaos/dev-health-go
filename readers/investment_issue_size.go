@@ -118,11 +118,9 @@ func (c SizingCoverage) Unsized() *int {
 	return &unsized
 }
 
-// SizingNotMeasured is how a null coverage reads (D6031): the read held no
-// unit, so there is no share to state.
-const SizingNotMeasured = "not measured"
-
-// Measured reports whether the read held a unit, so Share is not null.
+// Measured reports whether the read held a unit, so Share is not null. A read
+// that holds none is "not measured": Share and Note serve nothing for it, and
+// a surface may word it itself.
 func (c SizingCoverage) Measured() bool { return c.Units > 0 }
 
 // Note is the "mostly unsized" sentence (D6031): when fewer than half of the

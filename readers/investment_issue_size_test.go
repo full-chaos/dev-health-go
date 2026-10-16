@@ -42,8 +42,8 @@ func TestSizingCoverageNullAndZeroAreDistinct(t *testing.T) {
 	if u := zero.Unsized(); *u != 3 {
 		t.Errorf("Unsized(0 of 3) = %d, want 3", *u)
 	}
-	if readers.SizingNotMeasured != "not measured" {
-		t.Errorf("SizingNotMeasured = %q", readers.SizingNotMeasured)
+	if none.Note() != "" {
+		t.Errorf("a read with no unit serves no note, got %q", none.Note())
 	}
 }
 
