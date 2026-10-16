@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -120,5 +121,75 @@ func TestABodyReadFailureIsMarkedOnTheSpan(t *testing.T) {
 		if attributeOf(span, "error.class") == "" {
 			t.Errorf("span %d records no error.class for a body that could not be read", i)
 		}
+	}
+}
+
+func TestErrorPrintsOnlyItsSanitizedText(t *testing.T) {
+	err := NewError(ClassGeneric, KindOpenAI, "m", "upstream said key="+testKey)
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+		if got := fmt.Sprintf(verb, err); strings.Contains(got, testKey) {
+			t.Errorf("%s prints the key: %s", verb, got)
+		}
+	}
+}
+
+// keyEchoingTransport fails with an error that quotes the request's
+// Authorization header, as a careless caller transport might.
+type keyEchoingTransport struct{}
+
+func (keyEchoingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("gateway refused %s with %s", req.URL, req.Header.Get("Authorization"))
+}
+
+func TestNoUnwrappedLayerCarriesATransportsText(t *testing.T) {
+	provider, err := NewOpenAI(Config{APIKey: NewSecret(testKey), BaseURL: "https://api.example/v1",
+		HTTPClient: &http.Client{Transport: keyEchoingTransport{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Complete(context.Background(), Request{Prompt: "p"})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for layer := err; layer != nil; layer = errors.Unwrap(layer) {
+		if strings.Contains(layer.Error(), testKey) || strings.Contains(fmt.Sprintf("%#v", layer), testKey) {
+			t.Errorf("layer %T carries the key: %s", layer, layer.Error())
+		}
+	}
+}
+
+func TestACapAboveTheRetryCeilingIsNeverLowered(t *testing.T) {
+	server, c := scriptedServer(t,
+		step{status: 200, body: map[string]any{"output_text": `{"a":`, "incomplete_details": map[string]any{"reason": "max_output_tokens"}}},
+		step{status: 200, body: openAIOK(`{"a":1}`)},
+	)
+	provider, _ := NewOpenAI(Config{APIKey: NewSecret(testKey), BaseURL: server.URL, MaxOutputTokens: 10000})
+	if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.request(1)["max_output_tokens"]; got != float64(10000) {
+		t.Errorf("retry cap = %v, want 10000 kept", got)
+	}
+}
+
+// replacedDefault is a process-wide DefaultTransport that is not a
+// *http.Transport (some instrumentation libraries install one).
+type replacedDefault struct{ inner http.RoundTripper }
+
+func (r replacedDefault) RoundTrip(req *http.Request) (*http.Response, error) {
+	return r.inner.RoundTrip(req)
+}
+
+func TestAReplacedDefaultTransportDoesNotPanic(t *testing.T) {
+	previous := http.DefaultTransport
+	http.DefaultTransport = replacedDefault{inner: previous}
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	server, c := scriptedServer(t, step{status: 200, body: openAIOK(`{}`)})
+	provider, err := NewOpenAI(Config{APIKey: NewSecret(testKey), BaseURL: server.URL, HTTPClient: &http.Client{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Complete(context.Background(), Request{Prompt: "p"}); err != nil || c.calls() != 1 {
+		t.Fatalf("err = %v calls = %d", err, c.calls())
 	}
 }

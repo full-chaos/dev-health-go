@@ -97,9 +97,12 @@ type Config struct {
 	// MaxOutputTokens raises the provider's own output floor.
 	MaxOutputTokens int
 	// HTTPClient sends every request. nil is a hardened client: no redirect,
-	// no ambient proxy, 60 s timeout. A caller dialling a customer-supplied
-	// BaseURL passes a client whose transport refuses internal addresses at
-	// dial time; a redirect is refused whatever client is passed.
+	// no proxy, 60 s timeout. This package does not check the addresses it
+	// dials: a caller dialling a customer-supplied BaseURL must pass a client
+	// whose transport refuses internal addresses at dial time (ops: the
+	// SSRF-guarded transport). Whatever client is passed, redirects are
+	// refused and a net/http Transport's proxy is dropped; a custom
+	// RoundTripper is trusted and used as it is.
 	HTTPClient *http.Client `json:"-"`
 	// Budget, when set, admits and settles every HTTP attempt.
 	Budget Budget `json:"-"`
