@@ -24,6 +24,15 @@ func CompactJSON(text string) string {
 	return string(compact)
 }
 
+// gateJSON is the strict JSON gate of a reply under a Format: the compact JSON
+// and "", or "" and the reply as written when it is not one JSON value.
+func gateJSON(text string) (compact, unparsed string) {
+	if compact = CompactJSON(text); compact == "" {
+		unparsed = text
+	}
+	return compact, unparsed
+}
+
 // Outcome is how CompleteStrict ended.
 type Outcome string
 

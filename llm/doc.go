@@ -26,6 +26,11 @@
 //     is not one JSON value comes back as Result.Text "" and a nil error, so
 //     the caller makes its one repair attempt (CompleteStrict) and then falls
 //     back.
+//     Result.Unparsed then holds the reply as written, so the caller can say
+//     why it failed.
+//   - Request.Seed is sent only by the Chat Completions client; the OpenAI
+//     (Responses) and Anthropic clients refuse a seed before any call
+//     rather than drop it.
 //   - One retry of a transient failure (rate limit, 5xx, timeout, transport),
 //     honouring Retry-After up to 60 s; auth and invalid-request failures are
 //     final. Every provider failure is an *Error with a closed ErrorClass

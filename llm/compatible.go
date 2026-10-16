@@ -45,7 +45,8 @@ const (
 // with a plain text format, as local.py did for json_schema. The JSON gate
 // applies only under a Format: a schema-free answer comes back as written,
 // which the explanation callers parse themselves. Temperature 0.3, local.py's
-// default.
+// default, unless Config.Temperature is TemperatureOmit; Request.Seed is sent
+// as seed.
 type Compatible struct {
 	cfg    Config
 	client *http.Client
@@ -116,8 +117,9 @@ type chatRequest struct {
 	Model               string              `json:"model"`
 	Messages            []chatMessage       `json:"messages"`
 	MaxCompletionTokens int                 `json:"max_completion_tokens"`
-	Temperature         float64             `json:"temperature"`
+	Temperature         *float64            `json:"temperature,omitempty"`
 	ResponseFormat      *chatResponseFormat `json:"response_format,omitempty"`
+	Seed                *int64              `json:"seed,omitempty"`
 }
 
 type chatResponse struct {
@@ -149,6 +151,11 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			Name: request.Format.Name, Schema: request.Format.Schema, Strict: true,
 		}}
 	}
+	var temperature *float64
+	if p.cfg.Temperature != TemperatureOmit {
+		value := compatibleTemperature
+		temperature = &value
+	}
 	requestKey := "shared:" + randomID()
 	var lastErr *Error
 	for attempt := 0; attempt <= compatibleMaxRetries; attempt++ {
@@ -159,8 +166,9 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 				{Role: "user", Content: request.Prompt},
 			},
 			MaxCompletionTokens: max(p.cfg.MaxOutputTokens, request.MaxOutputTokens),
-			Temperature:         compatibleTemperature,
+			Temperature:         temperature,
 			ResponseFormat:      format,
+			Seed:                request.Seed,
 		}
 		answer, err := p.send(ctx, requestKey, attempt+1, body)
 		if err != nil {
@@ -182,11 +190,11 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			}
 			return Result{}, classified
 		}
-		text := answer.text
+		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage}
 		if request.Format != nil {
-			text = CompactJSON(answer.text)
+			result.Text, result.Unparsed = gateJSON(answer.text)
 		}
-		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage}, nil
+		return result, nil
 	}
 	if lastErr != nil {
 		return Result{}, lastErr

@@ -44,15 +44,17 @@ var providerWires = map[Kind]providerWire{
 // provider. The list is Kinds() itself: a Kind with no wire entry fails.
 func TestEveryKindHonoursTheSameContract(t *testing.T) {
 	cases := []struct {
-		name      string
-		steps     []step
-		wantText  string
-		wantClass ErrorClass
-		wantCalls int
-		wantUsage bool
+		name     string
+		steps    []step
+		wantText string
+		// wantUnparsed is the reply as written when it failed the JSON gate.
+		wantUnparsed string
+		wantClass    ErrorClass
+		wantCalls    int
+		wantUsage    bool
 	}{
 		{name: "valid JSON under a schema comes back compact", steps: []step{{status: 200, body: "a"}}, wantText: `{"a":1}`, wantCalls: 1, wantUsage: true},
-		{name: "invalid JSON under a schema is an empty completion", steps: []step{{status: 200, body: "bad"}}, wantText: "", wantCalls: 1},
+		{name: "invalid JSON under a schema is an empty completion", steps: []step{{status: 200, body: "bad"}}, wantText: "", wantUnparsed: "not json", wantCalls: 1},
 		{name: "a transient 503 is retried once", steps: []step{{status: 503}, {status: 200, body: "a"}}, wantText: `{"a":1}`, wantCalls: 2, wantUsage: true},
 		{name: "a 401 is final and classified auth", steps: []step{{status: 401}}, wantClass: ClassAuth, wantCalls: 1},
 	}
@@ -123,7 +125,7 @@ func TestEveryKindHonoursTheSameContract(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if result.Text != tc.wantText || result.Model != provider.Model() {
+				if result.Text != tc.wantText || result.Unparsed != tc.wantUnparsed || result.Model != provider.Model() {
 					t.Errorf("result = %+v", result)
 				}
 				if tc.wantUsage && (result.Usage.InputTokens == nil || *result.Usage.InputTokens != 13 || *result.Usage.OutputTokens != 5) {

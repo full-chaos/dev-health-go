@@ -74,6 +74,11 @@ type Request struct {
 	// MaxOutputTokens is a floor combined with the provider's own floor by
 	// max(): it never lowers the provider's minimum.
 	MaxOutputTokens int
+	// Seed asks for reproducible sampling. Only the Chat Completions client
+	// (local, Gemini, Qwen) sends it; the Responses and Messages APIs have no
+	// seed, so the OpenAI and Anthropic clients refuse a request with one
+	// rather than drop it silently.
+	Seed *int64
 }
 
 // Usage is what the provider reported. A nil count was not reported; it is
@@ -93,6 +98,9 @@ type Result struct {
 	// "max_output_tokens", ...), for logs.
 	StopReason string
 	Usage      Usage
+	// Unparsed is the reply as written when it failed the JSON gate under a
+	// Format (Text is then ""), so the caller can say why it was invalid.
+	Unparsed string
 }
 
 // Provider is one configured client of one provider API.
@@ -127,7 +135,21 @@ type Config struct {
 	HTTPClient *http.Client `json:"-"`
 	// Budget, when set, admits and settles every HTTP attempt.
 	Budget Budget `json:"-"`
+	// Temperature is the Chat Completions client's temperature mode; the
+	// other clients send none.
+	Temperature TemperatureMode
 }
+
+// TemperatureMode chooses the temperature a Chat Completions request carries.
+type TemperatureMode int
+
+const (
+	// TemperatureDefault sends 0.3, local.py's default.
+	TemperatureDefault TemperatureMode = iota
+	// TemperatureOmit sends no temperature, so the model uses its own
+	// default. GPT-5 models refuse any other value with a 400.
+	TemperatureOmit
+)
 
 // New builds the Provider for cfg.Kind.
 func New(cfg Config) (Provider, error) {

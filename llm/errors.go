@@ -304,3 +304,9 @@ func sanitizeMessage(message string) string {
 	}
 	return text
 }
+
+// errSeedUnsupported refuses a seed the provider API cannot carry, before any
+// call: dropping it would silently undo the caller's reproducibility.
+func errSeedUnsupported(kind Kind, model string) *Error {
+	return NewError(ClassInvalidRequest, kind, model, "LLM provider API takes no seed.")
+}

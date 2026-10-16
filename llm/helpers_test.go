@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -34,6 +35,7 @@ type capture struct {
 	paths    []string
 	headers  []http.Header
 	requests []map[string]any
+	bodies   [][]byte
 }
 
 func (c *capture) calls() int {
@@ -53,13 +55,15 @@ func scriptedServer(t *testing.T, steps ...step) (*httptest.Server, *capture) {
 	t.Helper()
 	c := &capture{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.Unmarshal(raw, &body)
 		c.mu.Lock()
 		index := min(len(c.paths), len(steps)-1)
 		c.paths = append(c.paths, r.URL.Path)
 		c.headers = append(c.headers, r.Header.Clone())
 		c.requests = append(c.requests, body)
+		c.bodies = append(c.bodies, raw)
 		c.mu.Unlock()
 		s := steps[index]
 		for name, values := range s.header {

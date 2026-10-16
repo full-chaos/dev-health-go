@@ -128,6 +128,9 @@ type anthropicAnswer struct {
 
 // Complete is anthropic.py's AnthropicProvider.complete.
 func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, error) {
+	if request.Seed != nil {
+		return Result{}, errSeedUnsupported(KindAnthropic, p.cfg.Model)
+	}
 	maxTokens := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
 	structured := request.Format != nil
 	requestKey := "shared:" + randomID()
@@ -153,7 +156,7 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 			}
 			return Result{}, classified
 		}
-		text := answer.text
+		text, unparsed := answer.text, ""
 		if answer.stopReason == "refusal" {
 			// A refusal can carry text (the model's own words); it is never
 			// an answer, so it is the empty completion the caller repairs or
@@ -161,7 +164,7 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 			text = ""
 		}
 		if request.Format != nil && answer.stopReason != "refusal" {
-			text = CompactJSON(answer.text)
+			text, unparsed = gateJSON(answer.text)
 			if text == "" && answer.stopReason == "max_tokens" && attempt < anthropicMaxRetries {
 				// Doubled up to 16000; a cap already above it is kept.
 				maxTokens = max(maxTokens, min(anthropicMaxOutputTokens, maxTokens*2))
@@ -171,7 +174,7 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 				continue
 			}
 		}
-		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.stopReason, Usage: answer.usage}, nil
+		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.stopReason, Usage: answer.usage, Unparsed: unparsed}, nil
 	}
 	if lastErr != nil {
 		return Result{}, lastErr
