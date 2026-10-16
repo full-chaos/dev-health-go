@@ -180,13 +180,30 @@ func TestFormatPathNamesTheSchemaPathForEveryKind(t *testing.T) {
 	}
 }
 
-func TestCompatibleTextFallbackReportsTheTextPath(t *testing.T) {
-	provider, _ := newTestCompatible(t, KindGemini,
-		step{status: 400, body: `{"error":{"message":"response_format json_schema is not supported"}}`},
-		step{status: 200, body: chatOK(`{"a":2}`)},
-	)
-	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
-	if err != nil || result.FormatPath != FormatPathText {
-		t.Fatalf("FormatPath = %q err = %v, want %q", result.FormatPath, err, FormatPathText)
+func TestCompatibleARefusedFormatIsOneCallAndAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		format *JSONFormat
+	}{{"json_schema", testFormat}, {"json_object", nil}} {
+		for _, kind := range []Kind{KindLocal, KindGemini, KindQwen} {
+			t.Run(tc.name+"/"+string(kind), func(t *testing.T) {
+				budget := &recordingBudget{}
+				server, c := scriptedServer(t,
+					step{status: 400, body: `{"error":{"message":"response_format json_schema is not supported"}}`},
+					step{status: 200, body: chatOK(`{"a":2}`)},
+				)
+				provider, err := NewCompatible(Config{Kind: kind, APIKey: NewSecret(testKey), BaseURL: server.URL, Model: "m", Budget: budget})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = provider.Complete(context.Background(), Request{Prompt: "p", Format: tc.format})
+				if class, ok := ClassOf(err); !ok || class != ClassInvalidRequest || c.calls() != 1 {
+					t.Fatalf("err = %v calls = %d, want one call and class %q", err, c.calls(), ClassInvalidRequest)
+				}
+				if len(budget.attempts) != 1 {
+					t.Fatalf("budget attempts = %d, want the one billed call recorded", len(budget.attempts))
+				}
+			})
+		}
 	}
 }

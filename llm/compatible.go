@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 )
 
 const (
@@ -152,7 +151,8 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 	// A Format is json_schema (strict); no Format asks for a JSON object,
 	// which every one of these APIs documents (local.py sent no format at
 	// all, so a JSON prompt could still be answered in prose). A server that
-	// rejects either with a 400 is asked once more with a text format.
+	// rejects either with a 400 has refused the format: that is a final
+	// invalid_request, never a second, billed call with another format.
 	format := &chatResponseFormat{Type: "json_object"}
 	if request.Format != nil {
 		format = &chatResponseFormat{Type: "json_schema", JSONSchema: &chatJSONSchema{
@@ -188,11 +188,6 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			if IsBudgetRefusal(err) || ctx.Err() != nil {
 				return Result{}, err
 			}
-			if statusCodeOf(err) == http.StatusBadRequest && format.Type != "text" && attempt < compatibleMaxRetries && !rejectsSeed(err, request.Seed) {
-				// A server without Structured Outputs: plain text, once.
-				format = &chatResponseFormat{Type: "text"}
-				continue
-			}
 			classified := classify(err, p.cfg.Kind, p.cfg.Model)
 			lastErr = classified
 			if classified.Retryable() && attempt < compatibleMaxRetries {
@@ -207,9 +202,6 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 		if request.Format != nil {
 			result.Text, result.Unparsed = gateJSON(answer.text)
 			result.FormatPath = FormatPathSchema
-			if format.Type == "text" {
-				result.FormatPath = FormatPathText
-			}
 		}
 		return result, nil
 	}
@@ -267,12 +259,6 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 	}
 	answer.text, answer.finish = decoded.Choices[0].Message.Content, decoded.Choices[0].FinishReason
 	return answer, nil
-}
-
-// rejectsSeed reports a 400 that names the seed field of a seeded request: the
-// text-format retry would send the same seed and fail the same way.
-func rejectsSeed(err error, seed *int64) bool {
-	return seed != nil && strings.Contains(strings.ToLower(responseBodyOf(err)), "seed")
 }
 
 func valueOr(value *int, fallback int) int {
