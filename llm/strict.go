@@ -58,7 +58,9 @@ var ErrEmptyAnswer = errors.New("llm: the answer is not JSON")
 //
 // validate receives Result.Text (compact JSON under a Format, "" when the
 // provider returned no JSON, which fails with ErrEmptyAnswer before validate
-// is asked). A provider error ends the call with that error and no outcome.
+// is asked). repair receives the rejected reply: Result.Text, or, when the
+// JSON gate refused the reply, Result.Unparsed, so the repair can quote what
+// was wrong. A provider error ends the call with that error and no outcome.
 func CompleteStrict(
 	ctx context.Context, provider Provider, request Request,
 	validate func(text string) error, repair func(rejected string, reason error) Request,
@@ -78,7 +80,11 @@ func CompleteStrict(
 	if reason == nil {
 		return first, OutcomeOK, calls, nil
 	}
-	second, err := provider.Complete(ctx, repair(first.Text, reason))
+	rejected := first.Text
+	if rejected == "" {
+		rejected = first.Unparsed
+	}
+	second, err := provider.Complete(ctx, repair(rejected, reason))
 	if err != nil {
 		return first, "", calls, err
 	}
