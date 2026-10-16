@@ -51,15 +51,17 @@ func clientFor(cfg Config) *http.Client {
 		return newHardenedClient()
 	}
 	client := noRedirects(cfg.HTTPClient)
-	switch transport := client.Transport.(type) {
-	case nil:
-		direct := http.DefaultTransport.(*http.Transport).Clone()
-		direct.Proxy = nil
-		client.Transport = direct
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	switch transport := transport.(type) {
 	case *http.Transport:
 		direct := transport.Clone()
 		direct.Proxy = nil
 		client.Transport = direct
+	default:
+		client.Transport = transport
 	}
 	return client
 }
@@ -253,15 +255,36 @@ func transportFailure(err error) error {
 	case isTimeout(err):
 		class = "timeout"
 	}
-	cause := err
-	if urlErr != nil {
-		// *url.Error's text quotes the request URL, which can carry userinfo
-		// or a query from a customer-supplied base URL: keep its operation
-		// and inner error (for errors.Is/As), never the URL.
-		cause = &url.Error{Op: urlErr.Op, URL: redactedURL(urlErr.URL), Err: urlErr.Err}
+	// Neither the URL (*url.Error quotes it, with any userinfo or query of a
+	// customer base URL) nor the inner error (a caller's transport can quote
+	// the request, header included) is kept: the chain holds the operation,
+	// the scheme and host, the sanitized text, and what errors.Is/As need
+	// (Timeout, context.Canceled, context.DeadlineExceeded).
+	safe := &safeTransportError{text: sanitizeMessage(err.Error()), timeout: isTimeout(err)}
+	switch {
+	case errors.Is(err, context.Canceled):
+		safe.sentinel = context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		safe.sentinel = context.DeadlineExceeded
 	}
-	return &classifiedError{text: op + " request " + class, cause: cause}
+	target := "<redacted>"
+	if urlErr != nil {
+		target = redactedURL(urlErr.URL)
+		safe.text = class
+	}
+	return &classifiedError{text: op + " request " + class, cause: &url.Error{Op: op, URL: target, Err: safe}}
 }
+
+// safeTransportError stands for a transport failure without its text.
+type safeTransportError struct {
+	text     string
+	timeout  bool
+	sentinel error
+}
+
+func (e *safeTransportError) Error() string { return e.text }
+func (e *safeTransportError) Timeout() bool { return e.timeout }
+func (e *safeTransportError) Unwrap() error { return e.sentinel }
 
 // redactedURL is raw's scheme and host only.
 func redactedURL(raw string) string {
