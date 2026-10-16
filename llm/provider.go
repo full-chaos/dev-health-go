@@ -13,6 +13,10 @@ type Kind string
 
 const (
 	KindOpenAI Kind = "openai"
+	// KindLocal is any self-hosted OpenAI-compatible server.
+	KindLocal  Kind = "local"
+	KindGemini Kind = "gemini"
+	KindQwen   Kind = "qwen"
 )
 
 // defaultModels is the model each Kind uses when Config.Model is empty. Every
@@ -22,6 +26,18 @@ var defaultModels = map[Kind]string{
 	// https://developers.openai.com/api/docs/models/all, 2026-10-16: listed,
 	// not deprecated. base.py's DEFAULT_MODEL_BY_PROVIDER["openai"].
 	KindOpenAI: "gpt-5-mini",
+	// https://ai.google.dev/gemini-api/docs/models and
+	// https://ai.google.dev/gemini-api/docs/openai, 2026-10-16: a stable
+	// Flash model, the one Google's OpenAI-compatibility guide uses. base.py's
+	// "gemini-3" is no Gemini API model id.
+	KindGemini: "gemini-3.8-flash",
+	// https://www.alibabacloud.com/help/en/model-studio/qwen-plus (updated
+	// 2026-10-11): listed, equivalent to snapshot qwen-plus-2025-12-01.
+	// base.py's DEFAULT_MODEL_BY_PROVIDER["qwen"].
+	KindQwen: "qwen-plus",
+	// https://ollama.com/library/llama3.2, 2026-10-16: listed. base.py's
+	// DEFAULT_MODEL_BY_PROVIDER["local"]; a self-hosted server names its own.
+	KindLocal: "llama3.2",
 }
 
 // DefaultModel is the model kind uses when none is named, "" for an unknown
@@ -29,7 +45,7 @@ var defaultModels = map[Kind]string{
 func DefaultModel(kind Kind) string { return defaultModels[kind] }
 
 // Kinds is every Kind New can build, sorted.
-func Kinds() []Kind { return []Kind{KindOpenAI} }
+func Kinds() []Kind { return []Kind{KindGemini, KindLocal, KindOpenAI, KindQwen} }
 
 // JSONFormat asks for strict JSON matching Schema. Name is the schema's name
 // on the wire where the API has one.
@@ -104,6 +120,8 @@ func New(cfg Config) (Provider, error) {
 	switch cfg.Kind {
 	case KindOpenAI:
 		return NewOpenAI(cfg)
+	case KindLocal, KindGemini, KindQwen:
+		return NewCompatible(cfg)
 	}
 	return nil, fmt.Errorf("llm: unknown provider kind %q", cfg.Kind)
 }

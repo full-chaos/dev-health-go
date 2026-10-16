@@ -17,7 +17,17 @@ type providerWire struct {
 	answer func(text string, input, output int) any
 }
 
+// chatCompletionsWire is the OpenAI-compatible Chat Completions protocol
+// local, gemini and qwen speak.
+var chatCompletionsWire = providerWire{path: "/chat/completions", answer: func(text string, input, output int) any {
+	return map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": text}, "finish_reason": "stop"}},
+		"usage": map[string]any{"prompt_tokens": input, "completion_tokens": output}}
+}}
+
 var providerWires = map[Kind]providerWire{
+	KindLocal:  chatCompletionsWire,
+	KindGemini: chatCompletionsWire,
+	KindQwen:   chatCompletionsWire,
 	KindOpenAI: {path: "/responses", answer: func(text string, input, output int) any {
 		return map[string]any{"output_text": text, "usage": map[string]any{
 			"input_tokens": input, "output_tokens": output, "input_tokens_details": map[string]any{"cached_tokens": 0},
