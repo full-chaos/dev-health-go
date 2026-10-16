@@ -21,7 +21,8 @@ import (
 
 // liveSmokeKeys names the environment variable holding each provider's key.
 var liveSmokeKeys = map[Kind]string{
-	KindOpenAI: "OPENAI_API_KEY",
+	KindOpenAI:    "OPENAI_API_KEY",
+	KindAnthropic: "ANTHROPIC_API_KEY",
 }
 
 func runLiveSmoke(t smokeT, kind Kind) {

@@ -176,7 +176,7 @@ func TestAnthropicClassifiesItsErrors(t *testing.T) {
 		{"401 is final", 401, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, ClassAuth, 1},
 		{"429 is retried once", 429, `{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}`, ClassRateLimit, 2},
 		{"529 overloaded is retried once", 529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, ClassServer, 2},
-		{"413 stays generic, as in Python", 413, `{"type":"error","error":{"type":"request_too_large","message":"too big"}}`, ClassGeneric, 1},
+		{"413 is an invalid request", 413, `{"type":"error","error":{"type":"request_too_large","message":"too big"}}`, ClassInvalidRequest, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -240,5 +240,22 @@ func TestAnthropicCapAboveTheRetryCeilingIsKept(t *testing.T) {
 	}
 	if got := c.request(1)["max_tokens"]; got != float64(20000) {
 		t.Errorf("retry max_tokens = %v, want 20000 kept", got)
+	}
+}
+
+func TestAnthropicRefusalWithTextIsStillEmpty(t *testing.T) {
+	for _, format := range []*JSONFormat{nil, testFormat} {
+		provider, c := newTestAnthropic(t, step{status: 200, body: map[string]any{
+			"content":     []any{map[string]any{"type": "text", "text": `{"a": 1}`}},
+			"stop_reason": "refusal", "stop_details": map[string]any{"type": "refusal", "category": "cyber"},
+			"usage": map[string]any{"input_tokens": 5, "output_tokens": 3},
+		}})
+		result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: format})
+		if err != nil || result.Text != "" || result.StopReason != "refusal" || c.calls() != 1 {
+			t.Errorf("format=%v: result = %+v err = %v calls = %d, want an empty refusal from one call", format != nil, result, err, c.calls())
+		}
+		if result.Usage.InputTokens == nil || *result.Usage.InputTokens != 5 {
+			t.Errorf("a refusal's usage is still reported: %+v", result.Usage)
+		}
 	}
 }

@@ -42,7 +42,8 @@ const (
 //   - The text is every "text" content block joined. anthropic.py read
 //     content[0].text, which is a thinking block on a current model.
 //   - A max_tokens stop with no JSON under a Format is retried once with the
-//     cap doubled (at most 16000). A refusal stop is an empty completion.
+//     cap doubled (at most 16000). A refusal stop is an empty completion,
+//     whatever text it carries.
 //
 // Under a Format the text is compact JSON or "" (the caller repairs). With no
 // Format the text is returned as the model wrote it, as anthropic.py did.
@@ -153,7 +154,13 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 			return Result{}, classified
 		}
 		text := answer.text
-		if request.Format != nil {
+		if answer.stopReason == "refusal" {
+			// A refusal can carry text (the model's own words); it is never
+			// an answer, so it is the empty completion the caller repairs or
+			// falls back from. StopReason says why.
+			text = ""
+		}
+		if request.Format != nil && text != "" {
 			text = CompactJSON(answer.text)
 			if text == "" && answer.stopReason == "max_tokens" && attempt < anthropicMaxRetries {
 				// Doubled up to 16000; a cap already above it is kept.

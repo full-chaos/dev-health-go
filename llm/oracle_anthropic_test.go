@@ -32,6 +32,7 @@ var anthropicImprovements = map[string]string{
 		"client's input tokens; the old client under-reported cached prompts",
 	"divergence_two_text_blocks": "every text block is joined; the old client kept the first block only",
 	"divergence_thinking_first":  "thinking blocks are skipped; the old client failed on a thinking block at content[0]",
+	"not_found":                  "a 404 not_found_error is model_not_found; the old client left it generic",
 }
 
 func TestAnthropicCallerReliedResponses(t *testing.T) {

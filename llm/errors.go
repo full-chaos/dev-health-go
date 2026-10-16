@@ -190,7 +190,7 @@ func classify(err error, provider Kind, model string) *Error {
 		e := build(ClassRateLimit, "Transient LLM rate limit from provider.")
 		e.RetryAfter = retryAfterFromHeader(headerOf(err))
 		return e
-	case containsAny(msgLower, "context_length_exceeded", "maximum context length", "too many tokens", "input too long", "reduce your prompt"):
+	case containsAny(msgLower, "context_length_exceeded", "maximum context length", "too many tokens", "input too long", "reduce your prompt", "prompt is too long"):
 		return build(ClassContextLength, "LLM prompt exceeds the model context window.")
 	case statusCode == http.StatusBadRequest || statusCode == http.StatusUnprocessableEntity ||
 		containsAny(msgLower, "unsupported parameter", "unsupported value", "invalid parameter", "invalid_request_error", "invalid request"):
@@ -201,6 +201,17 @@ func classify(err error, provider Kind, model string) *Error {
 		return build(ClassTransport, "LLM provider endpoint could not be reached.")
 	case statusCode >= 500 || containsAny(msgLower, "500", "502", "503", "504", "server error", "internal error"):
 		return build(ClassServer, "Transient LLM provider server error.")
+	// Past errors.py: statuses its keyword checks left generic, classed by
+	// what the status means (Anthropic's billing_error, permission_error,
+	// not_found_error, timeout_error, request_too_large).
+	case statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden:
+		return build(ClassAuth, "LLM provider refused the API key for billing or permission.")
+	case statusCode == http.StatusNotFound:
+		return build(ClassModelNotFound, fmt.Sprintf("LLM model or endpoint not found for provider %q using configured model %q.", provider, model))
+	case statusCode == http.StatusRequestTimeout:
+		return build(ClassTimeout, "LLM provider request timed out.")
+	case statusCode == http.StatusRequestEntityTooLarge:
+		return build(ClassInvalidRequest, "LLM provider rejected the request as too large.")
 	}
 	return build(ClassGeneric, err.Error())
 }
