@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -98,18 +99,55 @@ type anthropicOutputFormat struct {
 	Schema map[string]any `json:"schema"`
 }
 
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+type anthropicToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
 type anthropicRequest struct {
 	Model        string                 `json:"model"`
 	MaxTokens    int                    `json:"max_tokens"`
 	System       string                 `json:"system,omitempty"`
 	Messages     []anthropicMessage     `json:"messages"`
 	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+	Tools        []anthropicTool        `json:"tools,omitempty"`
+	ToolChoice   *anthropicToolChoice   `json:"tool_choice,omitempty"`
 }
+
+// anthropicMode is how a request asks for a Format's JSON. Structured
+// outputs refuse many schemas (a map field, more than 24 optional
+// properties, an untyped property); a forced tool call takes the schema as
+// the tool's input_schema without those limits; plain text is the last
+// resort, with the JSON gate deciding.
+type anthropicMode int
+
+const (
+	anthropicStructured anthropicMode = iota
+	anthropicForcedTool
+	anthropicPlain
+)
+
+// anthropicToolName is a valid Messages API tool name for the Format.
+func anthropicToolName(format *JSONFormat) string {
+	if format != nil && anthropicToolNamePattern.MatchString(format.Name) {
+		return format.Name
+	}
+	return "output"
+}
+
+var anthropicToolNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 type anthropicResponse struct {
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string          `json:"type"`
+		Text  string          `json:"text"`
+		Input json.RawMessage `json:"input"`
 	} `json:"content"`
 	StopReason string `json:"stop_reason"`
 	Usage      *struct {
@@ -132,26 +170,28 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 		return Result{}, errSeedUnsupported(KindAnthropic, p.cfg.Model)
 	}
 	maxTokens := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
-	structured := request.Format != nil
+	mode := anthropicStructured
 	requestKey := "shared:" + randomID()
-	var lastErr *Error
-	for attempt := 0; attempt <= anthropicMaxRetries; attempt++ {
-		body := p.messagesBody(request, maxTokens, structured)
-		answer, err := p.send(ctx, requestKey, attempt+1, body)
+	// retries counts the transient and cut-answer retries (anthropic.py's
+	// max_retries=1); a refused format falls back without spending one.
+	retries := 0
+	for call := 1; ; call++ {
+		body := p.messagesBody(request, maxTokens, mode)
+		answer, err := p.send(ctx, requestKey, call, body)
 		if err != nil {
 			if IsBudgetRefusal(err) || ctx.Err() != nil {
 				return Result{}, err
 			}
-			if statusCodeOf(err) == http.StatusBadRequest && body.OutputConfig != nil && attempt < anthropicMaxRetries {
-				structured = false
+			if statusCodeOf(err) == http.StatusBadRequest && request.Format != nil && mode != anthropicPlain {
+				mode++
 				continue
 			}
 			classified := classify(err, KindAnthropic, p.cfg.Model)
-			lastErr = classified
-			if classified.Retryable() && attempt < anthropicMaxRetries {
-				if !sleepFor(ctx, delayFor(classified, attempt)) {
+			if classified.Retryable() && retries < anthropicMaxRetries {
+				if !sleepFor(ctx, delayFor(classified, retries)) {
 					return Result{}, ctx.Err()
 				}
+				retries++
 				continue
 			}
 			return Result{}, classified
@@ -165,36 +205,55 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 		}
 		if request.Format != nil && answer.stopReason != "refusal" {
 			text, unparsed = gateJSON(answer.text)
-			if text == "" && answer.stopReason == "max_tokens" && attempt < anthropicMaxRetries {
+			if text == "" && answer.stopReason == "max_tokens" && retries < anthropicMaxRetries {
 				// Doubled up to 16000; a cap already above it is kept.
 				maxTokens = max(maxTokens, min(anthropicMaxOutputTokens, maxTokens*2))
 				if !sleepFor(ctx, 500*time.Millisecond) {
 					return Result{}, ctx.Err()
 				}
+				retries++
 				continue
 			}
 		}
 		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.stopReason, Usage: answer.usage, Unparsed: unparsed}, nil
 	}
-	if lastErr != nil {
-		return Result{}, lastErr
-	}
-	return Result{Model: p.cfg.Model}, nil
 }
 
-func (p *Anthropic) messagesBody(request Request, maxTokens int, structured bool) anthropicRequest {
+func (p *Anthropic) messagesBody(request Request, maxTokens int, mode anthropicMode) anthropicRequest {
 	body := anthropicRequest{
 		Model:     p.cfg.Model,
 		MaxTokens: maxTokens,
 		System:    request.System,
 		Messages:  []anthropicMessage{{Role: "user", Content: request.Prompt}},
 	}
-	if structured && request.Format != nil {
+	if request.Format == nil {
+		return body
+	}
+	switch mode {
+	case anthropicStructured:
 		body.OutputConfig = &anthropicOutputConfig{Format: &anthropicOutputFormat{
 			Type: "json_schema", Schema: anthropicSchema(request.Format.Schema),
 		}}
+	case anthropicForcedTool:
+		name := anthropicToolName(request.Format)
+		body.Tools = []anthropicTool{{Name: name, Description: "Return the answer as this tool's input.", InputSchema: copySchema(request.Format.Schema)}}
+		body.ToolChoice = &anthropicToolChoice{Type: "tool", Name: name}
 	}
 	return body
+}
+
+// copySchema is a JSON copy of schema, so the caller's map is never shared
+// with a request body; a schema that cannot be copied is sent as it is.
+func copySchema(schema map[string]any) map[string]any {
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		return schema
+	}
+	var out map[string]any
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		return schema
+	}
+	return out
 }
 
 func (p *Anthropic) send(ctx context.Context, requestKey string, attempt int, body anthropicRequest) (anthropicAnswer, error) {
@@ -237,12 +296,23 @@ func parseAnthropicResponse(raw []byte) (anthropicAnswer, error) {
 		return anthropicAnswer{}, err
 	}
 	var text strings.Builder
+	var toolInput string
 	for _, block := range decoded.Content {
-		if block.Type == "text" {
+		switch block.Type {
+		case "text":
 			text.WriteString(block.Text)
+		case "tool_use":
+			if toolInput == "" {
+				toolInput = string(block.Input)
+			}
 		}
 	}
 	answer := anthropicAnswer{text: text.String(), stopReason: decoded.StopReason}
+	if toolInput != "" {
+		// A forced tool call's input is the answer; any text beside it is
+		// the model's preamble.
+		answer.text = toolInput
+	}
 	if usage := decoded.Usage; usage != nil {
 		var input *int
 		if usage.InputTokens != nil {
