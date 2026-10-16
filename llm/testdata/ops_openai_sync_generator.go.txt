@@ -1,0 +1,163 @@
+package categorize
+
+// Generator of the dev-health-go llm OpenAI oracle (CHAOS-8719). Run once in a
+// throwaway worktree; never committed to ops. It drives the ops port's REAL
+// OpenAIProvider.Complete against scripted httptest servers and records the
+// exact request bytes it sends and the result it returns.
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"sync"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+)
+
+type oracleStep struct {
+	Status int               `json:"status"`
+	Header map[string]string `json:"header,omitempty"`
+	Body   string            `json:"body"`
+}
+
+type oracleCase struct {
+	Name            string          `json:"name"`
+	Model           string          `json:"model"`
+	ConfigFloor     int             `json:"config_max_output_tokens"`
+	System          string          `json:"system"`
+	Prompt          string          `json:"prompt"`
+	FormatName      string          `json:"format_name"`
+	Schema          json.RawMessage `json:"schema"`
+	RequestFloor    int             `json:"request_max_output_tokens"`
+	Steps           []oracleStep    `json:"steps"`
+	SentBodies      []string        `json:"sent_bodies"`
+	Calls           int             `json:"calls"`
+	ResultText      string          `json:"result_text"`
+	ResultModel     string          `json:"result_model"`
+	InputTokens     *int            `json:"input_tokens"`
+	OutputTokens    *int            `json:"output_tokens"`
+	CachedTokens    *int            `json:"cached_input_tokens"`
+	ErrorClass      string          `json:"error_class"`
+	RetryAfterNanos int64           `json:"retry_after_nanos"`
+}
+
+var oracleKindNames = map[llmErrorKind]string{
+	llmErrorGeneric: "generic", llmErrorAuth: "auth", llmErrorModelNotFound: "model_not_found",
+	llmErrorInvalidRequest: "invalid_request", llmErrorRateLimit: "rate_limit", llmErrorContextLength: "context_length",
+	llmErrorServer: "server", llmErrorTimeout: "timeout", llmErrorTransport: "transport", llmErrorOutput: "output",
+	llmErrorBatchTimeout: "batch_timeout",
+}
+
+func ok200(body string) oracleStep { return oracleStep{Status: 200, Body: body} }
+
+const usageBody = `"usage":{"input_tokens":1060,"output_tokens":787,"input_tokens_details":{"cached_tokens":64}}`
+
+func TestZZGenerateLLMOracle(t *testing.T) {
+	out := os.Getenv("LLM_ORACLE_OUT")
+	if out == "" {
+		t.Skip("set LLM_ORACLE_OUT")
+	}
+	cat := CategorizationRequest(BuildPrompt("[pr:1] Fix the login timeout\nRetries now back off. é中 <a> & b"))
+	mix := InvestmentMixExplanationRequest("DEV_HEALTH_RESPONSE_FORMAT=investment_mix_explanation\nExplain the mix.")
+	unit := WorkUnitExplanationRequest("Explain this work unit.\nReturn JSON.")
+	cases := []struct {
+		name        string
+		model       string
+		configFloor int
+		request     CompletionRequest
+		steps       []oracleStep
+	}{
+		{"categorization_floor_2048", "gpt-5-nano", 0, cat, []oracleStep{ok200(`{"output_text":"{\"b\": 1, \"a\": [1, 2]}",` + usageBody + `}`)}},
+		{"categorization_config_floor_6000", "gpt-5-mini", 6000, cat, []oracleStep{ok200(`{"output_text":"{}"}`)}},
+		{"categorization_config_floor_3000_raised_by_request", "gpt-5-mini", 3000, mix, []oracleStep{ok200(`{"output_text":"{}"}`)}},
+		{"investment_mix_floor_4096", "gpt-5-nano", 0, mix, []oracleStep{ok200(`{"output_text":"{\"summary\": \"x\"}"}`)}},
+		{"work_unit_json_object", "gpt-5-nano", 0, unit, []oracleStep{ok200(`{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"q\": "},{"type":"refusal","text":"x"},{"type":"text","text":"1}"}]}]}`)}},
+		{"doubling_on_max_output_tokens", "gpt-5-nano", 0, cat, []oracleStep{
+			ok200(`{"output_text":"{\"a\":","incomplete_details":{"reason":"max_output_tokens"}}`),
+			ok200(`{"output_text":"{\"a\": 2}",` + usageBody + `}`)}},
+		{"doubling_from_4096", "gpt-5-nano", 0, mix, []oracleStep{
+			ok200(`{"output_text":"","incomplete_details":{"reason":"max_output_tokens"}}`),
+			ok200(`{"output_text":"{}"}`)}},
+		{"doubling_capped_at_8192", "gpt-5-nano", 6000, cat, []oracleStep{
+			ok200(`{"output_text":"{","incomplete_details":{"reason":"max_output_tokens"}}`),
+			ok200(`{"output_text":"{}"}`)}},
+		{"cut_twice_is_empty", "gpt-5-nano", 0, cat, []oracleStep{
+			ok200(`{"output_text":"{","incomplete_details":{"reason":"max_output_tokens"}}`)}},
+		{"invalid_json_is_empty", "gpt-5-nano", 0, cat, []oracleStep{ok200(`{"output_text":"not json"}`)}},
+		{"unauthorized_is_final", "gpt-5-nano", 0, cat, []oracleStep{{Status: 401, Body: `{"error":{"code":"invalid_api_key","message":"bad"}}`}}},
+		{"bad_request_is_final", "gpt-5-nano", 0, cat, []oracleStep{{Status: 400, Body: `{"error":{"type":"invalid_request_error","message":"bad schema"}}`}}},
+		{"quota_is_auth", "gpt-5-nano", 0, cat, []oracleStep{{Status: 429, Body: `{"error":{"code":"insufficient_quota"}}`}}},
+		{"rate_limit_retried_once", "gpt-5-nano", 0, cat, []oracleStep{{Status: 429, Header: map[string]string{"Retry-After": "0"}, Body: `{}`}}},
+		{"rate_limit_retry_after_capped", "gpt-5-nano", 0, cat, []oracleStep{
+			{Status: 429, Header: map[string]string{"Retry-After": "0.2"}, Body: `{}`}, ok200(`{"output_text":"{}"}`)}},
+		{"server_error_then_success", "gpt-5-nano", 0, cat, []oracleStep{{Status: 503, Body: `{}`}, ok200(`{"output_text":"{\"ok\": true}"}`)}},
+		{"server_error_twice", "gpt-5-nano", 0, cat, []oracleStep{{Status: 500, Body: `{}`}}},
+		{"overloaded_529", "gpt-5-nano", 0, cat, []oracleStep{{Status: 529, Body: `{}`}}},
+		{"not_found_404", "gpt-5-nano", 0, cat, []oracleStep{{Status: 404, Body: `{"error":{"code":"model_not_found"}}`}}},
+		{"context_length", "gpt-5-nano", 0, cat, []oracleStep{{Status: 400, Body: `{"error":{"code":"context_length_exceeded"}}`}}},
+		{"garbage_200_is_generic", "gpt-5-nano", 0, cat, []oracleStep{ok200(`{not json`)}},
+	}
+	var recorded []oracleCase
+	for _, tc := range cases {
+		var (
+			mu     sync.Mutex
+			bodies []string
+		)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			index := min(len(bodies), len(tc.steps)-1)
+			bodies = append(bodies, string(raw))
+			mu.Unlock()
+			step := tc.steps[index]
+			for k, v := range step.Header {
+				w.Header().Set(k, v)
+			}
+			w.WriteHeader(step.Status)
+			_, _ = w.Write([]byte(step.Body))
+		}))
+		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("oracle-placeholder"), BaseURL: server.URL, Model: tc.model, MaxOutputTokens: tc.configFloor})
+		result, err := provider.Complete(context.Background(), tc.request)
+		server.Close()
+		var schema json.RawMessage = []byte("null")
+		if tc.request.JSONSchema != nil {
+			schema, _ = json.Marshal(tc.request.JSONSchema)
+		}
+		entry := oracleCase{
+			Name: tc.name, Model: tc.model, ConfigFloor: tc.configFloor, System: tc.request.SystemMessage, Prompt: tc.request.Prompt,
+			FormatName: tc.request.ResponseFormatName, Schema: schema, RequestFloor: tc.request.MaxOutputTokens, Steps: tc.steps,
+			SentBodies: bodies, Calls: len(bodies), ResultText: result.Text, ResultModel: result.Model,
+			InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, CachedTokens: result.CachedInputTokens,
+		}
+		if tc.request.JSONSchema == nil {
+			entry.FormatName = ""
+		}
+		if err != nil {
+			typed, isLLM := err.(*llmError)
+			if !isLLM {
+				t.Fatalf("%s: unexpected error type %T", tc.name, err)
+			}
+			entry.ErrorClass = oracleKindNames[typed.kind]
+			entry.RetryAfterNanos = int64(typed.retryAfter)
+		}
+		recorded = append(recorded, entry)
+	}
+	encoded, err := json.MarshalIndent(map[string]any{
+		"header": map[string]any{
+			"producer":  "dev-health-ops internal/jobs/investment/categorize OpenAIProvider.Complete (the ops Go port)",
+			"ops_sha":   os.Getenv("LLM_ORACLE_OPS_SHA"),
+			"generator": "a throwaway _test.go run in an ops worktree at ops_sha; see llm/testdata/README.md",
+		},
+		"cases": recorded,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, append(encoded, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
