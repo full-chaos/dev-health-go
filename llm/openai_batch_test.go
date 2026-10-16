@@ -235,12 +235,16 @@ func TestBatchSubmitRefusesInvalidItemsWithoutACall(t *testing.T) {
 	fake, server := newFakeBatchAPI(t)
 	provider := batchTestProvider(server.URL)
 	good := categorizationRequest("x")
+	seed := int64(7)
+	seeded := categorizationRequest("x")
+	seeded.Seed = &seed
 	cases := map[string][]BatchItem{
 		"empty":           nil,
 		"blank id":        {{CustomID: "  ", Request: good}},
 		"id with a space": {{CustomID: "run 1", Request: good}},
 		"empty prompt":    {{CustomID: "run1-0", Request: Request{}}},
 		"duplicate id":    {{CustomID: "run1-0", Request: good}, {CustomID: "run1-0", Request: good}},
+		"seed":            {{CustomID: "run1-0", Request: seeded}},
 	}
 	for name, items := range cases {
 		if _, err := provider.SubmitBatch(context.Background(), batchOf(items)); err == nil {
