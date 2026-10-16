@@ -26,3 +26,19 @@ cd /tmp/ops-oracle
 LLM_ORACLE_OUT=$PWD/openai_sync.oracle.json LLM_ORACLE_OPS_SHA=<sha> \
   go test -count=1 -run TestZZGenerateLLMOracle ./internal/jobs/investment/categorize/
 ```
+
+## openai_batch.oracle.json
+
+- Corpus: ops' frozen-Python batch corpus (`batch_frozen_python_test.go`).
+- Answers recorded: the frozen Python answer, read from ops
+  `testdata/golden/batch.golden.json` (recorded from openai.py at
+  `python_build`; its sha256 is in the header), and the ops Go port's
+  `batchLine`, `parseOpenAIBatchLines` and `mapOpenAIBatchStatus` at
+  `ops_sha`.
+- Generator: `ops_openai_batch_generator.go.txt`.
+- Test: `oracle_batch_test.go`. It checks llm against the ops port byte for
+  byte on lines and field for field on parse and status. It checks llm against
+  Python with ops' comparator. ops' six named divergences must still differ.
+
+To record it again, follow the sync recipe above with this generator, test
+`TestZZGenerateLLMBatchOracle` and variable `LLM_BATCH_ORACLE_OUT`.
