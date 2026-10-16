@@ -1,0 +1,148 @@
+package categorize
+
+// Generator of the dev-health-go llm OpenAI Batch oracle (CHAOS-8719). Run
+// once in a throwaway worktree; never committed to ops. It records, for ops'
+// own frozen-Python batch corpus (batch_frozen_python_test.go): the frozen
+// Python answer (testdata/golden/batch.golden.json), the ops Go port's answer
+// (batchLine, parseOpenAIBatchLines, mapOpenAIBatchStatus), and the request
+// inputs each line was built from.
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+)
+
+type batchOracleLineInput struct {
+	Name            string          `json:"name"`
+	Model           string          `json:"model"`
+	ConfigFloor     int             `json:"config_max_output_tokens"`
+	CustomID        string          `json:"custom_id"`
+	System          string          `json:"system"`
+	Prompt          string          `json:"prompt"`
+	FormatName      string          `json:"format_name"`
+	Schema          json.RawMessage `json:"schema"`
+	RequestFloor    int             `json:"request_max_output_tokens"`
+	OpsLine         string          `json:"ops_line"`
+	PythonLine      json.RawMessage `json:"python_line"`
+	NamedDivergence bool            `json:"named_divergence"`
+}
+
+type batchOracleParse struct {
+	Name            string          `json:"name"`
+	Text            string          `json:"text"`
+	OpsError        bool            `json:"ops_error"`
+	OpsResults      json.RawMessage `json:"ops_results"`
+	PythonError     bool            `json:"python_error"`
+	PythonResults   json.RawMessage `json:"python_results"`
+	NamedDivergence bool            `json:"named_divergence"`
+}
+
+func TestZZGenerateLLMBatchOracle(t *testing.T) {
+	out := os.Getenv("LLM_BATCH_ORACLE_OUT")
+	if out == "" {
+		t.Skip("set LLM_BATCH_ORACLE_OUT")
+	}
+	corpus := batchOracleCorpus()
+	// Read the frozen answer straight from the golden: the recording
+	// framework binds a golden to the one test that recorded it.
+	goldenRaw, err := os.ReadFile("testdata/golden/batch.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(goldenRaw)); got != batchGoldenPins["batch.golden.json"] {
+		t.Fatalf("golden digest %s is not ops' pinned %s", got, batchGoldenPins["batch.golden.json"])
+	}
+	var recording struct {
+		Requests []struct {
+			Name string `json:"name"`
+			Body string `json:"body"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(goldenRaw, &recording); err != nil {
+		t.Fatal(err)
+	}
+	var answer batchOracleAnswer
+	for _, request := range recording.Requests {
+		if request.Name == "batch provider oracle" {
+			decoder := json.NewDecoder(strings.NewReader(request.Body))
+			decoder.UseNumber()
+			if err := decoder.Decode(&answer); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(answer.Lines) == 0 {
+		t.Fatal("no frozen answer in the golden")
+	}
+	var lines []batchOracleLineInput
+	for _, lc := range corpus.Lines {
+		var request CompletionRequest
+		switch lc.Kind {
+		case "categorization":
+			request = CategorizationRequest(BuildPrompt(lc.SourceBlock))
+		case "explanation":
+			request = InvestmentMixExplanationRequest(lc.Prompt)
+		case "plain":
+			request = WorkUnitExplanationRequest(lc.Prompt)
+		}
+		line, err := goBatchLine(lc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schema := json.RawMessage("null")
+		name := ""
+		if request.JSONSchema != nil {
+			schema, _ = json.Marshal(request.JSONSchema)
+			name = request.ResponseFormatName
+		}
+		lines = append(lines, batchOracleLineInput{
+			Name: lc.Name, Model: lc.Model, ConfigFloor: lc.MaxOutputTokens, CustomID: lc.CustomID,
+			System: request.SystemMessage, Prompt: request.Prompt, FormatName: name, Schema: schema,
+			RequestFloor: request.MaxOutputTokens, OpsLine: string(line), PythonLine: answer.Lines[lc.Name].Line,
+			NamedDivergence: batchDivergences["lines/"+lc.Name],
+		})
+	}
+	var parses []batchOracleParse
+	for _, pc := range corpus.Parse {
+		results, err := parseOpenAIBatchLines([]byte(pc.Text))
+		entry := batchOracleParse{Name: pc.Name, Text: pc.Text, OpsError: err != nil,
+			PythonError: answer.Parse[pc.Name].Error, PythonResults: answer.Parse[pc.Name].Results,
+			NamedDivergence: batchDivergences["parse/"+pc.Name]}
+		if err == nil {
+			encoded, _ := json.Marshal(results)
+			entry.OpsResults = encoded
+		} else {
+			entry.OpsResults = json.RawMessage("null")
+		}
+		parses = append(parses, entry)
+	}
+	statuses := map[string]map[string]string{}
+	for _, status := range corpus.Statuses {
+		statuses[status] = map[string]string{"ops": string(mapOpenAIBatchStatus(status)), "python": answer.Statuses[status]}
+	}
+	encoded, err := json.MarshalIndent(map[string]any{
+		"header": map[string]any{
+			"producer":             "dev-health-ops internal/jobs/investment/categorize: the ops Go port (batchLine, parseOpenAIBatchLines, mapOpenAIBatchStatus) and the frozen Python answer it is pinned to",
+			"ops_sha":              os.Getenv("LLM_ORACLE_OPS_SHA"),
+			"python_build":         batchPythonBuild,
+			"python_golden":        "internal/jobs/investment/categorize/testdata/golden/batch.golden.json",
+			"python_golden_sha256": fmt.Sprintf("%x", sha256.Sum256(goldenRaw)),
+			"named_divergences":    strings.Join(sortedNames(batchDivergences), ","),
+		},
+		"lines":         lines,
+		"parse":         parses,
+		"statuses":      statuses,
+		"result_fields": answer.ResultFields,
+		"metadata_keys": answer.MetadataKeys,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, append(encoded, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
