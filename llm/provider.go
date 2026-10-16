@@ -74,6 +74,12 @@ type Request struct {
 	// MaxOutputTokens is a floor combined with the provider's own floor by
 	// max(): it never lowers the provider's minimum.
 	MaxOutputTokens int
+	// Seed asks for reproducible sampling. Only the Chat Completions client
+	// sends it, for local and Qwen. The Responses and Messages APIs have no
+	// seed and Gemini's OpenAI-compatible endpoint answers 400 to one, so the
+	// OpenAI, Anthropic and Gemini clients refuse a request with a seed before
+	// any call rather than drop it silently.
+	Seed *int64
 }
 
 // Usage is what the provider reported. A nil count was not reported; it is
@@ -93,6 +99,9 @@ type Result struct {
 	// "max_output_tokens", ...), for logs.
 	StopReason string
 	Usage      Usage
+	// Unparsed is the reply as written when it failed the JSON gate under a
+	// Format (Text is then ""), so the caller can say why it was invalid.
+	Unparsed string
 }
 
 // Provider is one configured client of one provider API.
@@ -127,7 +136,38 @@ type Config struct {
 	HTTPClient *http.Client `json:"-"`
 	// Budget, when set, admits and settles every HTTP attempt.
 	Budget Budget `json:"-"`
+	// Temperature is the Chat Completions client's temperature mode; the
+	// other clients send none.
+	Temperature TemperatureMode
+	// OutputCap is the Chat Completions client's output-cap mode; the other
+	// clients always send their cap (the Messages API requires one).
+	OutputCap OutputCapMode
 }
+
+// OutputCapMode chooses whether a Chat Completions request carries
+// max_completion_tokens.
+type OutputCapMode int
+
+const (
+	// OutputCapDefault sends max(Config.MaxOutputTokens, the client floor,
+	// Request.MaxOutputTokens).
+	OutputCapDefault OutputCapMode = iota
+	// OutputCapOmit sends no cap: the server's own limit applies, so a
+	// model whose context window is smaller than the floor is still
+	// reachable. A Budget then sees MaxOutputTokens 0 (no cap was sent).
+	OutputCapOmit
+)
+
+// TemperatureMode chooses the temperature a Chat Completions request carries.
+type TemperatureMode int
+
+const (
+	// TemperatureDefault sends 0.3, local.py's default.
+	TemperatureDefault TemperatureMode = iota
+	// TemperatureOmit sends no temperature, so the model uses its own
+	// default. GPT-5 models refuse any other value with a 400.
+	TemperatureOmit
+)
 
 // New builds the Provider for cfg.Kind.
 func New(cfg Config) (Provider, error) {

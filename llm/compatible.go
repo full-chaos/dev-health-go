@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -45,7 +46,10 @@ const (
 // with a plain text format, as local.py did for json_schema. The JSON gate
 // applies only under a Format: a schema-free answer comes back as written,
 // which the explanation callers parse themselves. Temperature 0.3, local.py's
-// default.
+// default, unless Config.Temperature is TemperatureOmit; Request.Seed is sent
+// as seed, except to Gemini, which refuses the field: a Gemini request with a
+// seed is refused before any call. Config.OutputCap = OutputCapOmit sends no
+// max_completion_tokens, so the server's own limit applies.
 type Compatible struct {
 	cfg    Config
 	client *http.Client
@@ -115,9 +119,10 @@ type chatJSONSchema struct {
 type chatRequest struct {
 	Model               string              `json:"model"`
 	Messages            []chatMessage       `json:"messages"`
-	MaxCompletionTokens int                 `json:"max_completion_tokens"`
-	Temperature         float64             `json:"temperature"`
+	MaxCompletionTokens *int                `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64            `json:"temperature,omitempty"`
 	ResponseFormat      *chatResponseFormat `json:"response_format,omitempty"`
+	Seed                *int64              `json:"seed,omitempty"`
 }
 
 type chatResponse struct {
@@ -139,6 +144,11 @@ type chatAnswer struct {
 
 // Complete is local.py's LocalProvider.complete.
 func (p *Compatible) Complete(ctx context.Context, request Request) (Result, error) {
+	if request.Seed != nil && p.cfg.Kind == KindGemini {
+		// Gemini's OpenAI-compatible endpoint answers 400 to any request
+		// that carries seed, whatever its value.
+		return Result{}, errSeedUnsupported(KindGemini, p.cfg.Model)
+	}
 	// A Format is json_schema (strict); no Format asks for a JSON object,
 	// which every one of these APIs documents (local.py sent no format at
 	// all, so a JSON prompt could still be answered in prose). A server that
@@ -149,6 +159,16 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			Name: request.Format.Name, Schema: request.Format.Schema, Strict: true,
 		}}
 	}
+	var maxCompletionTokens *int
+	if p.cfg.OutputCap != OutputCapOmit {
+		value := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
+		maxCompletionTokens = &value
+	}
+	var temperature *float64
+	if p.cfg.Temperature != TemperatureOmit {
+		value := compatibleTemperature
+		temperature = &value
+	}
 	requestKey := "shared:" + randomID()
 	var lastErr *Error
 	for attempt := 0; attempt <= compatibleMaxRetries; attempt++ {
@@ -158,16 +178,17 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 				{Role: "system", Content: request.System},
 				{Role: "user", Content: request.Prompt},
 			},
-			MaxCompletionTokens: max(p.cfg.MaxOutputTokens, request.MaxOutputTokens),
-			Temperature:         compatibleTemperature,
+			MaxCompletionTokens: maxCompletionTokens,
+			Temperature:         temperature,
 			ResponseFormat:      format,
+			Seed:                request.Seed,
 		}
 		answer, err := p.send(ctx, requestKey, attempt+1, body)
 		if err != nil {
 			if IsBudgetRefusal(err) || ctx.Err() != nil {
 				return Result{}, err
 			}
-			if statusCodeOf(err) == http.StatusBadRequest && format.Type != "text" && attempt < compatibleMaxRetries {
+			if statusCodeOf(err) == http.StatusBadRequest && format.Type != "text" && attempt < compatibleMaxRetries && !rejectsSeed(err, request.Seed) {
 				// A server without Structured Outputs: plain text, once.
 				format = &chatResponseFormat{Type: "text"}
 				continue
@@ -182,11 +203,11 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			}
 			return Result{}, classified
 		}
-		text := answer.text
+		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage}
 		if request.Format != nil {
-			text = CompactJSON(answer.text)
+			result.Text, result.Unparsed = gateJSON(answer.text)
 		}
-		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage}, nil
+		return result, nil
 	}
 	if lastErr != nil {
 		return Result{}, lastErr
@@ -210,7 +231,7 @@ func (p *Compatible) send(ctx context.Context, requestKey string, attempt int, b
 		Model:           p.cfg.Model,
 		BaseURL:         p.cfg.BaseURL,
 		MaxInputBytes:   int64(max(1, len(payload))),
-		MaxOutputTokens: int64(body.MaxCompletionTokens),
+		MaxOutputTokens: int64(valueOr(body.MaxCompletionTokens, 0)),
 	}, func(ctx context.Context) (Usage, error) {
 		err := exchange(withAttempt(ctx, attempt), p.client, http.MethodPost, p.cfg.BaseURL+"/chat/completions",
 			header, bytes.NewReader(payload), p.cfg.Kind, p.cfg.Model, func(raw []byte) error {
@@ -242,4 +263,17 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 	}
 	answer.text, answer.finish = decoded.Choices[0].Message.Content, decoded.Choices[0].FinishReason
 	return answer, nil
+}
+
+// rejectsSeed reports a 400 that names the seed field of a seeded request: the
+// text-format retry would send the same seed and fail the same way.
+func rejectsSeed(err error, seed *int64) bool {
+	return seed != nil && strings.Contains(strings.ToLower(responseBodyOf(err)), "seed")
+}
+
+func valueOr(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }

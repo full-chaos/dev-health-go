@@ -118,6 +118,9 @@ type openAIAnswer struct {
 
 // Complete is openai.py's OpenAIGPT5Provider.complete.
 func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) {
+	if request.Seed != nil {
+		return Result{}, errSeedUnsupported(KindOpenAI, p.cfg.Model)
+	}
 	maxTokens := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
 	requestKey := "shared:" + randomID()
 	var lastErr *Error
@@ -138,7 +141,10 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 			}
 			return Result{}, classified
 		}
-		text := CompactJSON(answer.text)
+		text, unparsed := gateJSON(answer.text)
+		if request.Format == nil {
+			unparsed = ""
+		}
 		if text == "" && answer.reason == "max_output_tokens" && attempt < openAIMaxRetries {
 			// Doubled up to 8192; a cap already above 8192 is kept, never
 			// lowered (the ops port's min() lowered it).
@@ -150,7 +156,7 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 		}
 		// An answer that is not JSON is an empty completion, not an error:
 		// the caller's repair handles it (openai.py's own contract).
-		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage}, nil
+		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed}, nil
 	}
 	if lastErr != nil {
 		return Result{}, lastErr

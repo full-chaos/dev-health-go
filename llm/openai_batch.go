@@ -51,6 +51,11 @@ func (p *OpenAI) SubmitBatch(ctx context.Context, batch BatchRequest) (BatchSubm
 	if err := validateBatchItems(batch.Items); err != nil {
 		return BatchSubmission{}, err
 	}
+	for _, item := range batch.Items {
+		if item.Request.Seed != nil {
+			return BatchSubmission{}, errSeedUnsupported(KindOpenAI, p.cfg.Model)
+		}
+	}
 	var payload bytes.Buffer
 	for index, item := range batch.Items {
 		line, err := json.Marshal(openAIBatchLine{
