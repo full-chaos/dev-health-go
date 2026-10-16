@@ -83,7 +83,7 @@ func (e *Error) Retryable() bool {
 // must not treat that as a provider failure.
 func ClassOf(err error) (ErrorClass, bool) {
 	var typed *Error
-	if !errors.As(err, &typed) {
+	if IsBudgetRefusal(err) || !errors.As(err, &typed) {
 		return "", false
 	}
 	return typed.Class, true
@@ -159,6 +159,11 @@ func classify(err error, provider Kind, model string) *Error {
 	// network error's wording (ops categorize/errors.go, codex round 3 #2178).
 	var transportErr *transportError
 	if errors.As(err, &transportErr) {
+		// errors.py classed a timeout by its exception type before any
+		// connection error: a client or dial timeout is ClassTimeout.
+		if isTimeout(transportErr.cause) {
+			return build(ClassTimeout, "LLM provider request timed out.")
+		}
 		return build(ClassTransport, "LLM provider endpoint could not be reached.")
 	}
 
