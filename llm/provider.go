@@ -25,7 +25,7 @@ var defaultModels = map[Kind]string{
 	KindOpenAI: "gpt-5-mini",
 	// https://platform.claude.com/docs/en/models/overview, 2026-10-16:
 	// current, retirement not sooner than 2027-10-07. base.py's
-	// claude-3-haiku-20240307 was retired on 2026-04-19; this is the same
+	// claude-3-haiku-20240307 was retired in April 2026; this is the same
 	// low-cost tier.
 	KindAnthropic: "claude-haiku-5-5",
 }
