@@ -45,3 +45,17 @@ LLM_ORACLE_OUT=$PWD/openai_sync.oracle.json LLM_ORACLE_OPS_SHA=<sha> \
 
 To record it again, follow the sync recipe above with this generator, test
 `TestZZGenerateLLMBatchOracle` and variable `LLM_BATCH_ORACLE_OUT`.
+
+## anthropic_responses.golden.json
+
+- These are Messages API answers in the documented shape. They are not live
+  recordings, because no Anthropic key exists where they were made.
+- Each answer is stored with the parsed outcome of the previous Anthropic
+  client, which was recorded once: text, model, input and output tokens, and
+  error class.
+- Test: `oracle_anthropic_test.go`, caller-relied. For the same answer, the
+  Result must give the categorize and explain callers what they got before:
+  text and JSON, usage (nil means not reported), stop reason, and error class.
+  Each place where this client now answers better is named there with its
+  reason and must still differ.
+- Request shape is not compared. The client follows the current API.

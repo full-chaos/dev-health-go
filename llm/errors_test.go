@@ -25,7 +25,13 @@ func TestClassifyFollowsThePythonOrder(t *testing.T) {
 		{"500", &statusError{statusCode: 500, body: `{}`}, ClassServer, true},
 		{"529 overloaded", &statusError{statusCode: 529, body: `{"type":"overloaded_error"}`}, ClassServer, true},
 		{"no response", &transportError{cause: errors.New("dial tcp: lookup api.example: no such host")}, ClassTransport, true},
-		{"403 stays generic, as in Python", &statusError{statusCode: 403, body: `{}`}, ClassGeneric, false},
+		{"403 is auth (past errors.py, which left it generic)", &statusError{statusCode: 403, body: `{}`}, ClassAuth, false},
+		{"402 is auth", &statusError{statusCode: 402, body: `{}`}, ClassAuth, false},
+		{"404 is model not found", &statusError{statusCode: 404, body: `{}`}, ClassModelNotFound, false},
+		{"408 is a timeout", &statusError{statusCode: 408, body: `{}`}, ClassTimeout, true},
+		{"413 is an invalid request", &statusError{statusCode: 413, body: `{}`}, ClassInvalidRequest, false},
+		{"413 stays invalid whatever its body says", &statusError{statusCode: 413, body: `request too big: too many tokens`}, ClassInvalidRequest, false},
+		{"404 stays model not found whatever its body says", &statusError{statusCode: 404, body: `invalid request path`}, ClassModelNotFound, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
