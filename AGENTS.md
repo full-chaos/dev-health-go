@@ -16,6 +16,15 @@ Store/contract layer ONLY:
   verification MECHANISMS. No principal/claim shape — each consumer defines
   its own on top.
 
+One amendment to "store/contract layer only" (chris, 2026-10-16, CHAOS-8719:
+"ACR will need it too, unless we plan to duplicate the llm provider code"):
+
+- `llm/` — the one LLM provider implementation ops and acr share: the
+  `Provider` interface, a client per provider API, error classes, telemetry
+  spans and the strict-JSON/repair helper. Credentials, budgets and prompts
+  come IN from the caller: no credential store, no environment lookup, no key
+  cache, no budget store, no prompt or payload semantics in this package.
+
 **Never add:** resolver or response shapes, GraphQL types, a consumer
 principal type, or anything that only makes sense with GraphQL/MCP
 knowledge. If `query-api` would need GraphQL knowledge to use a symbol, it
