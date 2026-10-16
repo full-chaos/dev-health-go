@@ -240,7 +240,7 @@ func (p *Anthropic) messagesBody(request Request, maxTokens int, mode anthropicM
 		}}
 	case anthropicForcedTool:
 		name := anthropicToolName(request.Format)
-		body.Tools = []anthropicTool{{Name: name, Description: "Return the answer as this tool's input.", InputSchema: copySchema(request.Format.Schema)}}
+		body.Tools = []anthropicTool{{Name: name, Description: "Return the answer as this tool's input. Give each property at the level the input schema defines it: never move a top-level property inside an object property, and add no property the schema does not list.", InputSchema: copySchema(request.Format.Schema)}}
 		body.ToolChoice = &anthropicToolChoice{Type: "tool", Name: name}
 	}
 	return body

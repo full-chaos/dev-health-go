@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,6 +62,9 @@ func TestAnthropicFallsBackToAForcedToolCallWhenTheSchemaIsRefused(t *testing.T)
 	tool := tools[0].(map[string]any)
 	if tool["name"] != "categorization" {
 		t.Fatalf("tool = %v, want name categorization", tool)
+	}
+	if description, _ := tool["description"].(string); !strings.Contains(description, "never move a top-level property inside an object property") {
+		t.Fatalf("description = %q, want the placement rule (live: without it, a model nested top-level fields)", description)
 	}
 	if !reflect.DeepEqual(tool["input_schema"], roundTrip(t, testFormat.Schema)) {
 		t.Fatalf("input_schema = %v, want the Format's schema as given", tool["input_schema"])
