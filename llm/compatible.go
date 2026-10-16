@@ -46,7 +46,8 @@ const (
 // applies only under a Format: a schema-free answer comes back as written,
 // which the explanation callers parse themselves. Temperature 0.3, local.py's
 // default, unless Config.Temperature is TemperatureOmit; Request.Seed is sent
-// as seed.
+// as seed, except to Gemini, which refuses the field: a Gemini request with a
+// seed is refused before any call.
 type Compatible struct {
 	cfg    Config
 	client *http.Client
@@ -141,6 +142,11 @@ type chatAnswer struct {
 
 // Complete is local.py's LocalProvider.complete.
 func (p *Compatible) Complete(ctx context.Context, request Request) (Result, error) {
+	if request.Seed != nil && p.cfg.Kind == KindGemini {
+		// Gemini's OpenAI-compatible endpoint answers 400 to any request
+		// that carries seed, whatever its value.
+		return Result{}, errSeedUnsupported(KindGemini, p.cfg.Model)
+	}
 	// A Format is json_schema (strict); no Format asks for a JSON object,
 	// which every one of these APIs documents (local.py sent no format at
 	// all, so a JSON prompt could still be answered in prose). A server that

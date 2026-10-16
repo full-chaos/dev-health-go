@@ -75,9 +75,10 @@ type Request struct {
 	// max(): it never lowers the provider's minimum.
 	MaxOutputTokens int
 	// Seed asks for reproducible sampling. Only the Chat Completions client
-	// (local, Gemini, Qwen) sends it; the Responses and Messages APIs have no
-	// seed, so the OpenAI and Anthropic clients refuse a request with one
-	// rather than drop it silently.
+	// sends it, for local and Qwen. The Responses and Messages APIs have no
+	// seed and Gemini's OpenAI-compatible endpoint answers 400 to one, so the
+	// OpenAI, Anthropic and Gemini clients refuse a request with a seed before
+	// any call rather than drop it silently.
 	Seed *int64
 }
 

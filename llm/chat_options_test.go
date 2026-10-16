@@ -38,20 +38,24 @@ func TestCompatibleTemperatureModes(t *testing.T) {
 
 func TestCompatibleSendsTheSeedOnEveryAttempt(t *testing.T) {
 	seed := int64(9007199254740993)
-	provider, c := newTestCompatible(t, KindLocal,
-		step{status: 400, body: `{"error":{"message":"response_format json_schema is not supported"}}`},
-		step{status: 200, body: chatOK(`{"a":2}`)},
-	)
-	if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat, Seed: &seed}); err != nil {
-		t.Fatal(err)
-	}
-	if c.calls() != 2 {
-		t.Fatalf("calls = %d, want 2", c.calls())
-	}
-	for i := 0; i < c.calls(); i++ {
-		if got := string(c.bodies[i]); !strings.Contains(got, `"seed":9007199254740993`) {
-			t.Errorf("request %d body carries no exact seed: %s", i, got)
-		}
+	for _, kind := range []Kind{KindLocal, KindQwen} {
+		t.Run(string(kind), func(t *testing.T) {
+			provider, c := newTestCompatible(t, kind,
+				step{status: 400, body: `{"error":{"message":"response_format json_schema is not supported"}}`},
+				step{status: 200, body: chatOK(`{"a":2}`)},
+			)
+			if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat, Seed: &seed}); err != nil {
+				t.Fatal(err)
+			}
+			if c.calls() != 2 {
+				t.Fatalf("calls = %d, want 2", c.calls())
+			}
+			for i := 0; i < c.calls(); i++ {
+				if got := string(c.bodies[i]); !strings.Contains(got, `"seed":9007199254740993`) {
+					t.Errorf("request %d body carries no exact seed: %s", i, got)
+				}
+			}
+		})
 	}
 }
 
@@ -65,14 +69,15 @@ func TestCompatibleSendsNoSeedWhenNoneIsAsked(t *testing.T) {
 	}
 }
 
-func TestResponsesAndMessagesRefuseASeedBeforeAnyCall(t *testing.T) {
+func TestResponsesMessagesAndGeminiRefuseASeedBeforeAnyCall(t *testing.T) {
 	seed := int64(7)
 	openAI, openAICalls := newTestOpenAI(t, step{status: 200, body: openAIOK(`{"a":1}`)})
 	anthropic, anthropicCalls := newTestAnthropic(t, step{status: 200, body: anthropicText(`{"a":1}`, "end_turn")})
+	gemini, geminiCalls := newTestCompatible(t, KindGemini, step{status: 200, body: chatOK(`{"a":1}`)})
 	for _, tc := range []struct {
 		provider Provider
 		calls    *capture
-	}{{openAI, openAICalls}, {anthropic, anthropicCalls}} {
+	}{{openAI, openAICalls}, {anthropic, anthropicCalls}, {gemini, geminiCalls}} {
 		t.Run(string(tc.provider.Kind()), func(t *testing.T) {
 			_, err := tc.provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat, Seed: &seed})
 			if class, ok := ClassOf(err); !ok || class != ClassInvalidRequest {
