@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -106,3 +109,10 @@ func spanAttrs(span sdktrace.ReadOnlySpan) map[attribute.Key]attribute.Value {
 	}
 	return attrs
 }
+
+func sha256Hex(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func asError(err error, target **Error) bool { return errors.As(err, target) }

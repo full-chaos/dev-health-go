@@ -28,8 +28,10 @@
 //     back.
 //   - One retry of a transient failure (rate limit, 5xx, timeout, transport),
 //     honouring Retry-After up to 60 s; auth and invalid-request failures are
-//     final. Every failure is an *Error with a closed ErrorClass and a
-//     sanitized message; the provider's raw body never reaches Error().
+//     final. Every provider failure is an *Error with a closed ErrorClass
+//     and a sanitized message; neither Error() nor any unwrapped layer holds
+//     provider text. Two other errors come back as they are: a Budget's own
+//     (IsBudgetRefusal) and the caller's context cancellation.
 //   - Result.Model is the model the request carried, and Model() returns it
 //     before any call.
 //   - Usage counts are nil when the provider did not report them, never 0.
