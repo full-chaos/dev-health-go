@@ -206,6 +206,10 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage}
 		if request.Format != nil {
 			result.Text, result.Unparsed = gateJSON(answer.text)
+			result.FormatPath = FormatPathSchema
+			if format.Type == "text" {
+				result.FormatPath = FormatPathText
+			}
 		}
 		return result, nil
 	}

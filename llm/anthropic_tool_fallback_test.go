@@ -47,7 +47,7 @@ func TestAnthropicFallsBackToAForcedToolCallWhenTheSchemaIsRefused(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.calls() != 2 || result.Text != `{"a":1}` || result.Unparsed != "" || *result.Usage.OutputTokens != 9 {
+	if c.calls() != 2 || result.Text != `{"a":1}` || result.Unparsed != "" || *result.Usage.OutputTokens != 9 || result.FormatPath != FormatPathTool {
 		t.Fatalf("calls = %d, result = %+v", c.calls(), result)
 	}
 	retry := c.request(1)
@@ -77,7 +77,7 @@ func TestAnthropicFallsBackToPlainTextWhenTheToolCallIsRefusedToo(t *testing.T) 
 		step{status: 200, body: anthropicText(`{"a": 3}`, "end_turn")},
 	)
 	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
-	if err != nil || result.Text != `{"a":3}` || c.calls() != 3 {
+	if err != nil || result.Text != `{"a":3}` || c.calls() != 3 || result.FormatPath != FormatPathText {
 		t.Fatalf("result = %+v err = %v calls = %d", result, err, c.calls())
 	}
 	last := c.request(2)
@@ -149,5 +149,35 @@ func TestAnthropicTransientRetryStaysOneAfterAFormatFallback(t *testing.T) {
 	_, err := provider.Complete(ctx, Request{Prompt: "p", Format: testFormat})
 	if class, ok := ClassOf(err); !ok || class != ClassServer || c.calls() != 3 {
 		t.Fatalf("err = %v calls = %d, want a server error after 3 calls (schema, tool, one retry)", err, c.calls())
+	}
+}
+
+func TestFormatPathNamesTheSchemaPathForEveryKind(t *testing.T) {
+	for _, kind := range Kinds() {
+		wire := providerWires[kind]
+		server, _ := scriptedServer(t, step{status: 200, body: wire.answer(`{"a": 1}`, 1, 1)})
+		provider, err := New(Config{Kind: kind, APIKey: NewSecret(testKey), BaseURL: server.URL, Model: "m"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		withFormat, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
+		if err != nil || withFormat.FormatPath != FormatPathSchema {
+			t.Errorf("%s: FormatPath = %q err = %v, want %q", kind, withFormat.FormatPath, err, FormatPathSchema)
+		}
+		free, err := provider.Complete(context.Background(), Request{Prompt: "p"})
+		if err != nil || free.FormatPath != "" {
+			t.Errorf("%s: schema-free FormatPath = %q err = %v, want empty", kind, free.FormatPath, err)
+		}
+	}
+}
+
+func TestCompatibleTextFallbackReportsTheTextPath(t *testing.T) {
+	provider, _ := newTestCompatible(t, KindGemini,
+		step{status: 400, body: `{"error":{"message":"response_format json_schema is not supported"}}`},
+		step{status: 200, body: chatOK(`{"a":2}`)},
+	)
+	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
+	if err != nil || result.FormatPath != FormatPathText {
+		t.Fatalf("FormatPath = %q err = %v, want %q", result.FormatPath, err, FormatPathText)
 	}
 }

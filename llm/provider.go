@@ -102,7 +102,21 @@ type Result struct {
 	// Unparsed is the reply as written when it failed the JSON gate under a
 	// Format (Text is then ""), so the caller can say why it was invalid.
 	Unparsed string
+	// FormatPath is how the answer's JSON was asked for, for logs: one of
+	// the FormatPath constants; "" for a request with no Format.
+	FormatPath string
 }
+
+// FormatPath values.
+const (
+	// FormatPathSchema: the API's own strict schema (OpenAI and Chat
+	// Completions json_schema, Anthropic output_config).
+	FormatPathSchema = "schema"
+	// FormatPathTool: an Anthropic forced tool call carrying the schema.
+	FormatPathTool = "tool"
+	// FormatPathText: no schema reached the API; the JSON gate decided.
+	FormatPathText = "text"
+)
 
 // Provider is one configured client of one provider API.
 type Provider interface {

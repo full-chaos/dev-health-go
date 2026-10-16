@@ -215,7 +215,11 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 				continue
 			}
 		}
-		return Result{Text: text, Model: p.cfg.Model, StopReason: answer.stopReason, Usage: answer.usage, Unparsed: unparsed}, nil
+		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.stopReason, Usage: answer.usage, Unparsed: unparsed}
+		if request.Format != nil {
+			result.FormatPath = [...]string{anthropicStructured: FormatPathSchema, anthropicForcedTool: FormatPathTool, anthropicPlain: FormatPathText}[mode]
+		}
+		return result, nil
 	}
 }
 
