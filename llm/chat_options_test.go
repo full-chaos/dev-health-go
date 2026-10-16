@@ -213,3 +213,36 @@ func statusOrZero(err *Error) int {
 	}
 	return err.StatusCode()
 }
+
+func TestCompatibleOutputCapModes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    OutputCapMode
+		present bool
+	}{
+		{name: "the zero value sends the cap", mode: OutputCapDefault, present: true},
+		{name: "omit sends no cap", mode: OutputCapOmit, present: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := &recordingBudget{}
+			server, c := scriptedServer(t, step{status: 200, body: chatOK(`{"a":1}`)})
+			provider, err := NewCompatible(Config{Kind: KindQwen, APIKey: NewSecret(testKey), BaseURL: server.URL, Model: "m", OutputCap: tc.mode, Budget: budget})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat, MaxOutputTokens: 9000}); err != nil {
+				t.Fatal(err)
+			}
+			got, present := c.request(0)["max_completion_tokens"]
+			if present != tc.present || (tc.present && got != float64(9000)) {
+				t.Fatalf("max_completion_tokens = %v (present %v), want present %v", got, present, tc.present)
+			}
+			if want := map[bool]int64{true: 9000, false: 0}[tc.present]; budget.attempts[0].MaxOutputTokens != want {
+				t.Fatalf("budget MaxOutputTokens = %d, want %d", budget.attempts[0].MaxOutputTokens, want)
+			}
+		})
+	}
+	if OutputCapDefault != 0 {
+		t.Fatal("OutputCapDefault must be the zero value")
+	}
+}

@@ -139,7 +139,24 @@ type Config struct {
 	// Temperature is the Chat Completions client's temperature mode; the
 	// other clients send none.
 	Temperature TemperatureMode
+	// OutputCap is the Chat Completions client's output-cap mode; the other
+	// clients always send their cap (the Messages API requires one).
+	OutputCap OutputCapMode
 }
+
+// OutputCapMode chooses whether a Chat Completions request carries
+// max_completion_tokens.
+type OutputCapMode int
+
+const (
+	// OutputCapDefault sends max(Config.MaxOutputTokens, the client floor,
+	// Request.MaxOutputTokens).
+	OutputCapDefault OutputCapMode = iota
+	// OutputCapOmit sends no cap: the server's own limit applies, so a
+	// model whose context window is smaller than the floor is still
+	// reachable. A Budget then sees MaxOutputTokens 0 (no cap was sent).
+	OutputCapOmit
+)
 
 // TemperatureMode chooses the temperature a Chat Completions request carries.
 type TemperatureMode int

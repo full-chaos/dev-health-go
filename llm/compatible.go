@@ -48,7 +48,8 @@ const (
 // which the explanation callers parse themselves. Temperature 0.3, local.py's
 // default, unless Config.Temperature is TemperatureOmit; Request.Seed is sent
 // as seed, except to Gemini, which refuses the field: a Gemini request with a
-// seed is refused before any call.
+// seed is refused before any call. Config.OutputCap = OutputCapOmit sends no
+// max_completion_tokens, so the server's own limit applies.
 type Compatible struct {
 	cfg    Config
 	client *http.Client
@@ -118,7 +119,7 @@ type chatJSONSchema struct {
 type chatRequest struct {
 	Model               string              `json:"model"`
 	Messages            []chatMessage       `json:"messages"`
-	MaxCompletionTokens int                 `json:"max_completion_tokens"`
+	MaxCompletionTokens *int                `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64            `json:"temperature,omitempty"`
 	ResponseFormat      *chatResponseFormat `json:"response_format,omitempty"`
 	Seed                *int64              `json:"seed,omitempty"`
@@ -158,6 +159,11 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			Name: request.Format.Name, Schema: request.Format.Schema, Strict: true,
 		}}
 	}
+	var maxCompletionTokens *int
+	if p.cfg.OutputCap != OutputCapOmit {
+		value := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
+		maxCompletionTokens = &value
+	}
 	var temperature *float64
 	if p.cfg.Temperature != TemperatureOmit {
 		value := compatibleTemperature
@@ -172,7 +178,7 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 				{Role: "system", Content: request.System},
 				{Role: "user", Content: request.Prompt},
 			},
-			MaxCompletionTokens: max(p.cfg.MaxOutputTokens, request.MaxOutputTokens),
+			MaxCompletionTokens: maxCompletionTokens,
 			Temperature:         temperature,
 			ResponseFormat:      format,
 			Seed:                request.Seed,
@@ -225,7 +231,7 @@ func (p *Compatible) send(ctx context.Context, requestKey string, attempt int, b
 		Model:           p.cfg.Model,
 		BaseURL:         p.cfg.BaseURL,
 		MaxInputBytes:   int64(max(1, len(payload))),
-		MaxOutputTokens: int64(body.MaxCompletionTokens),
+		MaxOutputTokens: int64(valueOr(body.MaxCompletionTokens, 0)),
 	}, func(ctx context.Context) (Usage, error) {
 		err := exchange(withAttempt(ctx, attempt), p.client, http.MethodPost, p.cfg.BaseURL+"/chat/completions",
 			header, bytes.NewReader(payload), p.cfg.Kind, p.cfg.Model, func(raw []byte) error {
@@ -263,4 +269,11 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 // text-format retry would send the same seed and fail the same way.
 func rejectsSeed(err error, seed *int64) bool {
 	return seed != nil && strings.Contains(strings.ToLower(responseBodyOf(err)), "seed")
+}
+
+func valueOr(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
