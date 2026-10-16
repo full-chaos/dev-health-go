@@ -184,6 +184,19 @@ func classify(err error, provider Kind, model string) *Error {
 		return build(ClassAuth, "LLM quota exhausted. Check provider billing/quota or use a different API key.")
 	case containsAny(msgLower, "model_not_found", "model not found", "model does not exist"):
 		return build(ClassModelNotFound, fmt.Sprintf("LLM model not found for provider %q using configured model %q.", provider, model))
+	// Past errors.py: a status that says what failed (Anthropic's
+	// billing_error, permission_error, not_found_error, timeout_error,
+	// request_too_large) is classed by the status before any body word, since
+	// such a body can hold words of another class; errors.py left these to
+	// its keywords, mostly generic.
+	case statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden:
+		return build(ClassAuth, "LLM provider refused the API key for billing or permission.")
+	case statusCode == http.StatusNotFound:
+		return build(ClassModelNotFound, fmt.Sprintf("LLM model or endpoint not found for provider %q using configured model %q.", provider, model))
+	case statusCode == http.StatusRequestTimeout:
+		return build(ClassTimeout, "LLM provider request timed out.")
+	case statusCode == http.StatusRequestEntityTooLarge:
+		return build(ClassInvalidRequest, "LLM provider rejected the request as too large.")
 	case containsAny(msgLower, "401", "invalid_api_key", "authentication", "unauthorized", "missing api key", "api key missing", "api_key is required"):
 		return build(ClassAuth, "Invalid or missing LLM API key.")
 	case statusCode == http.StatusTooManyRequests || containsAny(msgLower, "429", "rate_limit", "rate limit", "too many requests"):
@@ -201,17 +214,6 @@ func classify(err error, provider Kind, model string) *Error {
 		return build(ClassTransport, "LLM provider endpoint could not be reached.")
 	case statusCode >= 500 || containsAny(msgLower, "500", "502", "503", "504", "server error", "internal error"):
 		return build(ClassServer, "Transient LLM provider server error.")
-	// Past errors.py: statuses its keyword checks left generic, classed by
-	// what the status means (Anthropic's billing_error, permission_error,
-	// not_found_error, timeout_error, request_too_large).
-	case statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden:
-		return build(ClassAuth, "LLM provider refused the API key for billing or permission.")
-	case statusCode == http.StatusNotFound:
-		return build(ClassModelNotFound, fmt.Sprintf("LLM model or endpoint not found for provider %q using configured model %q.", provider, model))
-	case statusCode == http.StatusRequestTimeout:
-		return build(ClassTimeout, "LLM provider request timed out.")
-	case statusCode == http.StatusRequestEntityTooLarge:
-		return build(ClassInvalidRequest, "LLM provider rejected the request as too large.")
 	}
 	return build(ClassGeneric, err.Error())
 }

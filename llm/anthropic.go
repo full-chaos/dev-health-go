@@ -160,7 +160,7 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 			// falls back from. StopReason says why.
 			text = ""
 		}
-		if request.Format != nil && text != "" {
+		if request.Format != nil && answer.stopReason != "refusal" {
 			text = CompactJSON(answer.text)
 			if text == "" && answer.stopReason == "max_tokens" && attempt < anthropicMaxRetries {
 				// Doubled up to 16000; a cap already above it is kept.
@@ -261,7 +261,14 @@ func parseAnthropicResponse(raw []byte) (anthropicAnswer, error) {
 // other than minItems 0 or 1.
 var anthropicUnsupportedKeywords = map[string]struct{}{
 	"minimum": {}, "maximum": {}, "exclusiveMinimum": {}, "exclusiveMaximum": {}, "multipleOf": {},
-	"minLength": {}, "maxLength": {}, "maxItems": {},
+	"minLength": {}, "maxLength": {}, "maxItems": {}, "uniqueItems": {}, "minContains": {}, "maxContains": {},
+	"minProperties": {}, "maxProperties": {},
+}
+
+// anthropicSchemaDataKeywords hold data, not schema: their values are kept
+// exactly as given.
+var anthropicSchemaDataKeywords = map[string]struct{}{
+	"default": {}, "const": {}, "enum": {}, "examples": {},
 }
 
 // anthropicSchema is a copy of schema without the keywords Anthropic rejects.
@@ -291,6 +298,10 @@ func stripSchema(value any) any {
 		out := make(map[string]any, len(typed))
 		for key, inner := range typed {
 			if _, drop := anthropicUnsupportedKeywords[key]; drop {
+				continue
+			}
+			if _, data := anthropicSchemaDataKeywords[key]; data {
+				out[key] = inner
 				continue
 			}
 			if key == "minItems" {
