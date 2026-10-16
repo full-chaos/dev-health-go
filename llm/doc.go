@@ -49,10 +49,20 @@
 // Structured output by provider (sources read 2026-10-16):
 //
 //   - OpenAI (Responses API) and Chat Completions (local, Gemini, Qwen): the
-//     Format goes as a strict json_schema. These clients check no schema
-//     limit before the call. A Chat Completions server that answers 400 is
-//     asked once more as text (a second billed call), as local.py did; that
-//     retry stays because ops relies on it.
+//     Format goes as a strict json_schema; with no Format, json_object. There
+//     is one mode, so nothing is chosen. A 400 is a final invalid_request: no
+//     client asks again with another format (GWC ruling D6044, 2026-10-16),
+//     because a refused call is billed. OpenAI documents its strict-mode
+//     limits (https://developers.openai.com/api/docs/guides/structured-outputs,
+//     "Supported schemas", read 2026-10-16): every property in required,
+//     additionalProperties false on every object, a root object without
+//     anyOf, no allOf, not, if/then/else or dependent keywords, at most 5000
+//     properties, 10 nesting levels and 1000 enum values. The client does not
+//     check these before the call; a schema that breaks one is refused with
+//     a 400. Gemini's compatibility layer is in beta and lists no unsupported
+//     parameters (https://ai.google.dev/gemini-api/docs/openai, updated
+//     2026-10-14); it answers 400 to seed, which the client refuses before
+//     the call (below).
 //   - Anthropic (Messages API): the client checks the Format's schema
 //     against the documented structured-output limits before the call
 //     (https://platform.claude.com/docs/en/build-with-claude/structured-outputs):
@@ -69,7 +79,10 @@
 //     The mode is picked once: a 400 is an invalid_request *Error and is
 //     never retried in another mode, because a refused call is billed for
 //     its input tokens. Result.FormatPath and Result.FormatReason say which
-//     mode was used and why.
+//     mode was used and why. On the models that refuse a forced tool, the
+//     tool call goes with tool_choice "auto": the docs' own compatible mode
+//     ("auto with strict tool use", define-tools page), here without strict,
+//     because a schema that needed the tool already broke the strict limits.
 //   - Gemini (OpenAI-compatible endpoint) answers 400 to any request that
 //     carries seed, so its client refuses Request.Seed before the call.
 package llm

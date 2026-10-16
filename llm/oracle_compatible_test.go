@@ -21,7 +21,9 @@ const compatibleResponsesGoldenDigest = "92325ccb55dc34c546d959784d208fd0a843a3d
 
 // compatibleImprovements are the cases this client answers better than the
 // old ones, on purpose. There are none on the response side.
-var compatibleImprovements = map[string]string{}
+var compatibleImprovements = map[string]string{
+	"local/schema_400_then_text": "a 400 on a format is final (invalid_request, one call): the old client asked again as text, a second billed call (GWC ruling D6044, 2026-10-16)",
+}
 
 func TestCompatibleCallerReliedResponses(t *testing.T) {
 	_, cases := loadRecordedCases(t, "testdata/compatible_responses.golden.json", compatibleResponsesGoldenDigest)
@@ -93,8 +95,8 @@ func TestCompatibleCallerReliedResponses(t *testing.T) {
 // OpenAI-compatible endpoints (Gemini: https://ai.google.dev/gemini-api/docs/troubleshooting;
 // DashScope: https://www.alibabacloud.com/help/en/model-studio/error-code)
 // to the class the callers' retry and fallback decisions read. The bodies are
-// documented examples, not live recordings. A 400 is asked once more with a
-// text format (a server may reject the JSON format), so it takes two calls.
+// documented examples, not live recordings. A 400 is final: one call (the
+// old clients asked again as text; D6044 removed that billed second call).
 func TestCompatibleCallerReliedErrorClasses(t *testing.T) {
 	cases := []struct {
 		kind      Kind
@@ -103,18 +105,18 @@ func TestCompatibleCallerReliedErrorClasses(t *testing.T) {
 		wantClass ErrorClass
 		wantCalls int
 	}{
-		{KindGemini, 400, `[{"error":{"code":400,"message":"Invalid JSON payload","status":"INVALID_ARGUMENT"}}]`, ClassInvalidRequest, 2},
+		{KindGemini, 400, `[{"error":{"code":400,"message":"Invalid JSON payload","status":"INVALID_ARGUMENT"}}]`, ClassInvalidRequest, 1},
 		{KindGemini, 403, `[{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}]`, ClassAuth, 1},
 		{KindGemini, 404, `[{"error":{"code":404,"message":"models/gemini-nope is not found","status":"NOT_FOUND"}}]`, ClassModelNotFound, 1},
 		{KindGemini, 429, `[{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}]`, ClassRateLimit, 2},
 		{KindGemini, 500, `[{"error":{"code":500,"message":"An internal error has occurred","status":"INTERNAL"}}]`, ClassServer, 2},
 		{KindGemini, 503, `[{"error":{"code":503,"message":"The model is overloaded","status":"UNAVAILABLE"}}]`, ClassServer, 2},
 		{KindGemini, 504, `[{"error":{"code":504,"message":"Deadline exceeded","status":"DEADLINE_EXCEEDED"}}]`, ClassServer, 2},
-		{KindQwen, 400, `{"error":{"code":"invalid_parameter_error","message":"Range of input length should be [1, 129024]","type":"invalid_request_error"}}`, ClassInvalidRequest, 2},
+		{KindQwen, 400, `{"error":{"code":"invalid_parameter_error","message":"Range of input length should be [1, 129024]","type":"invalid_request_error"}}`, ClassInvalidRequest, 1},
 		{KindQwen, 401, `{"error":{"code":"invalid_api_key","message":"Incorrect API key provided.","type":"invalid_request_error"}}`, ClassAuth, 1},
 		{KindQwen, 429, `{"error":{"code":"Throttling.RateQuota","message":"Requests rate limit exceeded","type":"requests"}}`, ClassRateLimit, 2},
 		{KindQwen, 500, `{"error":{"code":"InternalError","message":"An internal error has occured","type":"internal_error"}}`, ClassServer, 2},
-		{KindLocal, 400, `{"error":{"message":"context length exceeded: maximum context length is 8192 tokens","type":"invalid_request_error"}}`, ClassContextLength, 2},
+		{KindLocal, 400, `{"error":{"message":"context length exceeded: maximum context length is 8192 tokens","type":"invalid_request_error"}}`, ClassContextLength, 1},
 		{KindLocal, 408, `{"error":{"message":"request timeout"}}`, ClassTimeout, 2},
 	}
 	for _, tc := range cases {

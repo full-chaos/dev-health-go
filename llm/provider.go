@@ -117,9 +117,6 @@ const (
 	FormatPathSchema = "schema"
 	// FormatPathTool: an Anthropic forced tool call carrying the schema.
 	FormatPathTool = "tool"
-	// FormatPathText: no schema reached the API; the JSON gate decided
-	// (the Chat Completions retry as text after a 400).
-	FormatPathText = "text"
 )
 
 // Provider is one configured client of one provider API.

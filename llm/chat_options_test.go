@@ -87,18 +87,6 @@ func TestCompatibleZeroConfigBodyIsByteIdenticalToV0230(t *testing.T) {
 	}
 }
 
-func TestCompatibleDoesNotRetryASeedRejection(t *testing.T) {
-	seed := int64(5)
-	provider, c := newTestCompatible(t, KindLocal,
-		step{status: 400, body: `{"error":{"message":"Invalid JSON payload received. Unknown name \"seed\": Cannot find field."}}`},
-		step{status: 200, body: chatOK(`{"a":2}`)},
-	)
-	_, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat, Seed: &seed})
-	if class, ok := ClassOf(err); !ok || class != ClassInvalidRequest || c.calls() != 1 {
-		t.Fatalf("err = %v, calls = %d, want one call and class %q", err, c.calls(), ClassInvalidRequest)
-	}
-}
-
 func TestOpenAISchemaFreeReplyHasNoUnparsed(t *testing.T) {
 	provider, _ := newTestOpenAI(t, step{status: 200, body: openAIOK("not json")})
 	result, err := provider.Complete(context.Background(), Request{Prompt: "p"})
@@ -112,7 +100,7 @@ func TestCompatibleSendsTheSeedOnEveryAttempt(t *testing.T) {
 	for _, kind := range []Kind{KindLocal, KindQwen} {
 		t.Run(string(kind), func(t *testing.T) {
 			provider, c := newTestCompatible(t, kind,
-				step{status: 400, body: `{"error":{"message":"response_format json_schema is not supported"}}`},
+				step{status: 503, body: `{"error":{"message":"overloaded"}}`},
 				step{status: 200, body: chatOK(`{"a":2}`)},
 			)
 			if _, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat, Seed: &seed}); err != nil {
