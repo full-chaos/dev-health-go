@@ -40,11 +40,28 @@ func noRedirects(client *http.Client) *http.Client {
 	return &copied
 }
 
+// clientFor is the client a provider sends with: the hardened one, or the
+// caller's with redirects refused and, for a net/http transport (nil is
+// http.DefaultTransport, whose proxy is ProxyFromEnvironment), a clone with no
+// proxy -- a proxy would receive the API key. The caller's own client and
+// transport are not modified. A caller that must reach the provider through a
+// proxy wraps its own http.RoundTripper, which is used as it is.
 func clientFor(cfg Config) *http.Client {
 	if cfg.HTTPClient == nil {
 		return newHardenedClient()
 	}
-	return noRedirects(cfg.HTTPClient)
+	client := noRedirects(cfg.HTTPClient)
+	switch transport := client.Transport.(type) {
+	case nil:
+		direct := http.DefaultTransport.(*http.Transport).Clone()
+		direct.Proxy = nil
+		client.Transport = direct
+	case *http.Transport:
+		direct := transport.Clone()
+		direct.Proxy = nil
+		client.Transport = direct
+	}
+	return client
 }
 
 // Telemetry names, identical to ops categorize/llmspan.go so dashboards built
@@ -177,13 +194,28 @@ type spanBody struct {
 	status  int
 	once    sync.Once
 	invalid bool
+	readErr error
+}
+
+// Read records a failure while the body is read, so the span does not end
+// as a success when the answer never fully arrived.
+func (b *spanBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && b.readErr == nil {
+		b.readErr = err
+	}
+	return n, err
 }
 
 func (b *spanBody) Close() error {
 	err := b.ReadCloser.Close()
 	b.once.Do(func() {
 		class := spanClass(b.status, nil, nil)
-		if class == "" && b.invalid {
+		switch {
+		case class != "":
+		case b.readErr != nil:
+			class = spanClass(0, b.readErr, nil)
+		case b.invalid:
 			class = "invalid_answer"
 		}
 		endSpan(b.span, b.status, class)
@@ -221,7 +253,23 @@ func transportFailure(err error) error {
 	case isTimeout(err):
 		class = "timeout"
 	}
-	return &classifiedError{text: op + " request " + class, cause: err}
+	cause := err
+	if urlErr != nil {
+		// *url.Error's text quotes the request URL, which can carry userinfo
+		// or a query from a customer-supplied base URL: keep its operation
+		// and inner error (for errors.Is/As), never the URL.
+		cause = &url.Error{Op: urlErr.Op, URL: redactedURL(urlErr.URL), Err: urlErr.Err}
+	}
+	return &classifiedError{text: op + " request " + class, cause: cause}
+}
+
+// redactedURL is raw's scheme and host only.
+func redactedURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "<redacted>"
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 func decodeFailure(err error) error {
