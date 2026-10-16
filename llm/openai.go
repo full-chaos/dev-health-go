@@ -159,6 +159,9 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed}
 		if request.Format != nil {
 			result.FormatPath = FormatPathSchema
+			if request.Format.object() {
+				result.FormatPath = FormatPathObject
+			}
 		}
 		return result, nil
 	}
@@ -172,7 +175,7 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 // synchronous call and every Batch API line are built here.
 func (p *OpenAI) responsesBody(request Request, maxTokens int) openAIResponsesRequest {
 	format := openAITextFormat{Type: "json_object"}
-	if request.Format != nil {
+	if request.Format.schema() {
 		format = openAITextFormat{Type: "json_schema", Name: request.Format.Name, Strict: true, Schema: request.Format.Schema}
 	}
 	return openAIResponsesRequest{

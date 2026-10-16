@@ -48,9 +48,12 @@
 //
 // Structured output by provider (sources read 2026-10-16):
 //
-//   - OpenAI (Responses API) and Chat Completions (local, Gemini, Qwen): the
-//     Format goes as a strict json_schema; with no Format, json_object. There
-//     is one mode, so nothing is chosen. A 400 is a final invalid_request: no
+//   - OpenAI (Responses API) and Chat Completions (local, Gemini, Qwen): a
+//     schema Format goes as a strict json_schema and a Format of Type
+//     FormatTypeJSONObject as json_object; with no Format, json_object on
+//     OpenAI, Gemini and Qwen and no response_format for local (a self-hosted
+//     server's modes are unknown; local.py sent none). There is one mode per
+//     Format, so nothing is chosen. A 400 is a final invalid_request: no
 //     client asks again with another format (GWC ruling D6044, 2026-10-16),
 //     because a refused call is billed. OpenAI documents its strict-mode
 //     limits (https://developers.openai.com/api/docs/guides/structured-outputs,

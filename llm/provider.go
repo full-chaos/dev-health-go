@@ -53,20 +53,46 @@ func DefaultModel(kind Kind) string { return defaultModels[kind] }
 // Kinds is every Kind New can build, sorted.
 func Kinds() []Kind { return []Kind{KindAnthropic, KindGemini, KindLocal, KindOpenAI, KindQwen} }
 
-// JSONFormat asks for strict JSON matching Schema. Name is the schema's name
-// on the wire where the API has one.
+// FormatType says which JSON a Format asks for.
+type FormatType string
+
+const (
+	// FormatTypeJSONSchema, the zero value: strict JSON matching Schema.
+	FormatTypeJSONSchema FormatType = ""
+	// FormatTypeJSONObject: any JSON object, no schema. The OpenAI and Chat
+	// Completions clients (local, Gemini, Qwen) send response_format
+	// json_object; the Messages API has no such mode, so the Anthropic client
+	// sends no format. Every client gates the answer as JSON.
+	FormatTypeJSONObject FormatType = "json_object"
+)
+
+// JSONFormat asks for JSON: strict JSON matching Schema (Type
+// FormatTypeJSONSchema, the zero value), or any JSON object (Type
+// FormatTypeJSONObject, Name and Schema unused). Name is the schema's name on
+// the wire where the API has one.
 type JSONFormat struct {
+	Type   FormatType
 	Name   string
 	Schema map[string]any
 }
 
+// object reports whether the Format asks for any JSON object, not a schema.
+func (f *JSONFormat) object() bool { return f != nil && f.Type == FormatTypeJSONObject }
+
+// schema reports whether the Format asks for JSON matching a schema.
+func (f *JSONFormat) schema() bool { return f != nil && f.Type != FormatTypeJSONObject }
+
 // Request is one completion. With no Format, the OpenAI client asks for a
 // JSON object (json_object), as openai.py did, and so does the Chat
-// Completions client for local, Gemini and Qwen (with one retry as text when
-// a server rejects it); the Anthropic client sends no format, the Messages
-// API having none without a schema. Under a Format every answer passes the
-// strict JSON gate; with no Format, only the OpenAI client's does
-// (openai.py validated it).
+// Completions client for Gemini and Qwen, whose APIs document the mode; the
+// Chat Completions client sends no response_format for local (a self-hosted
+// server's modes are unknown: an LM Studio-style server answers 400 to
+// json_object, and local.py sent none), and the Anthropic client sends no
+// format, the Messages API having none without a schema. A caller that wants
+// a JSON object from every kind passes a Format of Type
+// FormatTypeJSONObject. Under a Format every answer passes the strict JSON
+// gate; with no Format, only the OpenAI client's does (openai.py validated
+// it).
 type Request struct {
 	System string
 	Prompt string
@@ -117,6 +143,9 @@ const (
 	FormatPathSchema = "schema"
 	// FormatPathTool: an Anthropic forced tool call carrying the schema.
 	FormatPathTool = "tool"
+	// FormatPathObject: a Format of Type FormatTypeJSONObject (json_object
+	// where the API has it; on Anthropic, no format and the JSON gate).
+	FormatPathObject = "object"
 )
 
 // Provider is one configured client of one provider API.
