@@ -12,21 +12,31 @@ const redacted = "[REDACTED]"
 // Secret holds a credential. Its value is reachable only through Reveal: every
 // fmt verb, slog, encoding/json and encoding.TextMarshaler print the redaction
 // marker, so a Config or a provider printed whole by a caller never shows the
-// key. The value is in an unexported field, so reflection-based printers that
-// skip methods (fmt's %#v on a containing struct included) cannot read it
-// either; Format covers that verb too.
+// key. The value sits behind a pointer: fmt prints a Config or a provider that
+// a caller keeps in an unexported field by reflection, without calling any
+// method, and a nested pointer prints as an address, never as the string.
 type Secret struct {
-	value string
+	value *string
 }
 
 // NewSecret wraps a credential value.
-func NewSecret(value string) Secret { return Secret{value: value} }
+func NewSecret(value string) Secret {
+	if value == "" {
+		return Secret{}
+	}
+	return Secret{value: &value}
+}
 
 // Reveal returns the credential, for the one place that sends it.
-func (s Secret) Reveal() string { return s.value }
+func (s Secret) Reveal() string {
+	if s.value == nil {
+		return ""
+	}
+	return *s.value
+}
 
 // Configured reports whether a value is present.
-func (s Secret) Configured() bool { return s.value != "" }
+func (s Secret) Configured() bool { return s.value != nil }
 
 func (s Secret) String() string   { return redacted }
 func (s Secret) GoString() string { return redacted }
