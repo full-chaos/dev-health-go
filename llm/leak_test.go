@@ -68,6 +68,43 @@ func TestSecretAndConfigNeverPrintTheKey(t *testing.T) {
 	}
 }
 
+// A caller keeps a provider or a Config in an unexported field of its own
+// type. fmt cannot call a method through that field, so it prints the value by
+// reflection, down to the Secret: the key must not be reachable that way.
+func TestAProviderInAnUnexportedFieldNeverPrintsTheKey(t *testing.T) {
+	cfg := Config{APIKey: NewSecret(testKey), BaseURL: "https://api.example", Model: "m"}
+	openAI, err := NewOpenAI(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anthropic, err := NewAnthropic(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjects := map[string]any{
+		"holder{Config}":     struct{ c Config }{cfg},
+		"holder{Secret}":     struct{ s Secret }{cfg.APIKey},
+		"holder{*OpenAI}":    struct{ p Provider }{openAI},
+		"holder{OpenAI}":     struct{ p OpenAI }{*openAI},
+		"holder{*Anthropic}": struct{ p Provider }{anthropic},
+		"holder{Anthropic}":  struct{ p Anthropic }{*anthropic},
+	}
+	for _, kind := range []Kind{KindLocal, KindGemini, KindQwen} {
+		compatibleCfg := cfg
+		compatibleCfg.Kind = kind
+		compatible, err := NewCompatible(compatibleCfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		subjects["holder{*Compatible}/"+string(kind)] = struct{ p Provider }{compatible}
+		subjects["holder{Compatible}/"+string(kind)] = struct{ p Compatible }{*compatible}
+	}
+	for name, subject := range subjects {
+		assertNoKey(t, name, subject)
+		assertNoKey(t, "&"+name, &subject)
+	}
+}
+
 // TestPlantedLeakIsCaught proves assertNoKey can fail: a struct holding the key
 // as a plain string must be reported. Without this, a checker that never
 // matched anything would pass every test above.
