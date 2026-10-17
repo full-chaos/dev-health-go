@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 )
@@ -55,6 +56,9 @@ func (v *Ed25519JWKSVerifier) Keys() (map[string]ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !singleDocumentWithoutDuplicateMembers(encoded) {
+		return nil, ErrInvalidJWKS
+	}
 	var document jwksDocument
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
@@ -79,4 +83,58 @@ func (v *Ed25519JWKSVerifier) Keys() (map[string]ed25519.PublicKey, error) {
 func validKeyID(value string) bool {
 	value = strings.TrimSpace(value)
 	return value != "" && len(value) <= 256
+}
+
+// singleDocumentWithoutDuplicateMembers scans the raw bytes token by token
+// and reports whether they hold exactly one JSON value, followed only by
+// whitespace, in which no object repeats a member name. Names compare with
+// simple case folding because encoding/json binds members that way.
+func singleDocumentWithoutDuplicateMembers(encoded []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	if !scanValue(decoder) {
+		return false
+	}
+	_, err := decoder.Token()
+	return err == io.EOF
+}
+
+func scanValue(decoder *json.Decoder) bool {
+	token, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return true
+	}
+	switch delim {
+	case '[':
+		for decoder.More() {
+			if !scanValue(decoder) {
+				return false
+			}
+		}
+	case '{':
+		var seen []string
+		for decoder.More() {
+			nameToken, err := decoder.Token()
+			name, isString := nameToken.(string)
+			if err != nil || !isString {
+				return false
+			}
+			for _, previous := range seen {
+				if strings.EqualFold(previous, name) {
+					return false
+				}
+			}
+			seen = append(seen, name)
+			if !scanValue(decoder) {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+	_, err = decoder.Token()
+	return err == nil
 }
