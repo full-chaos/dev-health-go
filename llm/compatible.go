@@ -105,6 +105,11 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+type chatReplyMessage struct {
+	chatMessage
+	Refusal string `json:"refusal"`
+}
+
 type chatResponseFormat struct {
 	Type       string          `json:"type"`
 	JSONSchema *chatJSONSchema `json:"json_schema,omitempty"`
@@ -123,12 +128,13 @@ type chatRequest struct {
 	Temperature         *float64            `json:"temperature,omitempty"`
 	ResponseFormat      *chatResponseFormat `json:"response_format,omitempty"`
 	Seed                *int64              `json:"seed,omitempty"`
+	ReasoningEffort     string              `json:"reasoning_effort,omitempty"`
 }
 
 type chatResponse struct {
 	Choices []struct {
-		Message      chatMessage `json:"message"`
-		FinishReason string      `json:"finish_reason"`
+		Message      chatReplyMessage `json:"message"`
+		FinishReason string           `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
 		PromptTokens     *int `json:"prompt_tokens"`
@@ -137,9 +143,10 @@ type chatResponse struct {
 }
 
 type chatAnswer struct {
-	text   string
-	finish string
-	usage  Usage
+	text    string
+	finish  string
+	usage   Usage
+	refused bool
 }
 
 // Complete is local.py's LocalProvider.complete.
@@ -188,6 +195,7 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			Temperature:         temperature,
 			ResponseFormat:      format,
 			Seed:                request.Seed,
+			ReasoningEffort:     request.ReasoningEffort,
 		}
 		answer, err := p.send(ctx, requestKey, attempt+1, body)
 		if err != nil {
@@ -204,9 +212,11 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			}
 			return Result{}, classified
 		}
-		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage}
+		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage, Refused: answer.refused}
 		if request.Format != nil {
-			result.Text, result.Unparsed = gateJSON(answer.text)
+			if !answer.refused {
+				result.Text, result.Unparsed = gateJSON(answer.text)
+			}
 			result.FormatPath = FormatPathSchema
 			if request.Format.object() {
 				result.FormatPath = FormatPathObject
@@ -267,6 +277,10 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 		return answer, errNoChoices
 	}
 	answer.text, answer.finish = decoded.Choices[0].Message.Content, decoded.Choices[0].FinishReason
+	answer.refused = decoded.Choices[0].Message.Refusal != ""
+	if answer.refused {
+		answer.text = ""
+	}
 	return answer, nil
 }
 

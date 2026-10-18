@@ -106,6 +106,12 @@ type Request struct {
 	// OpenAI, Anthropic and Gemini clients refuse a request with a seed before
 	// any call rather than drop it silently.
 	Seed *int64
+	// ReasoningEffort is the reasoning effort the request asks for, sent as
+	// the provider's own value (Chat Completions reasoning_effort, Responses
+	// reasoning.effort). "" sends nothing on Chat Completions and keeps the
+	// OpenAI client's "low". The Messages API has no such field: the
+	// Anthropic client ignores it.
+	ReasoningEffort string
 }
 
 // Usage is what the provider reported. A nil count was not reported; it is
@@ -134,6 +140,12 @@ type Result struct {
 	// FormatReason is why a client did not use the API's own schema mode:
 	// the first documented limit the Format's schema breaks ("" when it fits).
 	FormatReason string
+	// Refused is true when the provider answered with a refusal (a Chat
+	// Completions message.refusal, a Responses refusal chunk) instead of an
+	// answer. Text is then "" and the refusal's own words are never kept.
+	// Model, StopReason, Usage and FormatPath are still set, so the caller
+	// can count the cost of the refused call.
+	Refused bool
 }
 
 // FormatPath values.
