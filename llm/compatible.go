@@ -137,7 +137,10 @@ type chatResponse struct {
 		FinishReason string           `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     *int `json:"prompt_tokens"`
+		PromptTokens  *int `json:"prompt_tokens"`
+		PromptDetails *struct {
+			CachedTokens *int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 		CompletionTokens *int `json:"completion_tokens"`
 	} `json:"usage"`
 }
@@ -271,7 +274,11 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 	if usage := decoded.Usage; usage != nil {
 		// Read before the choices: a reply with no choice can still have
 		// been billed, and the budget settles from what was reported.
-		answer.usage = usageOf(usage.PromptTokens, usage.CompletionTokens, nil)
+		var cached *int
+		if usage.PromptDetails != nil {
+			cached = usage.PromptDetails.CachedTokens
+		}
+		answer.usage = usageOf(usage.PromptTokens, usage.CompletionTokens, cached)
 	}
 	if len(decoded.Choices) == 0 {
 		return answer, errNoChoices

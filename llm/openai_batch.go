@@ -342,6 +342,7 @@ func parseOpenAIBatchLines(content []byte) ([]BatchItemResult, error) {
 			bodyErr = err
 			if err == nil {
 				result.Usage = parsed.usage
+				result.Refused = parsed.refused
 				result.Text = firstNonEmpty(CompactJSON(parsed.text), parsed.text)
 			}
 		}

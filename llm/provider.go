@@ -144,7 +144,9 @@ type Result struct {
 	// Completions message.refusal, a Responses refusal chunk) instead of an
 	// answer. Text is then "" and the refusal's own words are never kept.
 	// Model, StopReason, Usage and FormatPath are still set, so the caller
-	// can count the cost of the refused call.
+	// can count the cost of the refused call. On the Responses API a refusal
+	// chunk that comes with answer text is read as an answer (the ops port's
+	// contract), so Refused is set only when the reply has no text.
 	Refused bool
 }
 

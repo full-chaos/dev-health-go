@@ -78,6 +78,9 @@ type BatchItemResult struct {
 	// error code, or http_<status> for a response with no completion text.
 	ErrorCode    string
 	ErrorMessage string
+	// Refused is true when the line's reply was a provider refusal (Result.Refused's
+	// meaning); Text is then "" and ErrorCode is the no-text http_<status>.
+	Refused bool
 
 	LineID            string
 	RequestID         string
