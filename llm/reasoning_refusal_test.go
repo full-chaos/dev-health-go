@@ -91,3 +91,27 @@ func TestOpenAIRefusalIsAResultWithUsage(t *testing.T) {
 		t.Errorf("a refused result keeps its receipt fields: %+v", result)
 	}
 }
+
+func TestCompleteStrictDoesNotRepairARefusal(t *testing.T) {
+	provider := &scriptedProvider{results: []Result{{Refused: true}, {Text: `{"a":1}`}}}
+	repairs := 0
+	_, outcome, calls, err := CompleteStrict(context.Background(), provider, Request{Prompt: "p"},
+		func(string) error { return nil },
+		func(string, error) Request { repairs++; return Request{Prompt: "repair"} })
+	if err != nil || outcome != OutcomeInvalid || len(calls) != 1 || repairs != 0 || len(provider.requests) != 1 {
+		t.Fatalf("outcome=%q calls=%d repairs=%d sent=%d err=%v", outcome, len(calls), repairs, len(provider.requests), err)
+	}
+	if !calls[0].Refused {
+		t.Error("the refused result must be the one reported")
+	}
+}
+
+func TestOpenAIRefusalAtTheOutputLimitIsNotRetried(t *testing.T) {
+	body := openAIRefusal()
+	body["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+	provider, c := newTestOpenAI(t, step{status: 200, body: body}, step{status: 200, body: openAIOK(`{"a": 1}`)})
+	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
+	if err != nil || !result.Refused || result.Text != "" || c.calls() != 1 {
+		t.Fatalf("result = %+v err = %v calls = %d, want refused after one attempt", result, err, c.calls())
+	}
+}
