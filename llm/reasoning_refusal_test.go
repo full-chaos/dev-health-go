@@ -53,7 +53,9 @@ func TestCompatibleRefusalIsAResultWithUsage(t *testing.T) {
 }
 
 func TestCompatibleEmptyRefusalIsNotRefused(t *testing.T) {
-	provider, _ := newTestCompatible(t, KindLocal, step{status: 200, body: chatOK(`{"a": 1}`)})
+	body := chatOK(`{"a": 1}`)
+	body["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)["refusal"] = ""
+	provider, _ := newTestCompatible(t, KindLocal, step{status: 200, body: body})
 	result, err := provider.Complete(context.Background(), Request{Prompt: "p", Format: testFormat})
 	if err != nil || result.Refused {
 		t.Fatalf("result = %+v err = %v", result, err)
@@ -146,5 +148,16 @@ func TestBatchFetchKeepsTheRefusalSignal(t *testing.T) {
 	got := results[0]
 	if !got.Refused || got.Text != "" || got.Succeeded() || got.Usage.CachedInputTokens == nil || *got.Usage.CachedInputTokens != 3 {
 		t.Errorf("a refused batch line keeps Refused and its usage, and is not a success: %+v", got)
+	}
+}
+
+func TestCompatibleBodyBytesAreUnchangedWithoutReasoningEffort(t *testing.T) {
+	provider, c := newTestCompatible(t, KindLocal, step{status: 200, body: chatOK("x")})
+	if _, err := provider.Complete(context.Background(), Request{System: "s", Prompt: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"model":"m-local","messages":[{"role":"system","content":"s"},{"role":"user","content":"p"}],"max_completion_tokens":4096,"temperature":0.3}`
+	if got := string(c.bodies[0]); got != want {
+		t.Errorf("body bytes = %s\nwant %s", got, want)
 	}
 }
