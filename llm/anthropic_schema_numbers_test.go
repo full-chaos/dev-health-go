@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -113,30 +114,52 @@ func TestSchemaIntegerAbove2To63(t *testing.T) {
 	}
 }
 
-func TestSchemaNumbersOutOfRangeAreRejected(t *testing.T) {
-	if _, ok := schemaNumber(json.Number("1e400")); ok {
-		t.Error("schemaNumber accepted 1e400")
+func TestSchemaNumbersOutOfFloatRangeAreKeptExactly(t *testing.T) {
+	if !schemaInteger(json.Number("1e400")) {
+		t.Error("schemaInteger(1e400) = false: it is an integer")
 	}
-	if schemaInteger(json.Number("1e400")) {
-		t.Error("schemaInteger accepted 1e400")
-	}
-	out := anthropicSchema(map[string]any{"enum": []any{json.Number("1e400")}, "type": []any{"integer", "null"}})
-	if got, _ := out["enum"].([]any); len(got) != 0 {
-		t.Errorf("enum = %v, want the out-of-range value dropped", got)
+	for _, kind := range []string{"integer", "number"} {
+		out := anthropicSchema(map[string]any{"enum": []any{json.Number("1e400"), nil}, "type": []any{kind, "null"}})
+		raw, _ := json.Marshal(out["enum"])
+		if string(raw) != "[1e400,null]" {
+			t.Errorf("%s: enum = %s, want [1e400,null]", kind, raw)
+		}
 	}
 }
 
-func TestSchemaNumbersWithHugeTextOrExponentAreRejectedFast(t *testing.T) {
-	digits := strings.Repeat("9", 100000)
-	for _, text := range []string{"1e999999999", "1e-999999999", digits, "1." + digits, digits + "e5"} {
-		start := time.Now()
-		integer := schemaInteger(json.Number(text))
-		_, number := schemaNumber(json.Number(text))
-		if integer || (number && text != "1e-999999999") {
-			t.Errorf("%.12s... integer=%v number=%v, want rejected (1e-999999999 is a number that underflows to 0, never an integer)", text, integer, number)
+func TestEnumUnderATypeListKeepsALongIntegerWithoutADrop(t *testing.T) {
+	long := strings.Repeat("9", 129)
+	for _, kind := range []string{"integer", "number"} {
+		out := anthropicSchema(map[string]any{"enum": []any{json.Number(long), nil}, "type": []any{kind, "null"}})
+		raw, _ := json.Marshal(out["enum"])
+		if string(raw) != "["+long+",null]" {
+			t.Errorf("%s: enum = %s, want the 129-digit value kept", kind, raw)
 		}
-		if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
-			t.Errorf("%.12s... took %v, want under 10ms", text, elapsed)
+	}
+	if !schemaInteger(json.Number(long)) || schemaInteger(json.Number("1e-999999999")) || schemaInteger(json.Number("1."+long)) {
+		t.Error("schemaInteger is wrong for a long integer, a tiny exponent or a long fraction")
+	}
+}
+
+func TestSchemaIntegerOfHugeTextAllocatesLittle(t *testing.T) {
+	digits := strings.Repeat("9", 100000)
+	cases := map[string]bool{"1e999999999": true, "1e-999999999": false, digits: true, "1." + digits: false, digits + "e5": true, "0e-999999999": true}
+	for text, want := range cases {
+		value := json.Number(text)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		start := time.Now()
+		got := schemaInteger(value)
+		elapsed := time.Since(start)
+		runtime.ReadMemStats(&after)
+		if got != want {
+			t.Errorf("%.12s...: schemaInteger = %v, want %v", text, got, want)
+		}
+		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<10 {
+			t.Errorf("%.12s...: allocated %d bytes, want under 64 KiB", text, allocated)
+		}
+		if elapsed > 250*time.Millisecond {
+			t.Errorf("%.12s...: took %v, want under 250ms", text, elapsed)
 		}
 	}
 }
