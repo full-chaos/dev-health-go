@@ -42,35 +42,16 @@ func memorySeed(org string, n, projects int) []string {
 
 const memoryTeamCandidates = "SELECT work_item_id FROM work_item_team_attributions WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)} AND cityHash64(work_item_id) % {cand_mod:UInt64} = 0"
 
-// memorySlopeFloorMiB is the slack the organization-size slope allows, per
-// ClickHouse version, frozen from the spread of the clean statement: the
-// largest less the smallest of five warm reads at one size, over both sizes
-// and both part states, rounded up to a whole MiB (hosted CI, run
-// 38490979012: 3.77 MiB on 26.7, 4.71 MiB on 24.8). It is a constant, never
-// computed from the run under test, so a noisy defect cannot raise its own
-// floor.
-var memorySlopeFloorMiB = map[string]int64{"24.8": 5, "26.7": 4}
+// memoryClickHouseLine is the one ClickHouse version this test runs on.
+const memoryClickHouseLine = "26.7"
 
-// memoryAbsoluteBoundMiB holds the bound of each ABSOLUTE row: the cap, which
-// a row meets with its HIGHEST of five warm reads (a cap is hit by the worst
-// read). A row absent for a ClickHouse version is bound by the 32 MiB cap. An
-// entry above the cap is a NAMED regression guard, not a within-cap claim: it
-// is the highest of five reads over both part states, rounded up to a whole
-// MiB, plus 1 MiB, and the line above it cites the measuring run. On 26.7 (the
-// prod version) no entry exists: every absolute row asserts the cap itself.
-//
-// statement-300k on 24.8: the highest of five reads measured 32.36 MiB merged
-// and 32.68 MiB unmerged (hosted CI run 38508030344), above the 32 MiB cap;
-// rounded up to 33 MiB plus 1 MiB makes the guard 34 MiB. It is not a claim
-// that the statement is within the cap on 24.8.
-var memoryAbsoluteBoundMiB = map[string]map[string]int64{
-	"statement-300k": {"24.8": 34},
-	// relation-biggest on 24.8: the highest of five reads measured 28.50 MiB
-	// (run 38508030344) and 32.38 MiB unmerged (hosted CI run 38583097603), the
-	// second above the 32 MiB cap; rounded up to 33 MiB plus 1 MiB makes the
-	// guard 34 MiB. It is not a claim that this row is within the cap on 24.8.
-	"relation-biggest": {"24.8": 34},
-}
+// memorySlopeFloorMiB is the slack the organization-size slope allows, frozen
+// from the spread of the clean statement: the largest less the smallest of
+// five warm reads at one size, over both sizes and both part states, rounded
+// up to a whole MiB (hosted CI, run 38490979012: 3.77 MiB). It is a constant,
+// never computed from the run under test, so a noisy defect cannot raise its
+// own floor.
+const memorySlopeFloorMiB = 4
 
 // biggestTeamCandidates is the candidate count of the largest team the
 // relation must serve. The seed spreads work items over 100 teams, so a
@@ -343,20 +324,12 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 	}
 	// absoluteRow asserts an absolute bound on the HIGHEST warm read and logs
 	// the lowest, the highest and the bound.
-	absoluteRow := func(state, row, label string, lowest, highest int64, line string) {
+	absoluteRow := func(state, label string, lowest, highest int64) {
 		t.Helper()
 		bound := int64(memoryRelationCap / mib)
-		guard := false
-		if frozen, ok := memoryAbsoluteBoundMiB[row][line]; ok {
-			bound, guard = frozen, frozen > memoryRelationCap/mib
-		}
-		kind := "cap"
-		if guard {
-			kind = "regression guard ABOVE the 32 MiB cap"
-		}
-		t.Logf("%s: %s: lowest %.2f MiB, highest %.2f MiB, bound %d MiB (%s)", state, label, float64(lowest)/mib, float64(highest)/mib, bound, kind)
+		t.Logf("%s: %s: lowest %.2f MiB, highest %.2f MiB, bound %d MiB (cap)", state, label, float64(lowest)/mib, float64(highest)/mib, bound)
 		if highest >= bound*mib {
-			t.Errorf("%s: %s: highest of %d reads = %.2f MiB on ClickHouse %s, want < %d MiB (%s)", state, label, memoryWarmRuns, float64(highest)/mib, line, bound, kind)
+			t.Errorf("%s: %s: highest of %d reads = %.2f MiB, want < %d MiB (cap)", state, label, memoryWarmRuns, float64(highest)/mib, bound)
 		}
 	}
 
@@ -383,10 +356,10 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		t.Fatalf("read server version: %v", err)
 	}
 	line := strings.Join(strings.SplitN(version, ".", 3)[:2], ".")
-	floorMiB, ok := memorySlopeFloorMiB[line]
-	if !ok {
-		t.Fatalf("ClickHouse %s has no frozen slope floor: measure the clean statement's spread on it and add it to memorySlopeFloorMiB", version)
+	if line != memoryClickHouseLine {
+		t.Fatalf("ClickHouse %s, want the %s line the bounds are frozen on", version, memoryClickHouseLine)
 	}
+	floorMiB := int64(memorySlopeFloorMiB)
 	floor := floorMiB * mib
 	t.Logf("ClickHouse %s: frozen slope floor %d MiB, measured spread this run %.2f MiB", version, floorMiB, float64(spread)/mib)
 	for _, state := range states {
@@ -407,16 +380,15 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		}
 
 		// The whole relation statement at the large organization, base
-		// statement included. 26.7 asserts the cap; 24.8 only guards a
-		// regression from its measured highest read (see the bound table).
-		absoluteRow(state, "statement-300k", "whole relation statement at 300k work items", rawSmallest(state, "org-300k", "candidates"), rawHighest(state, "org-300k", "candidates"), line)
+		// statement included.
+		absoluteRow(state, "whole relation statement at 300k work items", rawSmallest(state, "org-300k", "candidates"), rawHighest(state, "org-300k", "candidates"))
 
 		// Candidate count: a bigger team is a real input, so the relation may
 		// grow with it, but the largest team still fits under the cap.
 		biggest, biggestSpread := warm(state, "org-300k-biggest", "candidates")
 		atScale, atScaleSpread := warm(state, "org-300k", "candidates")
-		absoluteRow(state, "relation-300k", "candidates relation at 300k work items", atScale, atScale+atScaleSpread, line)
-		absoluteRow(state, "relation-biggest", fmt.Sprintf("candidates relation for %d candidates", candidateCount["org-300k-biggest"]), biggest, biggest+biggestSpread, line)
+		absoluteRow(state, "candidates relation at 300k work items", atScale, atScale+atScaleSpread)
+		absoluteRow(state, fmt.Sprintf("candidates relation for %d candidates", candidateCount["org-300k-biggest"]), biggest, biggest+biggestSpread)
 		extra := candidateCount["org-300k-biggest"] - candidateCount["org-300k"]
 		if perCandidate := float64(biggest-atScale) / float64(extra); perCandidate > memoryBytesPerCandidate {
 			t.Errorf("%s: candidates relation grows %.0f bytes per extra candidate (%d to %d candidates), want at most %d",
@@ -426,7 +398,7 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		// count is organization-wide), so it grows with the catalog, not with
 		// work items. Five times the projects stays under the same bound.
 		got5, got5Spread := warm(state, "org-300k-5kprojects", "candidates")
-		absoluteRow(state, "relation-5kprojects", "candidates relation at 300k work items and 5k projects", got5, got5+got5Spread, line)
+		absoluteRow(state, "candidates relation at 300k work items and 5k projects", got5, got5+got5Spread)
 		g1, _ := warm(state, "org-300k", "candidates")
 		g5, _ := warm(state, "org-300k-5kprojects", "candidates")
 		g20, _ := warm(state, "org-300k-20kprojects", "candidates")
