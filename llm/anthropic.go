@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -270,10 +271,18 @@ func copySchema(schema map[string]any) map[string]any {
 		return schema
 	}
 	var out map[string]any
-	if err := json.Unmarshal(encoded, &out); err != nil {
+	if err := decodeKeepingNumbers(encoded, &out); err != nil {
 		return schema
 	}
 	return out
+}
+
+// decodeKeepingNumbers decodes one JSON value with numbers kept as
+// json.Number, so integer text above 2^53 survives a copy.
+func decodeKeepingNumbers(encoded []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	return decoder.Decode(target)
 }
 
 func (p *Anthropic) send(ctx context.Context, requestKey string, attempt int, body anthropicRequest) (anthropicAnswer, error) {
@@ -376,7 +385,7 @@ func anthropicSchema(schema map[string]any) map[string]any {
 		return schema
 	}
 	var generic any
-	if err := json.Unmarshal(encoded, &generic); err != nil {
+	if err := decodeKeepingNumbers(encoded, &generic); err != nil {
 		return schema
 	}
 	out, ok := stripSchema(generic).(map[string]any)
@@ -399,7 +408,7 @@ func stripSchema(value any) any {
 				continue
 			}
 			if key == "minItems" {
-				if n, ok := inner.(float64); !ok || (n != 0 && n != 1) {
+				if n, ok := schemaNumber(inner); !ok || (n != 0 && n != 1) {
 					continue
 				}
 			}
@@ -479,6 +488,9 @@ func describeDroppedBounds(original, stripped map[string]any) {
 }
 
 func boundValue(value any) string {
+	if number, ok := value.(json.Number); ok {
+		return number.String()
+	}
 	if number, ok := value.(float64); ok {
 		return strconv.FormatFloat(number, 'f', -1, 64)
 	}
@@ -525,11 +537,50 @@ func jsonTypeAllows(name any, value any) bool {
 		_, ok := value.(bool)
 		return ok
 	case "number":
-		_, ok := value.(float64)
+		_, ok := schemaNumber(value)
 		return ok
 	case "integer":
-		number, ok := value.(float64)
-		return ok && number == float64(int64(number))
+		return schemaInteger(value)
 	}
 	return false
+}
+
+// maxSchemaNumberText bounds the number text a schema check parses: real
+// bounds and enum values are a few dozen characters, and a longer text would
+// cost a big-number parse for nothing.
+const maxSchemaNumberText = 128
+
+// maxSchemaNumberExponent bounds the exponent schemaInteger parses exactly.
+const maxSchemaNumberExponent = 400
+
+func schemaNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case json.Number:
+		if len(typed) > maxSchemaNumberText {
+			return 0, false
+		}
+		number, err := strconv.ParseFloat(string(typed), 64)
+		return number, err == nil
+	}
+	return 0, false
+}
+
+func schemaInteger(value any) bool {
+	if typed, ok := value.(json.Number); ok {
+		if _, valid := schemaNumber(typed); !valid {
+			return false
+		}
+		if at := strings.IndexAny(string(typed), "eE"); at >= 0 {
+			exponent, err := strconv.Atoi(string(typed[at+1:]))
+			if err != nil || exponent > maxSchemaNumberExponent || exponent < -maxSchemaNumberExponent {
+				return false
+			}
+		}
+		number, _, err := big.ParseFloat(string(typed), 10, 4096, big.ToNearestEven)
+		return err == nil && number.IsInt()
+	}
+	number, ok := value.(float64)
+	return ok && number == float64(int64(number))
 }

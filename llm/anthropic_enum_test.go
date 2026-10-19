@@ -30,7 +30,7 @@ func TestAnthropicSendsAnEnumUnderATypeListAsTheEnumAlone(t *testing.T) {
 			before, _ := json.Marshal(schema)
 			sent := anthropicSchema(schema)
 			band := sent["properties"].(map[string]any)["band"]
-			if !reflect.DeepEqual(band, c.want) {
+			if !reflect.DeepEqual(roundTrip(t, band), c.want) {
 				t.Fatalf("band = %#v, want %#v", band, c.want)
 			}
 			if fits, why := anthropicSchemaFit(sent); !fits {
