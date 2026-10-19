@@ -111,9 +111,10 @@ type openAIResponsesResponse struct {
 
 // openAIAnswer is one decoded Responses API body.
 type openAIAnswer struct {
-	text   string
-	reason string
-	usage  Usage
+	text    string
+	reason  string
+	usage   Usage
+	refused bool
 }
 
 // Complete is openai.py's OpenAIGPT5Provider.complete.
@@ -142,10 +143,13 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 			return Result{}, classified
 		}
 		text, unparsed := gateJSON(answer.text)
+		if answer.refused {
+			text, unparsed = "", ""
+		}
 		if request.Format == nil {
 			unparsed = ""
 		}
-		if text == "" && answer.reason == "max_output_tokens" && attempt < openAIMaxRetries {
+		if text == "" && !answer.refused && answer.reason == "max_output_tokens" && attempt < openAIMaxRetries {
 			// Doubled up to 8192; a cap already above 8192 is kept, never
 			// lowered (the ops port's min() lowered it).
 			maxTokens = max(maxTokens, min(openAIMaxOutputTokens, maxTokens*2))
@@ -156,7 +160,7 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 		}
 		// An answer that is not JSON is an empty completion, not an error:
 		// the caller's repair handles it (openai.py's own contract).
-		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed}
+		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed, Refused: answer.refused}
 		if request.Format != nil {
 			result.FormatPath = FormatPathSchema
 			if request.Format.object() {
@@ -178,12 +182,16 @@ func (p *OpenAI) responsesBody(request Request, maxTokens int) openAIResponsesRe
 	if request.Format.schema() {
 		format = openAITextFormat{Type: "json_schema", Name: request.Format.Name, Strict: true, Schema: request.Format.Schema}
 	}
+	effort := "low"
+	if request.ReasoningEffort != "" {
+		effort = request.ReasoningEffort
+	}
 	return openAIResponsesRequest{
 		Model:           p.cfg.Model,
 		Instructions:    request.System,
 		Input:           request.Prompt,
 		Text:            openAIResponseText{Format: format, Verbosity: "low"},
-		Reasoning:       openAIReasoning{Effort: "low"},
+		Reasoning:       openAIReasoning{Effort: effort},
 		MaxOutputTokens: maxTokens,
 	}
 }
@@ -222,7 +230,9 @@ func (p *OpenAI) send(ctx context.Context, requestKey string, attempt int, body 
 }
 
 // parseOpenAIResponse is the one parser of a Responses API body: output_text,
-// else every output_text/text chunk of output[].content[] joined.
+// else every output_text/text chunk of output[].content[] joined. A refusal
+// chunk marks the answer refused only when no text came with it: a reply that
+// has text keeps being read as an answer, as the ops port reads it.
 func parseOpenAIResponse(raw []byte) (openAIAnswer, error) {
 	var decoded openAIResponsesResponse
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -241,6 +251,13 @@ func parseOpenAIResponse(raw []byte) (openAIAnswer, error) {
 		text = parts.String()
 	}
 	answer := openAIAnswer{text: text, reason: "completed"}
+	for _, item := range decoded.Output {
+		for _, chunk := range item.Content {
+			if chunk.Type == "refusal" && text == "" {
+				answer.refused = true
+			}
+		}
+	}
 	if decoded.IncompleteDetails != nil && decoded.IncompleteDetails.Reason != "" {
 		answer.reason = decoded.IncompleteDetails.Reason
 	}

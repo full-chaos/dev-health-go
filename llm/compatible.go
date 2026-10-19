@@ -105,6 +105,11 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+type chatReplyMessage struct {
+	chatMessage
+	Refusal string `json:"refusal"`
+}
+
 type chatResponseFormat struct {
 	Type       string          `json:"type"`
 	JSONSchema *chatJSONSchema `json:"json_schema,omitempty"`
@@ -123,23 +128,28 @@ type chatRequest struct {
 	Temperature         *float64            `json:"temperature,omitempty"`
 	ResponseFormat      *chatResponseFormat `json:"response_format,omitempty"`
 	Seed                *int64              `json:"seed,omitempty"`
+	ReasoningEffort     string              `json:"reasoning_effort,omitempty"`
 }
 
 type chatResponse struct {
 	Choices []struct {
-		Message      chatMessage `json:"message"`
-		FinishReason string      `json:"finish_reason"`
+		Message      chatReplyMessage `json:"message"`
+		FinishReason string           `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     *int `json:"prompt_tokens"`
+		PromptTokens  *int `json:"prompt_tokens"`
+		PromptDetails *struct {
+			CachedTokens *int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 		CompletionTokens *int `json:"completion_tokens"`
 	} `json:"usage"`
 }
 
 type chatAnswer struct {
-	text   string
-	finish string
-	usage  Usage
+	text    string
+	finish  string
+	usage   Usage
+	refused bool
 }
 
 // Complete is local.py's LocalProvider.complete.
@@ -188,6 +198,7 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			Temperature:         temperature,
 			ResponseFormat:      format,
 			Seed:                request.Seed,
+			ReasoningEffort:     request.ReasoningEffort,
 		}
 		answer, err := p.send(ctx, requestKey, attempt+1, body)
 		if err != nil {
@@ -204,9 +215,11 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			}
 			return Result{}, classified
 		}
-		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage}
+		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage, Refused: answer.refused}
 		if request.Format != nil {
-			result.Text, result.Unparsed = gateJSON(answer.text)
+			if !answer.refused {
+				result.Text, result.Unparsed = gateJSON(answer.text)
+			}
 			result.FormatPath = FormatPathSchema
 			if request.Format.object() {
 				result.FormatPath = FormatPathObject
@@ -261,12 +274,20 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 	if usage := decoded.Usage; usage != nil {
 		// Read before the choices: a reply with no choice can still have
 		// been billed, and the budget settles from what was reported.
-		answer.usage = usageOf(usage.PromptTokens, usage.CompletionTokens, nil)
+		var cached *int
+		if usage.PromptDetails != nil {
+			cached = usage.PromptDetails.CachedTokens
+		}
+		answer.usage = usageOf(usage.PromptTokens, usage.CompletionTokens, cached)
 	}
 	if len(decoded.Choices) == 0 {
 		return answer, errNoChoices
 	}
 	answer.text, answer.finish = decoded.Choices[0].Message.Content, decoded.Choices[0].FinishReason
+	answer.refused = decoded.Choices[0].Message.Refusal != ""
+	if answer.refused {
+		answer.text = ""
+	}
 	return answer, nil
 }
 
