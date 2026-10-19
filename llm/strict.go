@@ -4,17 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 )
 
 // CompactJSON is llm/json_utils.py's validate_json_or_empty: the text as
-// compact JSON, or "" when it is blank or not one JSON value.
+// compact JSON, or "" when it is blank or not one JSON value. Numbers keep
+// their text.
 func CompactJSON(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
 	var value any
-	if err := json.Unmarshal([]byte(text), &value); err != nil {
+	if err := decoder.Decode(&value); err != nil {
+		return ""
+	}
+	if _, err := decoder.Token(); err != io.EOF {
 		return ""
 	}
 	compact, err := json.Marshal(value)

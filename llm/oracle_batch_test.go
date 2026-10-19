@@ -57,7 +57,13 @@ type batchOracleFile struct {
 // batchImprovements are the cases this package answers better than the ops
 // port (and Python) on purpose.
 var batchImprovements = map[string]string{
-	"status/cancelling": "a cancel in progress is not terminal: results can still arrive (ops and openai.py folded it into cancelled)",
+	"status/cancelling":             "a cancel in progress is not terminal: results can still arrive (ops and openai.py folded it into cancelled)",
+	"parse/responses_output_chunks": "the ops port normalised 1.0 to 1; llm keeps the reply text",
+}
+
+// batchImprovementText is the exact Text a named parse improvement must give.
+var batchImprovementText = map[string]string{
+	"parse/responses_output_chunks": `{"subcategories":{"feature_delivery.roadmap":1.0}}`,
 }
 
 // opsBatchItemResult is the ops port's BatchItemResult as it marshals.
@@ -142,7 +148,14 @@ func TestBatchCallerReliedNoRegressionAgainstTheOpsPort(t *testing.T) {
 			}
 			a, _ := json.Marshal(mine)
 			b, _ := json.Marshal(ops)
-			if !bytes.Equal(a, b) {
+			if reason, improved := batchImprovements[name]; improved {
+				if bytes.Equal(a, b) {
+					t.Errorf("%s: named improvement (%s) no longer differs", name, reason)
+				}
+				if want := batchImprovementText[name]; len(mine) != 1 || mine[0].Text != want {
+					t.Errorf("%s: Text = %+v, want exactly %q", name, mine, want)
+				}
+			} else if !bytes.Equal(a, b) {
 				t.Errorf("%s: differs from the ops port:\n go  %s\n ops %s", name, a, b)
 			}
 		}
