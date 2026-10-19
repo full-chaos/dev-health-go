@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,11 +36,13 @@ const (
 //
 //   - A Request with a Format is sent with output_config.format (json_schema),
 //     Anthropic's constrained decoding. The schema keywords the API rejects
-//     are removed from a copy first (anthropicSchema); the caller's own
-//     validation still enforces them, as the Anthropic SDKs do client side.
-//   - A 400 on a request with output_config (a model or gateway without
-//     structured outputs) is retried once without it; the answer still passes
-//     the JSON gate.
+//     are removed from a copy first (anthropicSchema) and written into the
+//     node's description, as the Anthropic SDKs do, so the model sees the
+//     limits the caller's own validation still enforces.
+//   - The mode is picked once, before the call, from the documented limits
+//     (anthropicSchemaFit): structured outputs, or one tool call whose
+//     input_schema is the schema. A 400 is an error, never a retry in
+//     another mode: a refused request is billed for its input tokens.
 //   - The text is every "text" content block joined. anthropic.py read
 //     content[0].text, which is a thinking block on a current model.
 //   - A max_tokens stop with no JSON under a Format is retried once with the
@@ -361,11 +364,12 @@ var anthropicSchemaDataKeywords = map[string]struct{}{
 	"default": {}, "const": {}, "enum": {}, "examples": {},
 }
 
-// anthropicSchema is a copy of schema without the keywords Anthropic rejects.
-// The copy goes through JSON so every nested map and slice is reached
-// whatever Go type built it, and the caller's schema is never modified. A
-// schema that cannot be copied is sent as it is: the API then answers 400 and
-// Complete retries without output_config.
+// anthropicSchema is a copy of schema without the keywords Anthropic rejects;
+// each dropped bound is worded into its node's description
+// (describeDroppedBounds). The copy goes through JSON so every nested map and
+// slice is reached whatever Go type built it, and the caller's schema is
+// never modified. A schema that cannot be copied is sent as it is: the API
+// then answers 400, which Complete returns as an error.
 func anthropicSchema(schema map[string]any) map[string]any {
 	encoded, err := json.Marshal(schema)
 	if err != nil {
@@ -411,6 +415,7 @@ func stripSchema(value any) any {
 			}
 			out[key] = stripSchema(inner)
 		}
+		describeDroppedBounds(typed, out)
 		enumWithoutTypeList(out)
 		return out
 	case []any:
@@ -421,6 +426,67 @@ func stripSchema(value any) any {
 		return out
 	}
 	return value
+}
+
+// anthropicBoundPhrases word each bound anthropicSchema drops, in the order
+// they are written into a description.
+var anthropicBoundPhrases = []struct{ keyword, format string }{
+	{"minLength", "at least %s characters"},
+	{"maxLength", "at most %s characters"},
+	{"minimum", "at least %s"},
+	{"maximum", "at most %s"},
+	{"exclusiveMinimum", "greater than %s"},
+	{"exclusiveMaximum", "less than %s"},
+	{"multipleOf", "a multiple of %s"},
+	{"minItems", "at least %s items"},
+	{"maxItems", "at most %s items"},
+	{"uniqueItems", "unique items"},
+	{"minContains", "at least %s matching items"},
+	{"maxContains", "at most %s matching items"},
+	{"minProperties", "at least %s properties"},
+	{"maxProperties", "at most %s properties"},
+}
+
+// describeDroppedBounds appends the bounds of original that stripped no
+// longer carries to stripped's description, as the Anthropic SDKs do: the
+// model then sees the limits the caller's own check enforces after the call.
+func describeDroppedBounds(original, stripped map[string]any) {
+	var limits []string
+	for _, bound := range anthropicBoundPhrases {
+		value, present := original[bound.keyword]
+		if !present {
+			continue
+		}
+		if _, kept := stripped[bound.keyword]; kept {
+			continue
+		}
+		if bound.keyword == "uniqueItems" {
+			if value == true {
+				limits = append(limits, bound.format)
+			}
+			continue
+		}
+		limits = append(limits, fmt.Sprintf(bound.format, boundValue(value)))
+	}
+	if len(limits) == 0 {
+		return
+	}
+	text := "Limits: " + strings.Join(limits, "; ") + "."
+	if existing, ok := stripped["description"].(string); ok && existing != "" {
+		text = existing + " " + text
+	}
+	stripped["description"] = text
+}
+
+func boundValue(value any) string {
+	if number, ok := value.(float64); ok {
+		return strconv.FormatFloat(number, 'f', -1, 64)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return string(encoded)
 }
 
 // enumWithoutTypeList rewrites an enum under a type list, such as
