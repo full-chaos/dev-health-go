@@ -74,9 +74,10 @@ func TestAnthropicSendsTheMessagesRequest(t *testing.T) {
 		"output_config": map[string]any{"format": map[string]any{"type": "json_schema", "schema": map[string]any{
 			"type": "object", "additionalProperties": false, "required": []any{"maximum", "quotes"},
 			"properties": map[string]any{
-				"maximum": map[string]any{"type": "number"},
-				"quotes":  map[string]any{"type": "array", "minItems": float64(1), "items": map[string]any{"type": "string"}},
-				"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"maximum": map[string]any{"type": "number", "description": "Limits: at least 0; at most 1."},
+				"quotes": map[string]any{"type": "array", "minItems": float64(1), "description": "Limits: at most 10 items.",
+					"items": map[string]any{"type": "string", "description": "Limits: at least 1 characters; at most 280 characters."}},
+				"tags": map[string]any{"type": "array", "description": "Limits: at least 2 items.", "items": map[string]any{"type": "string"}},
 			},
 		}}},
 	}

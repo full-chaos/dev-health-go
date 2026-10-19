@@ -25,9 +25,9 @@ const (
 
 // anthropicStructuredKeywords are the schema keywords structured outputs
 // accept, after anthropicSchema has dropped the numeric, string and array
-// bounds the API refuses (the documented SDK behaviour moves them into
-// descriptions; this client drops them and the caller's own check keeps
-// them). "$defs" and "definitions" hold named schemas.
+// bounds the API refuses and moved them into descriptions (the documented
+// SDK behaviour; the caller's own check still enforces them). "$defs" and
+// "definitions" hold named schemas.
 var anthropicStructuredKeywords = map[string]struct{}{
 	"type": {}, "properties": {}, "required": {}, "additionalProperties": {}, "items": {},
 	"enum": {}, "const": {}, "anyOf": {}, "allOf": {}, "$ref": {}, "$defs": {}, "definitions": {},
