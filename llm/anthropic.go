@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -537,6 +536,9 @@ func jsonTypeAllows(name any, value any) bool {
 		_, ok := value.(bool)
 		return ok
 	case "number":
+		if _, ok := value.(json.Number); ok {
+			return true
+		}
 		_, ok := schemaNumber(value)
 		return ok
 	case "integer":
@@ -545,42 +547,52 @@ func jsonTypeAllows(name any, value any) bool {
 	return false
 }
 
-// maxSchemaNumberText bounds the number text a schema check parses: real
-// bounds and enum values are a few dozen characters, and a longer text would
-// cost a big-number parse for nothing.
-const maxSchemaNumberText = 128
-
-// maxSchemaNumberExponent bounds the exponent schemaInteger parses exactly.
-const maxSchemaNumberExponent = 400
-
 func schemaNumber(value any) (float64, bool) {
 	switch typed := value.(type) {
 	case float64:
 		return typed, true
 	case json.Number:
-		if len(typed) > maxSchemaNumberText {
-			return 0, false
-		}
 		number, err := strconv.ParseFloat(string(typed), 64)
 		return number, err == nil
 	}
 	return 0, false
 }
 
+// schemaInteger reports whether value is a whole number. A json.Number is
+// judged on its text, exactly and without a size limit: json.Marshal already
+// refused invalid number text, so the text is sign, digits, an optional
+// fraction and an optional exponent.
 func schemaInteger(value any) bool {
 	if typed, ok := value.(json.Number); ok {
-		if _, valid := schemaNumber(typed); !valid {
-			return false
-		}
-		if at := strings.IndexAny(string(typed), "eE"); at >= 0 {
-			exponent, err := strconv.Atoi(string(typed[at+1:]))
-			if err != nil || exponent > maxSchemaNumberExponent || exponent < -maxSchemaNumberExponent {
-				return false
-			}
-		}
-		number, _, err := big.ParseFloat(string(typed), 10, 4096, big.ToNearestEven)
-		return err == nil && number.IsInt()
+		return numberTextIsInteger(string(typed))
 	}
 	number, ok := value.(float64)
 	return ok && number == float64(int64(number))
+}
+
+func numberTextIsInteger(text string) bool {
+	text = strings.TrimPrefix(text, "-")
+	exponent := 0
+	if at := strings.IndexAny(text, "eE"); at >= 0 {
+		parsed, err := strconv.Atoi(text[at+1:])
+		if err != nil {
+			if text[at+1] == '-' {
+				parsed = -1 << 31
+			} else {
+				parsed = 1 << 31
+			}
+		}
+		exponent = parsed
+		text = text[:at]
+	}
+	whole, fraction, _ := strings.Cut(text, ".")
+	dropped := len(fraction) - exponent
+	if dropped <= 0 {
+		return true
+	}
+	if strings.Trim(fraction[max(0, len(fraction)-dropped):], "0") != "" {
+		return false
+	}
+	rest := dropped - len(fraction)
+	return rest <= 0 || strings.Trim(whole[max(0, len(whole)-rest):], "0") == ""
 }
