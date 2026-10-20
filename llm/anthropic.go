@@ -270,10 +270,18 @@ func copySchema(schema map[string]any) map[string]any {
 		return schema
 	}
 	var out map[string]any
-	if err := json.Unmarshal(encoded, &out); err != nil {
+	if err := decodeKeepingNumbers(encoded, &out); err != nil {
 		return schema
 	}
 	return out
+}
+
+// decodeKeepingNumbers decodes one JSON value with numbers kept as
+// json.Number, so integer text above 2^53 survives a copy.
+func decodeKeepingNumbers(encoded []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	return decoder.Decode(target)
 }
 
 func (p *Anthropic) send(ctx context.Context, requestKey string, attempt int, body anthropicRequest) (anthropicAnswer, error) {
@@ -376,7 +384,7 @@ func anthropicSchema(schema map[string]any) map[string]any {
 		return schema
 	}
 	var generic any
-	if err := json.Unmarshal(encoded, &generic); err != nil {
+	if err := decodeKeepingNumbers(encoded, &generic); err != nil {
 		return schema
 	}
 	out, ok := stripSchema(generic).(map[string]any)
@@ -399,7 +407,7 @@ func stripSchema(value any) any {
 				continue
 			}
 			if key == "minItems" {
-				if n, ok := inner.(float64); !ok || (n != 0 && n != 1) {
+				if n, ok := schemaNumber(inner); !ok || (n != 0 && n != 1) {
 					continue
 				}
 			}
@@ -479,6 +487,9 @@ func describeDroppedBounds(original, stripped map[string]any) {
 }
 
 func boundValue(value any) string {
+	if number, ok := value.(json.Number); ok {
+		return number.String()
+	}
 	if number, ok := value.(float64); ok {
 		return strconv.FormatFloat(number, 'f', -1, 64)
 	}
@@ -525,11 +536,68 @@ func jsonTypeAllows(name any, value any) bool {
 		_, ok := value.(bool)
 		return ok
 	case "number":
-		_, ok := value.(float64)
+		if _, ok := value.(json.Number); ok {
+			return true
+		}
+		_, ok := schemaNumber(value)
 		return ok
 	case "integer":
-		number, ok := value.(float64)
-		return ok && number == float64(int64(number))
+		return schemaInteger(value)
 	}
 	return false
+}
+
+func schemaNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case json.Number:
+		number, err := strconv.ParseFloat(string(typed), 64)
+		return number, err == nil
+	}
+	return 0, false
+}
+
+// schemaInteger reports whether value is a whole number. A json.Number is
+// judged on its text, exactly and without a size limit: json.Marshal already
+// refused invalid number text, so the text is sign, digits, an optional
+// fraction and an optional exponent.
+func schemaInteger(value any) bool {
+	if typed, ok := value.(json.Number); ok {
+		return numberTextIsInteger(string(typed))
+	}
+	number, ok := value.(float64)
+	return ok && number == float64(int64(number))
+}
+
+// exponentBound is far beyond any possible digit count, so a clamped
+// exponent gives the same answer as the real one.
+const exponentBound = 1 << 40
+
+func numberTextIsInteger(text string) bool {
+	text = strings.TrimPrefix(text, "-")
+	var exponent int64
+	if at := strings.IndexAny(text, "eE"); at >= 0 {
+		parsed, err := strconv.ParseInt(text[at+1:], 10, 64)
+		if err != nil && text[at+1] == '-' {
+			parsed = -exponentBound
+		} else if err != nil {
+			parsed = exponentBound
+		}
+		exponent = max(-exponentBound, min(exponentBound, parsed))
+		text = text[:at]
+	}
+	whole, fraction, _ := strings.Cut(text, ".")
+	dropped := int64(len(fraction)) - exponent
+	if dropped <= 0 {
+		return true
+	}
+	if dropped <= int64(len(fraction)) {
+		return strings.Trim(fraction[int64(len(fraction))-dropped:], "0") == ""
+	}
+	if strings.Trim(fraction, "0") != "" {
+		return false
+	}
+	rest := min(dropped-int64(len(fraction)), int64(len(whole)))
+	return strings.Trim(whole[int64(len(whole))-rest:], "0") == ""
 }

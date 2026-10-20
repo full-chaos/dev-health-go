@@ -107,7 +107,7 @@ func TestAnthropicSchemaCarriesTheDriverLengthToTheModel(t *testing.T) {
 func TestAnthropicToolCallSchemaGetsNoBoundDescription(t *testing.T) {
 	schema := map[string]any{"type": "string", "maxLength": 120}
 	got := copySchema(schema)
-	if got["maxLength"] != float64(120) {
+	if roundTrip(t, got).(map[string]any)["maxLength"] != float64(120) {
 		t.Fatalf("the tool schema lost maxLength: %v", got)
 	}
 	if _, added := got["description"]; added {
