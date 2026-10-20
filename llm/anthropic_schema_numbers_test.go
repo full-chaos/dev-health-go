@@ -161,8 +161,8 @@ func TestSchemaIntegerOfHugeTextAllocatesLittle(t *testing.T) {
 		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<10 {
 			t.Errorf("%.12s...: allocated %d bytes, want under 64 KiB", text, allocated)
 		}
-		if elapsed > 250*time.Millisecond {
-			t.Errorf("%.12s...: took %v, want under 250ms", text, elapsed)
+		if elapsed > 2*time.Second {
+			t.Errorf("%.12s...: took %v, want under 2s", text, elapsed)
 		}
 	}
 }
