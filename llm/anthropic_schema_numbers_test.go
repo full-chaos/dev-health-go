@@ -269,3 +269,69 @@ func TestSchemaIntegerAgreesWithAnOverflowFreeOracleAcrossTheFullExponentRange(t
 		}
 	}
 }
+
+func TestSchemaIntegerWithLongDigitRunsAtTheExponentBounds(t *testing.T) {
+	nines := strings.Repeat("9", 25)
+	zeros := strings.Repeat("0", 25)
+	cases := map[string]bool{
+		nines + "e-9223372036854775808":               false,
+		nines + "e-9223372036854775809":               false,
+		nines + ".5e-9223372036854775808":             false,
+		nines + "e9223372036854775807":                true,
+		nines + ".5e9223372036854775808":              true,
+		nines + ".5e92233720368547758070":             true,
+		zeros + "e-9223372036854775808":               true,
+		zeros + "." + zeros + "e-9223372036854775809": true,
+		"1" + zeros + "e-1099511627776":               false,
+		"1" + zeros + "e-1099511627777":               false,
+		"1" + zeros + "e-1099511627775":               false,
+		"1" + zeros + "e1099511627776":                true,
+		"1" + zeros + "e1099511627777":                true,
+		"1." + zeros + "5e-1099511627776":             false,
+		"0." + zeros + "e-1099511627776":              true,
+		"0." + zeros + "e-1099511627777":              true,
+		"123456789012345678901234.5e1":                true,
+		"123456789012345678901234.5e0":                false,
+		"1234567890123456789012340e-1":                true,
+		"1234567890123456789012345e-1":                false,
+		"1000000000000000000000000e-24":               true,
+		"1000000000000000000000000e-25":               false,
+		"1000000000000000000000000e-26":               false,
+		"1000000000000000000000000.000e-27":           false,
+		"1000000000000000000000000.000e-3":            true,
+		"1000000000000000000000000.0001e-3":           false,
+	}
+	for text, want := range cases {
+		if got := schemaInteger(json.Number(text)); got != want {
+			t.Errorf("schemaInteger(%s) = %v, want %v", text, got, want)
+		}
+		if oracle := oracleNumberTextIsInteger(t, text); oracle != want {
+			t.Errorf("oracle(%s) = %v, but the row says %v", text, oracle, want)
+		}
+	}
+}
+
+func TestSchemaIntegerAgreesWithTheOracleOnLongDigitRunsNearTheirLength(t *testing.T) {
+	random := rand.New(rand.NewSource(11))
+	digitRun := func(n int) string {
+		out := make([]byte, n)
+		for i := range out {
+			out[i] = byte('0' + random.Intn(2)*random.Intn(10))
+		}
+		return string(out)
+	}
+	for i := 0; i < 50000; i++ {
+		whole := digitRun(1 + random.Intn(40))
+		text := whole
+		fraction := ""
+		if random.Intn(2) == 0 {
+			fraction = digitRun(1 + random.Intn(40))
+			text += "." + fraction
+		}
+		exponent := random.Intn(2*(len(whole)+len(fraction))+8) - (len(whole) + len(fraction) + 4)
+		text += "e" + strconv.Itoa(exponent)
+		if want, got := oracleNumberTextIsInteger(t, text), schemaInteger(json.Number(text)); got != want {
+			t.Fatalf("schemaInteger(%s) = %v, oracle %v", text, got, want)
+		}
+	}
+}
