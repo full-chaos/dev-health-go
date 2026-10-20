@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math/big"
+	"math/rand"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +163,109 @@ func TestSchemaIntegerOfHugeTextAllocatesLittle(t *testing.T) {
 		}
 		if elapsed > 250*time.Millisecond {
 			t.Errorf("%.12s...: took %v, want under 250ms", text, elapsed)
+		}
+	}
+}
+
+func TestSchemaIntegerExponentsAtTheEdgesOfIntRange(t *testing.T) {
+	for text, want := range map[string]bool{
+		"1e-9223372036854775808":    false,
+		"1.5e-9223372036854775808":  false,
+		"10.0e-9223372036854775808": false,
+		"0e-9223372036854775808":    true,
+		"0.0e-9223372036854775808":  true,
+		"1e-9223372036854775807":    false,
+		"1.5e-9223372036854775807":  false,
+		"0.00e-9223372036854775807": true,
+		"1e9223372036854775807":     true,
+		"1.5e9223372036854775807":   true,
+		"0.5e9223372036854775807":   true,
+		"1.5e9223372036854775806":   true,
+		"1.5e92233720368547758080":  true,
+		"1.5e+92233720368547758080": true,
+		"1.5e-92233720368547758090": false,
+		"1.0e-92233720368547758090": false,
+		"0.0e-92233720368547758090": true,
+		"15e-1":                     false,
+		"150e-2":                    false,
+		"100e-2":                    true,
+		"1.50e1":                    true,
+		"1.55e1":                    false,
+		"-1.5e-9223372036854775808": false,
+		"-0.0e-9223372036854775808": true,
+	} {
+		if got := schemaInteger(json.Number(text)); got != want {
+			t.Errorf("schemaInteger(%s) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestEnumUnderATypeListKeepsOnlyWholeNumbersAtExtremeExponents(t *testing.T) {
+	out := anthropicSchema(map[string]any{"type": []any{"integer", "null"}, "enum": []any{json.Number("1.5e-9223372036854775808"), json.Number("1e9223372036854775807"), nil}})
+	raw, _ := json.Marshal(out["enum"])
+	if string(raw) != "[1e9223372036854775807,null]" {
+		t.Errorf("enum = %s, want the fractional value dropped and the huge whole value kept", raw)
+	}
+}
+
+func oracleNumberTextIsInteger(t *testing.T, text string) bool {
+	t.Helper()
+	text = strings.TrimPrefix(text, "-")
+	exponent := new(big.Int)
+	if at := strings.IndexAny(text, "eE"); at >= 0 {
+		if _, ok := exponent.SetString(strings.TrimPrefix(text[at+1:], "+"), 10); !ok {
+			t.Fatalf("bad exponent in %q", text)
+		}
+		text = text[:at]
+	}
+	whole, fraction, _ := strings.Cut(text, ".")
+	digits := whole + fraction
+	shift := new(big.Int).Sub(exponent, big.NewInt(int64(len(fraction))))
+	if shift.Sign() >= 0 {
+		return true
+	}
+	drop := new(big.Int).Neg(shift)
+	value, _ := new(big.Int).SetString(digits, 10)
+	if drop.Cmp(big.NewInt(int64(len(digits)))) > 0 {
+		return value.Sign() == 0
+	}
+	modulus := new(big.Int).Exp(big.NewInt(10), drop, nil)
+	return new(big.Int).Mod(value, modulus).Sign() == 0
+}
+
+func TestSchemaIntegerAgreesWithAnOverflowFreeOracleAcrossTheFullExponentRange(t *testing.T) {
+	random := rand.New(rand.NewSource(7))
+	edges := []string{"9223372036854775807", "9223372036854775806", "9223372036854775808", "9223372036854775809", "99999999999999999999999", "0", "1", "2", "3", "4", "5"}
+	pick := func() string {
+		switch random.Intn(4) {
+		case 0:
+			return edges[random.Intn(len(edges))]
+		case 1:
+			return strconv.FormatInt(random.Int63(), 10)
+		case 2:
+			return strconv.Itoa(random.Intn(12))
+		}
+		return strconv.FormatInt(random.Int63n(1<<40), 10)
+	}
+	digitRun := func(n int) string {
+		out := make([]byte, n)
+		for i := range out {
+			out[i] = byte('0' + random.Intn(3))
+		}
+		return string(out)
+	}
+	for i := 0; i < 100000; i++ {
+		text := digitRun(1 + random.Intn(4))
+		if random.Intn(2) == 0 {
+			text += "." + digitRun(1+random.Intn(4))
+		}
+		sign := []string{"", "+", "-"}[random.Intn(3)]
+		text += "e" + sign + pick()
+		if random.Intn(5) == 0 {
+			text = "-" + text
+		}
+		if want, got := oracleNumberTextIsInteger(t, text), schemaInteger(json.Number(text)); got != want {
+			t.Fatalf("schemaInteger(%s) = %v, oracle %v", text, got, want)
 		}
 	}
 }
