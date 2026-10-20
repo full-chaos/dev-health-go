@@ -570,29 +570,34 @@ func schemaInteger(value any) bool {
 	return ok && number == float64(int64(number))
 }
 
+// exponentBound is far beyond any possible digit count, so a clamped
+// exponent gives the same answer as the real one.
+const exponentBound = 1 << 40
+
 func numberTextIsInteger(text string) bool {
 	text = strings.TrimPrefix(text, "-")
-	exponent := 0
+	var exponent int64
 	if at := strings.IndexAny(text, "eE"); at >= 0 {
-		parsed, err := strconv.Atoi(text[at+1:])
-		if err != nil {
-			if text[at+1] == '-' {
-				parsed = -1 << 31
-			} else {
-				parsed = 1 << 31
-			}
+		parsed, err := strconv.ParseInt(text[at+1:], 10, 64)
+		if err != nil && text[at+1] == '-' {
+			parsed = -exponentBound
+		} else if err != nil {
+			parsed = exponentBound
 		}
-		exponent = parsed
+		exponent = max(-exponentBound, min(exponentBound, parsed))
 		text = text[:at]
 	}
 	whole, fraction, _ := strings.Cut(text, ".")
-	dropped := len(fraction) - exponent
+	dropped := int64(len(fraction)) - exponent
 	if dropped <= 0 {
 		return true
 	}
-	if strings.Trim(fraction[max(0, len(fraction)-dropped):], "0") != "" {
+	if dropped <= int64(len(fraction)) {
+		return strings.Trim(fraction[int64(len(fraction))-dropped:], "0") == ""
+	}
+	if strings.Trim(fraction, "0") != "" {
 		return false
 	}
-	rest := dropped - len(fraction)
-	return rest <= 0 || strings.Trim(whole[max(0, len(whole)-rest):], "0") == ""
+	rest := min(dropped-int64(len(fraction)), int64(len(whole)))
+	return strings.Trim(whole[int64(len(whole))-rest:], "0") == ""
 }
