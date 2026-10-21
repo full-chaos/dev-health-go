@@ -46,12 +46,13 @@ const memoryTeamCandidates = "SELECT work_item_id FROM work_item_team_attributio
 const memoryClickHouseLine = "26.7"
 
 // memorySlopeFloorMiB is the slack the organization-size slope allows, frozen
-// from the spread of the clean statement: the largest less the smallest of
-// five warm reads at one size, over both sizes and both part states, rounded
-// up to a whole MiB (hosted CI, run 38490979012: 3.77 MiB). It is a constant,
+// from the quantized peak bands measured over 20 hosted CI runs: 30k merged
+// 12.2-14.5 MiB, 300k 14.6-17.9 MiB. The worst pairing is 17.9 - 12.2 = 5.7
+// MiB; 7 MiB leaves 1.3 MiB above it and stays 4x below the 32 MiB growth of
+// a real defect. Fails seen at 4 MiB: +4.59 and +4.99. It is a constant,
 // never computed from the run under test, so a noisy defect cannot raise its
 // own floor.
-const memorySlopeFloorMiB = 4
+const memorySlopeFloorMiB = 7
 
 // biggestTeamCandidates is the candidate count of the largest team the
 // relation must serve. The seed spreads work items over 100 teams, so a
