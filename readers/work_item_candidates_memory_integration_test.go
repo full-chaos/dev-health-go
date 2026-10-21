@@ -46,12 +46,13 @@ const memoryTeamCandidates = "SELECT work_item_id FROM work_item_team_attributio
 const memoryClickHouseLine = "26.7"
 
 // memorySlopeFloorMiB is the slack the organization-size slope allows, frozen
-// from the spread of the clean statement: the largest less the smallest of
-// five warm reads at one size, over both sizes and both part states, rounded
-// up to a whole MiB (hosted CI, run 38490979012: 3.77 MiB). It is a constant,
+// from the quantized peak bands measured over 20 hosted CI runs: 30k merged
+// 12.2-14.5 MiB, 300k 14.6-17.9 MiB. The worst pairing is 17.9 - 12.2 = 5.7
+// MiB; 7 MiB leaves 1.3 MiB above it and stays 4x below the 32 MiB growth of
+// a real defect. Fails seen at 4 MiB: +4.59 and +4.99. It is a constant,
 // never computed from the run under test, so a noisy defect cannot raise its
 // own floor.
-const memorySlopeFloorMiB = 4
+const memorySlopeFloorMiB = 7
 
 // biggestTeamCandidates is the candidate count of the largest team the
 // relation must serve. The seed spreads work items over 100 teams, so a
@@ -59,7 +60,7 @@ const memorySlopeFloorMiB = 4
 const biggestTeamCandidates = 20000
 
 const (
-	memoryWarmRuns          = 9
+	memoryWarmRuns          = 5
 	memorySlopeRatio        = 1.15
 	memoryBytesPerCandidate = 4096
 	memoryRelationCap       = 32 * mib
@@ -92,7 +93,7 @@ func memoryParameter(value any) string {
 // TestIntegrationWorkItemCandidatesMemory measures the peak memory of a
 // team-scoped statement with no authorization relation, with the unnarrowed
 // one, and with candidates. It separates two inputs: organization size at a
-// fixed candidate count must not grow the relation (smallest of nine warm runs,
+// fixed candidate count must not grow the relation (min of three warm runs,
 // slope rule), and the candidate count may, within the cap, because a bigger
 // team is a real input. Unnarrowed, the relation grows with organization
 // size, which shows the measurement sees it at all.
@@ -283,34 +284,25 @@ func TestIntegrationWorkItemCandidatesMemory(t *testing.T) {
 		}
 	}
 
-	// A size's share of the relation is its smallest peak less the smallest
-	// peak of the repository-join-only statement at the same size. Both
-	// peaks are quantized allocator readings, so subtracting the smallest of
-	// each is stable where the smallest of per-run differences picked the
-	// luckiest pairing. The spread (largest less smallest per-run difference)
-	// is the same statement's noise at the same size.
+	// A run's share of the relation is its peak less the peak of the
+	// repository-join-only statement run beside it. warm gives the smallest
+	// share over the warm runs and the spread (largest less smallest) that
+	// the same statement shows at the same size.
 	runKey := func(state, name, mode string, rep int) string {
 		return fmt.Sprintf("%s-%s-%s-%d", state, name, mode, rep)
 	}
 	warm := func(state, name, mode string) (smallest, spread int64) {
-		var lo, hi, loMode, loBase int64
+		var lo, hi int64
 		for rep := 0; rep < memoryWarmRuns; rep++ {
-			peak, base := runPeaks[runKey(state, name, mode, rep)], runPeaks[runKey(state, name, "repojoin", rep)]
-			delta := peak - base
+			delta := runPeaks[runKey(state, name, mode, rep)] - runPeaks[runKey(state, name, "repojoin", rep)]
 			if rep == 0 || delta < lo {
 				lo = delta
 			}
 			if rep == 0 || delta > hi {
 				hi = delta
 			}
-			if rep == 0 || peak < loMode {
-				loMode = peak
-			}
-			if rep == 0 || base < loBase {
-				loBase = base
-			}
 		}
-		return loMode - loBase, hi - lo
+		return lo, hi - lo
 	}
 	rawSmallest := func(state, name, mode string) int64 {
 		var lo int64 = -1
