@@ -112,7 +112,24 @@ type Request struct {
 	// OpenAI client's "low". The Messages API has no such field: the
 	// Anthropic client ignores it.
 	ReasoningEffort string
+	// Cache asks the provider to cache the stable prompt prefix. The zero
+	// value sends no marker. Only the Anthropic client acts on it; the others
+	// ignore it.
+	Cache CachePolicy
 }
+
+// CachePolicy says which part of a request is a stable prefix to cache.
+type CachePolicy int
+
+const (
+	// CacheNone, the zero value: no cache marker.
+	CacheNone CachePolicy = iota
+	// CacheSystem marks the system prompt (and the tools before it) as a
+	// cacheable prefix. The caller must send the same System bytes every
+	// time, and it must be above the model's minimum cacheable length or the
+	// provider ignores the marker.
+	CacheSystem
+)
 
 // Usage is what the provider reported. A nil count was not reported; it is
 // unknown, never zero.
@@ -120,6 +137,9 @@ type Usage struct {
 	InputTokens       *int
 	OutputTokens      *int
 	CachedInputTokens *int
+	// CacheCreationInputTokens counts the prompt tokens written to the cache
+	// by this call. Like CachedInputTokens, it is a subset of InputTokens.
+	CacheCreationInputTokens *int
 }
 
 // Result is one completion. Under a Format, Text is compact JSON or "" (the

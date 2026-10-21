@@ -31,6 +31,9 @@ type Attempt struct {
 	MaxInputBytes int64
 	// MaxOutputTokens is the request's output cap.
 	MaxOutputTokens int64
+	// CacheWrite is true when the request carries a cache marker, so the
+	// first call can bill input at the cache-write rate.
+	CacheWrite bool
 }
 
 // errBudgetRefused marks an error the budget returned on its own.
@@ -73,6 +76,6 @@ func guarded(ctx context.Context, budget Budget, attempt Attempt, send func(cont
 	return &budgetError{cause: err}
 }
 
-func usageOf(input, output, cached *int) Usage {
-	return Usage{InputTokens: input, OutputTokens: output, CachedInputTokens: cached}
+func usageOf(input, output, cached, created *int) Usage {
+	return Usage{InputTokens: input, OutputTokens: output, CachedInputTokens: cached, CacheCreationInputTokens: created}
 }

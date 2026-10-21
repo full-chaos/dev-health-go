@@ -40,6 +40,10 @@
 //   - Result.Model is the model the request carried, and Model() returns it
 //     before any call.
 //   - Usage counts are nil when the provider did not report them, never 0.
+//     InputTokens is the whole prompt; CachedInputTokens (read from the cache)
+//     and CacheCreationInputTokens (written to it) are subsets of it.
+//   - Request.Cache = CacheSystem marks the system prompt as a cacheable
+//     prefix on the Anthropic client; every other client ignores it.
 //   - One OpenTelemetry span per HTTP attempt, named as in ops
 //     (dev_health.llm.request, llm.provider, llm.model, llm.attempt,
 //     http.response.status_code, error.class).

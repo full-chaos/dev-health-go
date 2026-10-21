@@ -278,7 +278,7 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 		if usage.PromptDetails != nil {
 			cached = usage.PromptDetails.CachedTokens
 		}
-		answer.usage = usageOf(usage.PromptTokens, usage.CompletionTokens, cached)
+		answer.usage = usageOf(usage.PromptTokens, usage.CompletionTokens, cached, nil)
 	}
 	if len(decoded.Choices) == 0 {
 		return answer, errNoChoices

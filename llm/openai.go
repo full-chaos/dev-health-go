@@ -266,7 +266,7 @@ func parseOpenAIResponse(raw []byte) (openAIAnswer, error) {
 		if usage.InputTokensDetails != nil {
 			cached = usage.InputTokensDetails.CachedTokens
 		}
-		answer.usage = usageOf(usage.InputTokens, usage.OutputTokens, cached)
+		answer.usage = usageOf(usage.InputTokens, usage.OutputTokens, cached, nil)
 	}
 	return answer, nil
 }

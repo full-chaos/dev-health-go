@@ -113,10 +113,20 @@ type anthropicToolChoice struct {
 	Name string `json:"name,omitempty"`
 }
 
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+}
+
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
 type anthropicRequest struct {
 	Model        string                 `json:"model"`
 	MaxTokens    int                    `json:"max_tokens"`
-	System       string                 `json:"system,omitempty"`
+	System       any                    `json:"system,omitempty"`
 	Messages     []anthropicMessage     `json:"messages"`
 	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
 	Tools        []anthropicTool        `json:"tools,omitempty"`
@@ -238,8 +248,14 @@ func (p *Anthropic) messagesBody(request Request, maxTokens int, mode anthropicM
 	body := anthropicRequest{
 		Model:     p.cfg.Model,
 		MaxTokens: maxTokens,
-		System:    request.System,
 		Messages:  []anthropicMessage{{Role: "user", Content: request.Prompt}},
+	}
+	switch {
+	case request.System == "":
+	case request.Cache == CacheSystem:
+		body.System = []anthropicSystemBlock{{Type: "text", Text: request.System, CacheControl: &anthropicCacheControl{Type: "ephemeral"}}}
+	default:
+		body.System = request.System
 	}
 	if !request.Format.schema() {
 		return body
@@ -302,6 +318,7 @@ func (p *Anthropic) send(ctx context.Context, requestKey string, attempt int, bo
 		BaseURL:         p.cfg.BaseURL,
 		MaxInputBytes:   int64(max(1, len(payload))),
 		MaxOutputTokens: int64(body.MaxTokens),
+		CacheWrite:      cacheMarked(body),
 	}, func(ctx context.Context) (Usage, error) {
 		err := exchange(withAttempt(ctx, attempt), p.client, http.MethodPost, p.cfg.BaseURL+"/v1/messages",
 			header, bytes.NewReader(payload), KindAnthropic, p.cfg.Model, func(raw []byte) error {
@@ -352,7 +369,7 @@ func parseAnthropicResponse(raw []byte) (anthropicAnswer, error) {
 			}
 			input = &total
 		}
-		answer.usage = usageOf(input, usage.OutputTokens, usage.CacheReadInputTokens)
+		answer.usage = usageOf(input, usage.OutputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens)
 	}
 	return answer, nil
 }
@@ -600,4 +617,9 @@ func numberTextIsInteger(text string) bool {
 	}
 	rest := min(dropped-int64(len(fraction)), int64(len(whole)))
 	return strings.Trim(whole[int64(len(whole))-rest:], "0") == ""
+}
+
+func cacheMarked(body anthropicRequest) bool {
+	blocks, ok := body.System.([]anthropicSystemBlock)
+	return ok && len(blocks) > 0 && blocks[0].CacheControl != nil
 }
