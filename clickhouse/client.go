@@ -92,6 +92,7 @@ type Options struct {
 	MaxResultRows  *uint
 	MaxBytesToRead *uint64
 	// TransportFunc pins the http(s) DSN transport; nil = driver default (env proxy).
+	// An error it returns is wrapped as the cause (reachable via errors.Unwrap); keep secrets out of it.
 	TransportFunc func(*http.Transport) (http.RoundTripper, error)
 }
 

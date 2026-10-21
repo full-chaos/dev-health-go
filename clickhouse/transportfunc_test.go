@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -69,6 +70,9 @@ func TestTransportFunc_PinsHTTPTransportAwayFromEnvProxy(t *testing.T) {
 		pingHTTPDSN(t, Options{DSN: dsn, TransportFunc: func(transport *http.Transport) (http.RoundTripper, error) {
 			called = true
 			transport.Proxy = nil
+			transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("dial blocked")
+			}
 			return transport, nil
 		}})
 		if !called {
