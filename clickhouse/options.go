@@ -24,6 +24,9 @@ const DefaultMaxBytesToRead uint64 = 64 << 20
 
 func applyOptions(configured *clickhousedriver.Options, options Options) {
 	configured.TLS = mergeTLS(options.TLS, configured.TLS)
+	if options.TransportFunc != nil {
+		configured.TransportFunc = options.TransportFunc
+	}
 	configured.DialTimeout = optionDuration(options.DialTimeout, configured.DialTimeout, 5*time.Second)
 	configured.ReadTimeout = optionDuration(options.ReadTimeout, configured.ReadTimeout, 15*time.Second)
 	configured.MaxOpenConns = optionPositive(options.MaxOpenConns, configured.MaxOpenConns, 8)
