@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -90,6 +91,8 @@ type Options struct {
 	// local holding it.
 	MaxResultRows  *uint
 	MaxBytesToRead *uint64
+	// TransportFunc pins the http(s) DSN transport; nil = driver default (env proxy).
+	TransportFunc func(*http.Transport) (http.RoundTripper, error)
 }
 
 type Client struct {
