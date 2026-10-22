@@ -113,7 +113,8 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 	}
 	defer file.Close()
 	pinned := map[string]string{}
-	sawCommit, sawPath := false, false
+	var paths []string
+	sawCommit := false
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -125,10 +126,7 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 			continue
 		}
 		if value, ok := strings.CutPrefix(line, "ops_path "); ok {
-			if value != "contracts/auth/v1/golden/access-token" {
-				t.Fatal("SOURCE ops_path is not the corpus path")
-			}
-			sawPath = true
+			paths = append(paths, value)
 			continue
 		}
 		sum, name, ok := strings.Cut(line, "  ")
@@ -137,26 +135,29 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 		}
 		pinned[name] = sum
 	}
-	if !sawCommit || !sawPath {
-		t.Fatal("SOURCE lacks ops_commit or ops_path")
+	wantPaths := []string{"contracts/auth/v1/golden/access-token", "contracts/auth/v1/examples/discovery", "contracts/auth/v1/examples/jwks"}
+	if !sawCommit || strings.Join(paths, ",") != strings.Join(wantPaths, ",") {
+		t.Fatal("SOURCE lacks ops_commit or the three ops_path lines")
 	}
 	var onDisk []string
-	err = filepath.Walk(corpusDir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			rel, _ := filepath.Rel(corpusDir, path)
-			onDisk = append(onDisk, rel)
+	for _, set := range []string{"access-token", "discovery", "jwks"} {
+		err = filepath.Walk(filepath.Join("testdata", set), func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				rel, _ := filepath.Rel("testdata", path)
+				onDisk = append(onDisk, rel)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	sort.Strings(onDisk)
-	if len(onDisk) != len(pinned) || len(onDisk) < 51 {
+	if len(onDisk) != len(pinned) || len(onDisk) < 51+20+40 {
 		t.Fatalf("corpus holds %d files, SOURCE pins %d", len(onDisk), len(pinned))
 	}
 	for _, name := range onDisk {
-		raw, err := os.ReadFile(filepath.Join(corpusDir, name))
+		raw, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatal(err)
 		}
