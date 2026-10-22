@@ -62,6 +62,7 @@ type JWKSClient struct {
 	keys        map[string]ed25519.PublicKey
 	fetchedAt   time.Time
 	lastAttempt time.Time
+	attempted   bool
 	inflight    *refreshFlight
 }
 
@@ -151,13 +152,14 @@ func (c *JWKSClient) refresh() error {
 		return flight.err
 	}
 	now := c.cfg.Now()
-	if !c.lastAttempt.IsZero() && now.Sub(c.lastAttempt) < c.cfg.RefreshFloor {
+	if c.attempted && now.Sub(c.lastAttempt) < c.cfg.RefreshFloor {
 		c.mu.Unlock()
 		return ErrRefreshTooSoon
 	}
 	flight := &refreshFlight{done: make(chan struct{})}
 	c.inflight = flight
 	c.lastAttempt = now
+	c.attempted = true
 	c.mu.Unlock()
 
 	keys, err := c.fetch()

@@ -219,6 +219,19 @@ func TestRefreshFloorBoundsUnknownKidFlood(t *testing.T) {
 	}
 }
 
+func TestRefreshFloorHoldsWithAZeroClock(t *testing.T) {
+	s := newIssuerServer(t, corpusJWKS(t))
+	c := s.client(t, &fakeClock{}, nil)
+	for i := 0; i < 5; i++ {
+		if _, ok := c.PublicKey(fmt.Sprintf("zero-%d", i)); ok {
+			t.Fatal("unknown kid served")
+		}
+	}
+	if s.discHits.Load() != 1 || s.jwksHits.Load() != 1 {
+		t.Fatalf("fetches discovery=%d jwks=%d inside one floor, want 1 each", s.discHits.Load(), s.jwksHits.Load())
+	}
+}
+
 func TestOutageKeepsKnownKeysOnlyInsideGrace(t *testing.T) {
 	s := newIssuerServer(t, corpusJWKS(t))
 	clock := newClock()
