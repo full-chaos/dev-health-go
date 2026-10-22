@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -223,6 +224,9 @@ func TestErrorsCarryNoTokenOrKeyBytes(t *testing.T) {
 		if err == nil {
 			continue
 		}
+		if !errors.Is(err, ErrRefused) {
+			t.Errorf("%s: refusal does not wrap ErrRefused", row.File)
+		}
 		text := err.Error()
 		if text != ErrRefused.Error()+": "+row.Reason {
 			t.Errorf("%s: unexpected error text shape", row.File)
@@ -232,6 +236,32 @@ func TestErrorsCarryNoTokenOrKeyBytes(t *testing.T) {
 				t.Errorf("%s: error text carries token material", row.File)
 			}
 		}
+	}
+}
+
+func TestNonCompactTokensRefused(t *testing.T) {
+	m := loadManifest(t)
+	var vec corpusVector
+	readJSON(t, filepath.Join(corpusDir, "vectors", "valid-api.json"), &vec)
+	good := vec.compact()
+	row := corpusRow{Audience: "dev-health-api"}
+	v := corpusVerifier(t, m, row)
+	if _, err := v.Verify(good, time.Unix(1760000300, 0)); err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(good, ".")
+	for _, junk := range []string{"\r\n", "\n", "\r", " ", "\t", "=", "+", "/", "\u00e9"} {
+		for i := range parts {
+			mutated := append([]string(nil), parts...)
+			mutated[i] = mutated[i][:3] + junk + mutated[i][3:]
+			_, err := v.Verify(strings.Join(mutated, "."), time.Unix(1760000300, 0))
+			if ReasonOf(err) != ReasonContract || !errors.Is(err, ErrRefused) {
+				t.Errorf("segment %d with %q: reason %q", i, junk, ReasonOf(err))
+			}
+		}
+	}
+	if _, err := v.Verify(good+"\n", time.Unix(1760000300, 0)); !errors.Is(err, ErrRefused) {
+		t.Error("trailing newline accepted")
 	}
 }
 

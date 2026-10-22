@@ -166,5 +166,22 @@ func splitCompact(token string) (header, payload, signature string, ok bool) {
 	if len(parts) != 3 {
 		return "", "", "", false
 	}
+	for _, part := range parts {
+		if !base64URLAlphabet(part) {
+			return "", "", "", false
+		}
+	}
 	return parts[0], parts[1], parts[2], true
+}
+
+// base64URLAlphabet reports whether s holds only unpadded base64url
+// characters; the base64 decoder alone skips line breaks.
+func base64URLAlphabet(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
