@@ -56,6 +56,12 @@ func (v *Ed25519JWKSVerifier) Keys() (map[string]ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseJWKS(encoded)
+}
+
+// parseJWKS is the one strict JWKS parser: the file reader and the HTTP
+// client both use it, so the two paths cannot disagree about a document.
+func parseJWKS(encoded []byte) (map[string]ed25519.PublicKey, error) {
 	if !singleDocumentWithoutDuplicateMembers(encoded) {
 		return nil, ErrInvalidJWKS
 	}
