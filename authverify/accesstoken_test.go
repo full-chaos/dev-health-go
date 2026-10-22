@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -112,10 +113,22 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 	}
 	defer file.Close()
 	pinned := map[string]string{}
+	sawCommit, sawPath := false, false
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "ops_") {
+		if value, ok := strings.CutPrefix(line, "ops_commit "); ok {
+			if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(value) {
+				t.Fatal("SOURCE ops_commit is not a full commit sha")
+			}
+			sawCommit = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "ops_path "); ok {
+			if value != "contracts/auth/v1/golden/access-token" {
+				t.Fatal("SOURCE ops_path is not the corpus path")
+			}
+			sawPath = true
 			continue
 		}
 		sum, name, ok := strings.Cut(line, "  ")
@@ -123,6 +136,9 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 			t.Fatalf("bad SOURCE line")
 		}
 		pinned[name] = sum
+	}
+	if !sawCommit || !sawPath {
+		t.Fatal("SOURCE lacks ops_commit or ops_path")
 	}
 	var onDisk []string
 	err = filepath.Walk(corpusDir, func(path string, info os.FileInfo, err error) error {
@@ -276,6 +292,7 @@ func TestVerifierConfigBounds(t *testing.T) {
 		"http issuer":   func(c *VerifierConfig) { c.Issuer = "http://auth.example.test" },
 		"audience":      func(c *VerifierConfig) { c.Audience = "other" },
 		"leeway over":   func(c *VerifierConfig) { c.Leeway = MaxLeeway + time.Second },
+		"leeway frac":   func(c *VerifierConfig) { c.Leeway = 500 * time.Millisecond },
 		"leeway negate": func(c *VerifierConfig) { c.Leeway = -time.Second },
 	} {
 		cfg := good

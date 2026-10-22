@@ -88,7 +88,8 @@ type VerifierConfig struct {
 	// DeniedKids are refused as unknown even if Keys still holds them (a
 	// stale cache after a retirement or compromise).
 	DeniedKids []string
-	// Leeway is the clock skew allowed on nbf and exp; 0 to MaxLeeway.
+	// Leeway is the clock skew allowed on nbf and exp, in whole seconds,
+	// 0 to MaxLeeway; a fractional value is refused by NewVerifier.
 	Leeway time.Duration
 }
 
@@ -108,7 +109,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if _, ok := scopeByAudience[cfg.Audience]; !ok {
 		return nil, errors.New("authverify: verifier audience is not an access-token.v1 audience")
 	}
-	if cfg.Leeway < 0 || cfg.Leeway > MaxLeeway {
+	if cfg.Leeway < 0 || cfg.Leeway > MaxLeeway || cfg.Leeway%time.Second != 0 {
 		return nil, errors.New("authverify: verifier leeway is out of bounds")
 	}
 	denied := make(map[string]struct{}, len(cfg.DeniedKids))
