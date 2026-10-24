@@ -155,6 +155,7 @@ func anthropicToolName(format *JSONFormat) string {
 var anthropicToolNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 type anthropicResponse struct {
+	Model   responseModel `json:"model"`
 	Content []struct {
 		Type  string          `json:"type"`
 		Text  string          `json:"text"`
@@ -170,6 +171,7 @@ type anthropicResponse struct {
 }
 
 type anthropicAnswer struct {
+	model      string
 	text       string
 	stopReason string
 	usage      Usage
@@ -230,7 +232,7 @@ func (p *Anthropic) Complete(ctx context.Context, request Request) (Result, erro
 				continue
 			}
 		}
-		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.stopReason, Usage: answer.usage, Unparsed: unparsed}
+		result := Result{Text: text, Model: p.cfg.Model, ResponseModel: answer.model, StopReason: answer.stopReason, Usage: answer.usage, Unparsed: unparsed}
 		if request.Format != nil {
 			result.FormatPath, result.FormatReason = FormatPathSchema, reason
 			if mode == anthropicForcedTool {
@@ -352,7 +354,7 @@ func parseAnthropicResponse(raw []byte) (anthropicAnswer, error) {
 			}
 		}
 	}
-	answer := anthropicAnswer{text: text.String(), stopReason: decoded.StopReason}
+	answer := anthropicAnswer{text: text.String(), stopReason: decoded.StopReason, model: string(decoded.Model)}
 	if toolInput != "" {
 		// A forced tool call's input is the answer; any text beside it is
 		// the model's preamble.

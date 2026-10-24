@@ -132,6 +132,7 @@ type chatRequest struct {
 }
 
 type chatResponse struct {
+	Model   responseModel `json:"model"`
 	Choices []struct {
 		Message      chatReplyMessage `json:"message"`
 		FinishReason string           `json:"finish_reason"`
@@ -146,6 +147,7 @@ type chatResponse struct {
 }
 
 type chatAnswer struct {
+	model   string
 	text    string
 	finish  string
 	usage   Usage
@@ -215,7 +217,7 @@ func (p *Compatible) Complete(ctx context.Context, request Request) (Result, err
 			}
 			return Result{}, classified
 		}
-		result := Result{Text: answer.text, Model: p.cfg.Model, StopReason: answer.finish, Usage: answer.usage, Refused: answer.refused}
+		result := Result{Text: answer.text, Model: p.cfg.Model, ResponseModel: answer.model, StopReason: answer.finish, Usage: answer.usage, Refused: answer.refused}
 		if request.Format != nil {
 			if !answer.refused {
 				result.Text, result.Unparsed = gateJSON(answer.text)
@@ -270,7 +272,7 @@ func parseChatResponse(raw []byte) (chatAnswer, error) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return chatAnswer{}, err
 	}
-	var answer chatAnswer
+	answer := chatAnswer{model: string(decoded.Model)}
 	if usage := decoded.Usage; usage != nil {
 		// Read before the choices: a reply with no choice can still have
 		// been billed, and the budget settles from what was reported.

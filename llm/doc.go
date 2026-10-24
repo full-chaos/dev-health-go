@@ -38,7 +38,8 @@
 //     provider text. Two other errors come back as they are: a Budget's own
 //     (IsBudgetRefusal) and the caller's context cancellation.
 //   - Result.Model is the model the request carried, and Model() returns it
-//     before any call.
+//     before any call. Result.ResponseModel is the model the API's own
+//     response body reported ("" when it named none), never filled from Model.
 //   - Usage counts are nil when the provider did not report them, never 0.
 //     InputTokens is the whole prompt; CachedInputTokens (read from the cache)
 //     and CacheCreationInputTokens (written to it) are subsets of it.
