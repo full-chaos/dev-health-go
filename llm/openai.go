@@ -90,7 +90,8 @@ type openAIReasoning struct {
 }
 
 type openAIResponsesResponse struct {
-	OutputText string `json:"output_text"`
+	Model      responseModel `json:"model"`
+	OutputText string        `json:"output_text"`
 	Output     []struct {
 		Content []struct {
 			Type string `json:"type"`
@@ -111,6 +112,7 @@ type openAIResponsesResponse struct {
 
 // openAIAnswer is one decoded Responses API body.
 type openAIAnswer struct {
+	model   string
 	text    string
 	reason  string
 	usage   Usage
@@ -160,7 +162,7 @@ func (p *OpenAI) Complete(ctx context.Context, request Request) (Result, error) 
 		}
 		// An answer that is not JSON is an empty completion, not an error:
 		// the caller's repair handles it (openai.py's own contract).
-		result := Result{Text: text, Model: p.cfg.Model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed, Refused: answer.refused}
+		result := Result{Text: text, Model: p.cfg.Model, ResponseModel: answer.model, StopReason: answer.reason, Usage: answer.usage, Unparsed: unparsed, Refused: answer.refused}
 		if request.Format != nil {
 			result.FormatPath = FormatPathSchema
 			if request.Format.object() {
@@ -250,7 +252,7 @@ func parseOpenAIResponse(raw []byte) (openAIAnswer, error) {
 		}
 		text = parts.String()
 	}
-	answer := openAIAnswer{text: text, reason: "completed"}
+	answer := openAIAnswer{text: text, reason: "completed", model: string(decoded.Model)}
 	for _, item := range decoded.Output {
 		for _, chunk := range item.Content {
 			if chunk.Type == "refusal" && text == "" {

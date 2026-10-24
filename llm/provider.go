@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -145,8 +146,13 @@ type Usage struct {
 // Result is one completion. Under a Format, Text is compact JSON or "" (the
 // reply was not JSON: repair or fall back).
 type Result struct {
-	Text  string
+	Text string
+	// Model is the configured model the request carried.
 	Model string
+	// ResponseModel is the model the API reported in its own response body
+	// ("" when the body names none). It is kept as sent, with no fallback to
+	// Model, so a caller can tell a different model answered.
+	ResponseModel string
 	// StopReason is the provider's own completion status ("completed",
 	// "max_output_tokens", ...), for logs.
 	StopReason string
@@ -269,4 +275,16 @@ func (c Config) withDefaults(defaultBaseURL string) Config {
 		c.Model = DefaultModel(c.Kind)
 	}
 	return c
+}
+
+// responseModel is a response body's top-level `model`. Anything but a JSON
+// string reads as "" so an odd value never fails a call.
+type responseModel string
+
+func (m *responseModel) UnmarshalJSON(raw []byte) error {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		*m = responseModel(text)
+	}
+	return nil
 }
