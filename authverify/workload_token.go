@@ -15,6 +15,9 @@ const (
 	workloadAudience = "auth-service"
 )
 
+// workloadAudiences are the audiences whose token classes include workload_token.
+var workloadAudiences = map[string]struct{}{"auth-service": {}, "dev-health-api": {}}
+
 // MaxWorkloadLeeway bounds the clock skew a WorkloadVerifier accepts.
 const MaxWorkloadLeeway = 30 * time.Second
 
