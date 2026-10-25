@@ -11,8 +11,6 @@ const (
 	typWorkloadToken = "workload+jwt"
 	// workloadLifetimeCeiling is the ceiling on exp - iat, in seconds (ACP-ADR-03).
 	workloadLifetimeCeiling = 300
-	// workloadAudience is the only audience a workload-token.v1 token may name.
-	workloadAudience = "auth-service"
 )
 
 // workloadAudiences are the audiences whose token classes include workload_token.
@@ -68,8 +66,8 @@ func NewWorkloadVerifier(cfg WorkloadVerifierConfig) (*WorkloadVerifier, error) 
 	if cfg.Keys == nil || !issuerPattern.MatchString(cfg.Issuer) {
 		return nil, errors.New("authverify: workload verifier needs an https issuer and a key source")
 	}
-	if _, ok := scopeByAudience[cfg.Audience]; !ok {
-		return nil, errors.New("authverify: workload verifier audience is not a token audience")
+	if _, ok := workloadAudiences[cfg.Audience]; !ok {
+		return nil, errors.New("authverify: workload verifier audience is not a workload audience")
 	}
 	if cfg.Leeway < 0 || cfg.Leeway > MaxWorkloadLeeway || cfg.Leeway%time.Second != 0 {
 		return nil, errors.New("authverify: workload verifier leeway is out of bounds")
@@ -167,7 +165,7 @@ func parseWorkloadClaims(raw []byte) (WorkloadClaims, bool) {
 			return WorkloadClaims{}, false
 		}
 	}
-	if claims.Audience != workloadAudience {
+	if _, ok := workloadAudiences[claims.Audience]; !ok {
 		return WorkloadClaims{}, false
 	}
 	if value, ok := stringMember(object, "principal_type", nil); !ok || value != "workload" {
