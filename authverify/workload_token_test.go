@@ -198,21 +198,26 @@ func TestWorkloadVerifierConfigBounds(t *testing.T) {
 	if _, err := NewWorkloadVerifier(good); err != nil {
 		t.Fatal(err)
 	}
+	otherService := good
+	otherService.Audience = "dev-health-api"
+	if _, err := NewWorkloadVerifier(otherService); err != nil {
+		t.Fatalf("a verifier for another token audience refused: %v", err)
+	}
 	atMax := good
 	atMax.Leeway = MaxWorkloadLeeway
 	if _, err := NewWorkloadVerifier(atMax); err != nil {
 		t.Fatalf("leeway at the maximum refused: %v", err)
 	}
 	for name, mutate := range map[string]func(*WorkloadVerifierConfig){
-		"no keys":          func(c *WorkloadVerifierConfig) { c.Keys = nil },
-		"http issuer":      func(c *WorkloadVerifierConfig) { c.Issuer = "http://auth.example.test" },
-		"user audience":    func(c *WorkloadVerifierConfig) { c.Audience = "dev-health-api" },
-		"unknown audience": func(c *WorkloadVerifierConfig) { c.Audience = "other" },
-		"empty audience":   func(c *WorkloadVerifierConfig) { c.Audience = "" },
-		"leeway over 30 s": func(c *WorkloadVerifierConfig) { c.Leeway = MaxWorkloadLeeway + time.Second },
-		"leeway 60 s":      func(c *WorkloadVerifierConfig) { c.Leeway = MaxLeeway },
-		"leeway frac":      func(c *WorkloadVerifierConfig) { c.Leeway = 500 * time.Millisecond },
-		"leeway negative":  func(c *WorkloadVerifierConfig) { c.Leeway = -time.Second },
+		"no keys":           func(c *WorkloadVerifierConfig) { c.Keys = nil },
+		"http issuer":       func(c *WorkloadVerifierConfig) { c.Issuer = "http://auth.example.test" },
+		"envelope audience": func(c *WorkloadVerifierConfig) { c.Audience = "query-api" },
+		"unknown audience":  func(c *WorkloadVerifierConfig) { c.Audience = "other" },
+		"empty audience":    func(c *WorkloadVerifierConfig) { c.Audience = "" },
+		"leeway over 30 s":  func(c *WorkloadVerifierConfig) { c.Leeway = MaxWorkloadLeeway + time.Second },
+		"leeway 60 s":       func(c *WorkloadVerifierConfig) { c.Leeway = MaxLeeway },
+		"leeway frac":       func(c *WorkloadVerifierConfig) { c.Leeway = 500 * time.Millisecond },
+		"leeway negative":   func(c *WorkloadVerifierConfig) { c.Leeway = -time.Second },
 	} {
 		cfg := good
 		mutate(&cfg)
