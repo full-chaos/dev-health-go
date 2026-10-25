@@ -514,6 +514,9 @@ func TestWorkloadVerifierForAnotherAudienceRefusesEveryValidToken(t *testing.T) 
 		}
 		accepted++
 		vec := readWorkloadVector(t, row.File)
+		if claims, err := workloadCorpusVerifier(t, m, row).Verify(vec.compact(), time.Unix(row.Now, 0)); err != nil || claims == nil {
+			t.Fatalf("%s: control: the auth-service verifier gave %q", row.File, ReasonOf(err))
+		}
 		other := row
 		other.Audience = "dev-health-api"
 		claims, err := workloadCorpusVerifier(t, m, other).Verify(vec.compact(), time.Unix(row.Now, 0))
