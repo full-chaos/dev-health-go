@@ -528,3 +528,43 @@ func TestWorkloadVerifierForAnotherAudienceRefusesEveryValidToken(t *testing.T) 
 		t.Fatalf("corpus holds %d valid rows, want 6", accepted)
 	}
 }
+
+func TestWorkloadBadClaimsRefusedBeforeKeyLookup(t *testing.T) {
+	m := loadWorkloadManifest(t)
+	contractRows := 0
+	for _, row := range m.Vectors {
+		if row.Reason != string(ReasonContract) {
+			continue
+		}
+		contractRows++
+		vec := readWorkloadVector(t, row.File)
+		keys := &countingKeys{StaticKeys: workloadCorpusKeys(t, m, row.KeySet == "published_and_removed")}
+		v, err := NewWorkloadVerifier(WorkloadVerifierConfig{Issuer: m.Issuer, Audience: row.Audience, DeniedKids: m.RemovedKids, Keys: keys})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := v.Verify(vec.compact(), time.Unix(row.Now, 0)); ReasonOf(err) != ReasonContract || keys.lookups != 0 {
+			t.Errorf("%s: reason %q, key lookups %d", row.File, ReasonOf(err), keys.lookups)
+		}
+	}
+	if contractRows != 37 {
+		t.Fatalf("manifest holds %d contract rows, want 37", contractRows)
+	}
+	s := newSigner(t)
+	const prefix = `{"iss":"https://auth.example.test","aud":"auth-service","sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","principal_type":"workload",`
+	payloads := map[string]string{
+		"jti short":         prefix + `"jti":"short","iat":1760000000,"nbf":1760000000,"exp":1760000300}`,
+		"extra claim scope": prefix + `"jti":"000000000000000000000001","scope":"x","iat":1760000000,"nbf":1760000000,"exp":1760000300}`,
+		"exp as string":     prefix + `"jti":"000000000000000000000001","iat":1760000000,"nbf":1760000000,"exp":"1760000300"}`,
+		"duplicate member":  prefix + `"jti":"000000000000000000000001","jti":"000000000000000000000002","iat":1760000000,"nbf":1760000000,"exp":1760000300}`,
+		"not an object":     `[]`,
+		"lifetime 301 s":    prefix + `"jti":"000000000000000000000001","iat":1760000000,"nbf":1760000000,"exp":1760000301}`,
+	}
+	for name, payload := range payloads {
+		keys := &countingKeys{StaticKeys: StaticKeys{"wl-a": s.pub}}
+		v := rtVerifier(t, keys, 0)
+		if _, err := v.Verify(s.token(workloadHeader("wl-a"), payload), time.Unix(1760000100, 0)); ReasonOf(err) != ReasonContract || keys.lookups != 0 {
+			t.Errorf("%s: reason %q, key lookups %d", name, ReasonOf(err), keys.lookups)
+		}
+	}
+}
