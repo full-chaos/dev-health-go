@@ -11,9 +11,10 @@ const (
 	typWorkloadToken = "workload+jwt"
 	// workloadLifetimeCeiling is the ceiling on exp - iat, in seconds (ACP-ADR-03).
 	workloadLifetimeCeiling = 300
-	// workloadAudience is the only audience a workload-token.v1 token may name.
-	workloadAudience = "auth-service"
 )
+
+// workloadAudiences are the audiences whose token classes include workload_token.
+var workloadAudiences = map[string]struct{}{"auth-service": {}, "dev-health-api": {}}
 
 // MaxWorkloadLeeway bounds the clock skew a WorkloadVerifier accepts.
 const MaxWorkloadLeeway = 30 * time.Second
@@ -38,9 +39,9 @@ type WorkloadClaims struct {
 type WorkloadVerifierConfig struct {
 	// Issuer must equal the token's iss exactly.
 	Issuer string
-	// Audience is the one service this verifier is: a token-audience service
+	// Audience is the one service this verifier is: a workload audience
 	// (dev-health-api or auth-service). It must equal the token's aud exactly,
-	// so a verifier that is not auth-service refuses every workload token.
+	// so a token for the other workload audience is refused.
 	Audience string
 	// Keys resolves kid to a public key.
 	Keys KeySource
@@ -65,8 +66,8 @@ func NewWorkloadVerifier(cfg WorkloadVerifierConfig) (*WorkloadVerifier, error) 
 	if cfg.Keys == nil || !issuerPattern.MatchString(cfg.Issuer) {
 		return nil, errors.New("authverify: workload verifier needs an https issuer and a key source")
 	}
-	if _, ok := scopeByAudience[cfg.Audience]; !ok {
-		return nil, errors.New("authverify: workload verifier audience is not a token audience")
+	if _, ok := workloadAudiences[cfg.Audience]; !ok {
+		return nil, errors.New("authverify: workload verifier audience is not a workload audience")
 	}
 	if cfg.Leeway < 0 || cfg.Leeway > MaxWorkloadLeeway || cfg.Leeway%time.Second != 0 {
 		return nil, errors.New("authverify: workload verifier leeway is out of bounds")
@@ -164,7 +165,7 @@ func parseWorkloadClaims(raw []byte) (WorkloadClaims, bool) {
 			return WorkloadClaims{}, false
 		}
 	}
-	if claims.Audience != workloadAudience {
+	if _, ok := workloadAudiences[claims.Audience]; !ok {
 		return WorkloadClaims{}, false
 	}
 	if value, ok := stringMember(object, "principal_type", nil); !ok || value != "workload" {

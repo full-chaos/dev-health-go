@@ -155,7 +155,7 @@ func TestWorkloadCorpusSourceIsPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	sort.Strings(onDisk)
-	if len(onDisk) != len(pinned) || len(onDisk) < 62+3 {
+	if len(onDisk) != len(pinned) || len(onDisk) < 64+3 {
 		t.Fatalf("corpus holds %d files, SOURCE pins %d", len(onDisk), len(pinned))
 	}
 	for _, name := range onDisk {
@@ -172,8 +172,8 @@ func TestWorkloadCorpusSourceIsPinned(t *testing.T) {
 
 func TestWorkloadCorpusDecisions(t *testing.T) {
 	m := loadWorkloadManifest(t)
-	if len(m.Vectors) != 62 {
-		t.Fatalf("manifest holds %d rows, want 62", len(m.Vectors))
+	if len(m.Vectors) != 64 {
+		t.Fatalf("manifest holds %d rows, want 64", len(m.Vectors))
 	}
 	for _, row := range m.Vectors {
 		t.Run(strings.TrimSuffix(row.File, ".json"), func(t *testing.T) {
@@ -505,27 +505,41 @@ func TestWorkloadMalformedKeyFromKeySourceRefused(t *testing.T) {
 	}
 }
 
-func TestWorkloadVerifierForAnotherAudienceRefusesEveryValidToken(t *testing.T) {
+func TestWorkloadVerifierForAnotherAudienceRefusesEveryValidTokenBothWays(t *testing.T) {
 	m := loadWorkloadManifest(t)
-	accepted := 0
+	other := map[string]string{"auth-service": "dev-health-api", "dev-health-api": "auth-service"}
+	accepted := map[string]int{}
 	for _, row := range m.Vectors {
 		if row.Expect != "accept" {
 			continue
 		}
-		accepted++
+		accepted[row.Audience]++
 		vec := readWorkloadVector(t, row.File)
 		if claims, err := workloadCorpusVerifier(t, m, row).Verify(vec.compact(), time.Unix(row.Now, 0)); err != nil || claims == nil {
-			t.Fatalf("%s: control: the auth-service verifier gave %q", row.File, ReasonOf(err))
+			t.Fatalf("%s: control: the %s verifier gave %q", row.File, row.Audience, ReasonOf(err))
 		}
-		other := row
-		other.Audience = "dev-health-api"
-		claims, err := workloadCorpusVerifier(t, m, other).Verify(vec.compact(), time.Unix(row.Now, 0))
+		swapped := row
+		swapped.Audience = other[row.Audience]
+		claims, err := workloadCorpusVerifier(t, m, swapped).Verify(vec.compact(), time.Unix(row.Now, 0))
 		if claims != nil || ReasonOf(err) != ReasonAudience {
-			t.Errorf("%s: dev-health-api verifier gave %q, want audience", row.File, ReasonOf(err))
+			t.Errorf("%s: %s verifier gave %q, want audience", row.File, swapped.Audience, ReasonOf(err))
 		}
 	}
-	if accepted != 6 {
-		t.Fatalf("corpus holds %d valid rows, want 6", accepted)
+	if accepted["auth-service"] != 6 || accepted["dev-health-api"] != 1 {
+		t.Fatalf("corpus holds valid rows %v, want auth-service 6 and dev-health-api 1", accepted)
+	}
+}
+
+func TestWorkloadAudiencesAreTheWorkloadClassAudiences(t *testing.T) {
+	// Names from the ops contract file contracts/auth/v1/vocabulary/audiences.json: audiences whose classes include workload_token.
+	want := []string{"auth-service", "dev-health-api"}
+	var got []string
+	for name := range workloadAudiences {
+		got = append(got, name)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("workload audiences are %v, want %v", got, want)
 	}
 }
 
