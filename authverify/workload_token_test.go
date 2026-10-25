@@ -454,3 +454,53 @@ func TestWorkloadTokensThroughTheJWKSClientFailClosed(t *testing.T) {
 	_, err = verify(known, "wl-a")
 	step("recovery", err, "")
 }
+
+func TestWorkloadClaimShapesRefused(t *testing.T) {
+	s := newSigner(t)
+	v := rtVerifier(t, StaticKeys{"wl-a": s.pub}, 0)
+	const prefix = `{"iss":"https://auth.example.test","aud":"auth-service","sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","principal_type":"workload",`
+	const dates = `"iat":1760000000,"nbf":1760000000,"exp":1760000300}`
+	cases := map[string]string{
+		"jti absent":           prefix + dates,
+		"jti short":            prefix + `"jti":"short",` + dates,
+		"jti long":             prefix + `"jti":"` + strings.Repeat("A", 65) + `",` + dates,
+		"jti bad characters":   prefix + `"jti":"000000000000000000000+",` + dates,
+		"jti number":           prefix + `"jti":123,` + dates,
+		"iat absent":           prefix + `"jti":"000000000000000000000001","nbf":1760000000,"exp":1760000300}`,
+		"nbf absent":           prefix + `"jti":"000000000000000000000001","iat":1760000000,"exp":1760000300}`,
+		"exp absent":           prefix + `"jti":"000000000000000000000001","iat":1760000000,"nbf":1760000000}`,
+		"iat zero":             prefix + `"jti":"000000000000000000000001","iat":0,"nbf":1760000000,"exp":1760000300}`,
+		"exp as string":        prefix + `"jti":"000000000000000000000001","iat":1760000000,"nbf":1760000000,"exp":"1760000300"}`,
+		"exp negative":         prefix + `"jti":"000000000000000000000001","iat":1760000000,"nbf":1760000000,"exp":-1}`,
+		"exp past year 9999":   prefix + `"jti":"000000000000000000000001","iat":1760000000,"nbf":1760000000,"exp":253402300800}`,
+		"extra claim email":    prefix + `"jti":"000000000000000000000001","email":"a@b.example",` + dates,
+		"extra claim org_id":   prefix + `"jti":"000000000000000000000001","org_id":"00000000-0000-0000-0000-000000000000",` + dates,
+		"extra claim sid":      prefix + `"jti":"000000000000000000000001","sid":"ses_AAAAAAAAAAAAAAAAAAAAAA",` + dates,
+		"extra claim scope":    prefix + `"jti":"000000000000000000000001","scope":"auth:session",` + dates,
+		"payload is an array":  `[]`,
+		"payload is null":      `null`,
+		"payload has trailing": prefix + `"jti":"000000000000000000000001",` + dates + ` {}`,
+	}
+	for name, payload := range cases {
+		token := s.token(workloadHeader("wl-a"), payload)
+		if _, err := v.Verify(token, time.Unix(1760000100, 0)); ReasonOf(err) != ReasonContract {
+			t.Errorf("%s: got %q", name, ReasonOf(err))
+		}
+	}
+	good := s.token(workloadHeader("wl-a"), prefix+`"jti":"000000000000000000000001",`+dates)
+	if _, err := v.Verify(good, time.Unix(1760000100, 0)); err != nil {
+		t.Fatalf("control payload refused: %v", ReasonOf(err))
+	}
+}
+
+type shortKeys struct{}
+
+func (shortKeys) PublicKey(string) (ed25519.PublicKey, bool) { return ed25519.PublicKey("short"), true }
+
+func TestWorkloadMalformedKeyFromKeySourceRefused(t *testing.T) {
+	s := newSigner(t)
+	token := s.token(workloadHeader("wl-a"), workloadPayload(1760000000, 1760000000, 1760000300))
+	if _, err := rtVerifier(t, shortKeys{}, 0).Verify(token, time.Unix(1760000100, 0)); ReasonOf(err) != ReasonUnknownKid {
+		t.Fatalf("wrong-size key gave %q", ReasonOf(err))
+	}
+}
