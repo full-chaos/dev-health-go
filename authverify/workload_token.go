@@ -39,9 +39,9 @@ type WorkloadClaims struct {
 type WorkloadVerifierConfig struct {
 	// Issuer must equal the token's iss exactly.
 	Issuer string
-	// Audience is the one service this verifier is: a token-audience service
+	// Audience is the one service this verifier is: a workload audience
 	// (dev-health-api or auth-service). It must equal the token's aud exactly,
-	// so a verifier that is not auth-service refuses every workload token.
+	// so a token for the other workload audience is refused.
 	Audience string
 	// Keys resolves kid to a public key.
 	Keys KeySource
