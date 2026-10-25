@@ -504,3 +504,24 @@ func TestWorkloadMalformedKeyFromKeySourceRefused(t *testing.T) {
 		t.Fatalf("wrong-size key gave %q", ReasonOf(err))
 	}
 }
+
+func TestWorkloadVerifierForAnotherAudienceRefusesEveryValidToken(t *testing.T) {
+	m := loadWorkloadManifest(t)
+	accepted := 0
+	for _, row := range m.Vectors {
+		if row.Expect != "accept" {
+			continue
+		}
+		accepted++
+		vec := readWorkloadVector(t, row.File)
+		other := row
+		other.Audience = "dev-health-api"
+		claims, err := workloadCorpusVerifier(t, m, other).Verify(vec.compact(), time.Unix(row.Now, 0))
+		if claims != nil || ReasonOf(err) != ReasonAudience {
+			t.Errorf("%s: dev-health-api verifier gave %q, want audience", row.File, ReasonOf(err))
+		}
+	}
+	if accepted != 6 {
+		t.Fatalf("corpus holds %d valid rows, want 6", accepted)
+	}
+}
