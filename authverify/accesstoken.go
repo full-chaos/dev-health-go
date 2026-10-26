@@ -68,7 +68,7 @@ var ErrKeySourceUnavailable = errors.New("key source unavailable")
 // It is not a *RefusalError: ReasonOf returns "" and callers answer 503.
 type UnavailableError struct{}
 
-func (*UnavailableError) Error() string { return "access token key source unavailable" }
+func (*UnavailableError) Error() string { return "token key source unavailable" }
 func (*UnavailableError) Unwrap() error { return ErrKeySourceUnavailable }
 
 // lookupKey resolves kid through keys. A non-nil error is always an
@@ -154,7 +154,8 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 // Verify checks a compact access token at now and returns its claims. It
 // decides in order: contract (header and claims shape, no key used), key by
 // kid, signature, issuer, audience, nbf, exp. Any failure returns a
-// *RefusalError wrapping ErrRefused.
+// *RefusalError wrapping ErrRefused, or an *UnavailableError when the key
+// source could not be read.
 func (v *Verifier) Verify(token string, now time.Time) (*AccessClaims, error) {
 	headerPart, payloadPart, signaturePart, ok := splitCompact(token)
 	if !ok {

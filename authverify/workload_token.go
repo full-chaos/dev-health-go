@@ -82,7 +82,8 @@ func NewWorkloadVerifier(cfg WorkloadVerifierConfig) (*WorkloadVerifier, error) 
 // Verify checks a compact workload token at now and returns its claims. It
 // decides in the order of the workload-token.v1 corpus: contract (header and
 // claims shape, no key used), key by kid, signature, issuer, audience, nbf,
-// exp. Any failure returns a *RefusalError wrapping ErrRefused.
+// exp. Any failure returns a *RefusalError wrapping ErrRefused, or an
+// *UnavailableError when the key source could not be read.
 func (v *WorkloadVerifier) Verify(token string, now time.Time) (*WorkloadClaims, error) {
 	headerPart, payloadPart, signaturePart, ok := splitCompact(token)
 	if !ok {
