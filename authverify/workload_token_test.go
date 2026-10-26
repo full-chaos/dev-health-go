@@ -420,7 +420,7 @@ func TestWorkloadTokensThroughTheJWKSClientFailClosed(t *testing.T) {
 
 	srv.set(func(s *issuerServer) { s.status = http.StatusInternalServerError })
 	_, err := verify(known, "wl-a")
-	step("outage before any key was fetched", err, ReasonUnknownKid)
+	wantUnavailable(t, "outage before any key was fetched", err)
 
 	clock.Advance(time.Minute)
 	srv.set(func(s *issuerServer) { s.status = http.StatusOK })
@@ -443,11 +443,11 @@ func TestWorkloadTokensThroughTheJWKSClientFailClosed(t *testing.T) {
 	_, err = verify(known, "wl-a")
 	step("outage: cached known kid inside TTL + grace", err, "")
 	_, err = verify(stranger, "wl-x")
-	step("outage: unknown kid", err, ReasonUnknownKid)
+	wantUnavailable(t, "outage: unknown kid", err)
 
 	clock.Advance(10 * time.Minute)
 	_, err = verify(known, "wl-a")
-	step("outage: known kid past TTL + grace", err, ReasonUnknownKid)
+	wantUnavailable(t, "outage: known kid past TTL + grace", err)
 
 	srv.set(func(s *issuerServer) { s.status = http.StatusOK })
 	clock.Advance(time.Minute)
