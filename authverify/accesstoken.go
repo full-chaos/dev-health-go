@@ -53,6 +53,38 @@ type KeySource interface {
 	PublicKey(kid string) (ed25519.PublicKey, bool)
 }
 
+// KeyResolver is an optional KeySource extension that tells a kid the source
+// does not hold (nil key, nil error) from a source that could not be read
+// (ErrKeySourceUnavailable). Verifiers prefer it over PublicKey.
+type KeyResolver interface {
+	ResolveKey(kid string) (ed25519.PublicKey, error)
+}
+
+// ErrKeySourceUnavailable is wrapped when a key source could not be read, so
+// a verifier cannot tell an unknown kid from an outage. It is not a refusal.
+var ErrKeySourceUnavailable = errors.New("key source unavailable")
+
+// UnavailableError is returned by Verify when the key source is unavailable.
+// It is not a *RefusalError: ReasonOf returns "" and callers answer 503.
+type UnavailableError struct{}
+
+func (*UnavailableError) Error() string { return "access token key source unavailable" }
+func (*UnavailableError) Unwrap() error { return ErrKeySourceUnavailable }
+
+// lookupKey resolves kid through keys. A non-nil error is always an
+// *UnavailableError.
+func lookupKey(keys KeySource, kid string) (ed25519.PublicKey, bool, error) {
+	if resolver, ok := keys.(KeyResolver); ok {
+		key, err := resolver.ResolveKey(kid)
+		if err != nil {
+			return nil, false, &UnavailableError{}
+		}
+		return key, key != nil, nil
+	}
+	key, known := keys.PublicKey(kid)
+	return key, known, nil
+}
+
 // StaticKeys is a KeySource over a fixed key map, such as the result of
 // Ed25519JWKSVerifier.Keys.
 type StaticKeys map[string]ed25519.PublicKey
@@ -145,7 +177,10 @@ func (v *Verifier) Verify(token string, now time.Time) (*AccessClaims, error) {
 	if _, denied := v.denied[header.kid]; denied {
 		return nil, refuse(ReasonUnknownKid)
 	}
-	key, known := v.keys.PublicKey(header.kid)
+	key, known, err := lookupKey(v.keys, header.kid)
+	if err != nil {
+		return nil, err
+	}
 	if !known || len(key) != ed25519.PublicKeySize {
 		return nil, refuse(ReasonUnknownKid)
 	}

@@ -105,7 +105,10 @@ func (v *WorkloadVerifier) Verify(token string, now time.Time) (*WorkloadClaims,
 	if _, denied := v.denied[kid]; denied {
 		return nil, refuse(ReasonUnknownKid)
 	}
-	key, known := v.keys.PublicKey(kid)
+	key, known, err := lookupKey(v.keys, kid)
+	if err != nil {
+		return nil, err
+	}
 	if !known || len(key) != ed25519.PublicKeySize {
 		return nil, refuse(ReasonUnknownKid)
 	}

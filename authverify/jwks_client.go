@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -64,6 +65,7 @@ type JWKSClient struct {
 	lastAttempt time.Time
 	attempted   bool
 	inflight    *refreshFlight
+	lastErr     error
 }
 
 type refreshFlight struct {
@@ -123,6 +125,22 @@ func (c *JWKSClient) PublicKey(kid string) (ed25519.PublicKey, bool) {
 	return c.cached(kid, c.cfg.Now(), true)
 }
 
+// ResolveKey implements KeyResolver. It runs the PublicKey flow (one shared,
+// floor-bounded refresh on a miss); a miss is ErrKeySourceUnavailable only
+// when the last fetch failed, else the kid is unknown (nil, nil).
+func (c *JWKSClient) ResolveKey(kid string) (ed25519.PublicKey, error) {
+	if key, ok := c.PublicKey(kid); ok {
+		return key, nil
+	}
+	c.mu.Lock()
+	failed := c.lastErr
+	c.mu.Unlock()
+	if failed != nil {
+		return nil, fmt.Errorf("%w: %w", ErrKeySourceUnavailable, failed)
+	}
+	return nil, nil
+}
+
 // Refresh fetches discovery and the JWKS now, unless a fetch is in flight
 // (it then waits for that one) or the floor has not elapsed.
 func (c *JWKSClient) Refresh(_ context.Context) error { return c.refresh() }
@@ -169,6 +187,7 @@ func (c *JWKSClient) refresh() error {
 		c.keys = keys
 		c.fetchedAt = c.cfg.Now()
 	}
+	c.lastErr = err
 	c.inflight = nil
 	flight.err = err
 	c.mu.Unlock()
