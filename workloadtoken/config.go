@@ -152,7 +152,7 @@ func endpointFor(raw string, allowPlainHTTP bool) (*url.URL, error) {
 // allowPlainHTTP), a host and a port.
 func baseURL(raw string, allowPlainHTTP bool) (*url.URL, error) {
 	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "" {
+	if err != nil || !u.IsAbs() || u.Hostname() == "" || u.Opaque != "" {
 		return nil, errors.New("workloadtoken: the URL must be an absolute URL with a host")
 	}
 	switch u.Scheme {

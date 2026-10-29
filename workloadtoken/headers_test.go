@@ -68,7 +68,7 @@ func TestNoOtherCredentialHeaderLeavesWithTheToken(t *testing.T) {
 			if len(auth) != 1 || auth[0] != "Bearer "+tokenN(0) {
 				t.Fatalf("Authorization lines %q, want exactly the workload token:\n%s", auth, sent)
 			}
-			if name == "other headers stay" && (!strings.Contains(sent, "X-Request-Id: r-1") || !strings.Contains(sent, "accept: application/json")) {
+			if name == "other headers stay" && (!strings.Contains(sent, "X-Request-Id: r-1") || !strings.Contains(sent, "Accept: application/json")) {
 				t.Fatalf("other headers were dropped:\n%s", sent)
 			}
 			for key, values := range header {

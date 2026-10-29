@@ -25,6 +25,7 @@ type Client struct {
 	backoffFloor    time.Duration
 	backoffCeiling  time.Duration
 	now             func() time.Time
+	logger          *slog.Logger
 
 	mu    sync.Mutex
 	slots map[string]*slot
@@ -34,6 +35,7 @@ type Client struct {
 // clock reading taken before the request was sent.
 type entry struct {
 	token       string
+	notBefore   time.Time
 	refreshAt   time.Time
 	usableUntil time.Time
 }
@@ -97,6 +99,7 @@ func New(cfg Config) (*Client, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	c.logger = logger
 	logger.Info("workload token exchange endpoint", "scheme", endpoint.Scheme, "host", endpoint.Host)
 	c.http = &http.Client{
 		Transport: cfg.Transport,
@@ -140,7 +143,7 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 			c.slots[key] = s
 		}
 		now := c.now()
-		if s.entry != nil && !now.Before(s.entry.usableUntil) {
+		if s.entry != nil && (!now.Before(s.entry.usableUntil) || now.Before(s.entry.notBefore)) {
 			s.entry = nil
 		}
 		if s.entry != nil && now.Before(s.entry.refreshAt) {

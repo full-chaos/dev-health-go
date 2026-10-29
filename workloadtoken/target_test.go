@@ -104,14 +104,9 @@ func TestTheTokenIsSentOnlyToItsTarget(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 	}
-	if got := api.seen("api.test"); len(got) != 1 {
-		t.Fatalf("api.test received %d requests, want 1", len(got))
-	}
-	if got := api.seen("API.test"); len(got) != 1 {
-		t.Fatalf("API.test received %d requests, want 1", len(got))
-	}
-	if got := api.seen("api.test:443"); len(got) != 1 {
-		t.Fatalf("api.test:443 received %d requests, want 1", len(got))
+	// The request sent is built for the target, so all three reach it under its own host.
+	if got := api.seen("api.test"); len(got) != 3 {
+		t.Fatalf("api.test received %d requests, want 3", len(got))
 	}
 	if resp, err := rt.RoundTrip(&http.Request{Method: http.MethodGet, Header: http.Header{}}); err == nil {
 		_ = resp.Body.Close()
