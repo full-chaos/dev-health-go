@@ -10,15 +10,17 @@
 //     Subject and no static or fallback credential, so a failed exchange can
 //     never be papered over by sending some other secret.
 //   - Fail closed. A token is sent only inside its usable window; after it, a
-//     failed exchange is ErrNoUsableToken and the RoundTripper sends nothing,
-//     neither an old token nor a request without one.
+//     failed exchange is ErrNoUsableToken and the token transport sends
+//     nothing, neither an old token nor a request without one.
 //   - Early re-exchange. Tokens live at most 300 s; the client exchanges again
 //     at a fraction of the lifetime, so an exchange outage shorter than the
-//     rest of the window costs nothing, and stops using a token SafetyMargin
-//     before its end, which covers the verifier's clock skew allowance.
-//   - The window is measured on this process's own clock from the moment the
-//     request was sent, using only expires_in: a difference between this
-//     host's wall clock and the issuer's never moves it.
+//     rest of the window costs nothing.
+//   - The usable window is the rule of the strictest legal verifier (an
+//     authverify.WorkloadVerifier with leeway 0 on this host's clock):
+//     [nbf, min(exp, sent + expires_in) - SafetyMargin). A token whose nbf is
+//     still ahead (the issuer's clock is ahead) is refused at once and logged.
+//   - The token transport never forwards the caller's request: it builds a
+//     new one for its one fixed target, with a fixed header set.
 //   - An explicit transport. Every request carries a credential, so the
 //     caller hands in the transport and this package refuses
 //     http.DefaultTransport and any *http.Transport with a Proxy: the process
