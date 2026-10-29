@@ -341,6 +341,18 @@ func workloadTokenShape(token string) bool {
 // bytes as unpadded base64url.
 var bootstrapPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(BootstrapPrefix) + `[A-Za-z0-9_-]{43}$`)
 
+// canonicalBootstrap is the bootstrap value as the create verb mints it: the
+// shape, and the 43 characters are the canonical unpadded base64url of exactly
+// 32 bytes (no non-zero trailing bits). The server checks the shape only; the
+// client refuses any other spelling before it is sent.
+func canonicalBootstrap(value string) bool {
+	if !bootstrapPattern.MatchString(value) {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimPrefix(value, BootstrapPrefix))
+	return err == nil && len(raw) == 32
+}
+
 // read returns the subject token and its subject_token_type. It is read for
 // every exchange and never kept: a rotated file is used at once.
 func (s Subject) read() (string, string, error) {
@@ -359,7 +371,7 @@ func (s Subject) read() (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		if !bootstrapPattern.MatchString(value) {
+		if !canonicalBootstrap(value) {
 			return "", "", fmt.Errorf("%w (shape)", ErrSubjectUnreadable)
 		}
 		return value, TokenTypeWorkloadBootstrap, nil
@@ -369,8 +381,10 @@ func (s Subject) read() (string, string, error) {
 }
 
 // readSubjectFile reads a secret file (a symlink is followed: secret mounts
-// use them): a regular file that group and other cannot write, holding 1 to
-// maxBytes bytes and at most one trailing newline.
+// use them): a regular file that no other user can change (group and other
+// cannot write it, and it is owned by this process or root unless it is on a
+// read-only mount), holding 1 to maxBytes bytes and at most one trailing
+// newline.
 func readSubjectFile(path string, maxBytes int) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -385,6 +399,13 @@ func readSubjectFile(path string, maxBytes int) (string, error) {
 	// credential. Read bits are allowed (secret mounts are 0444).
 	if info.Mode().Perm()&0o022 != 0 {
 		return "", fmt.Errorf("%w (writable by group or other)", ErrSubjectUnreadable)
+	}
+	// Its owner can write it whatever the mode says. A Compose or Docker secret
+	// is a read-only bind mount that keeps the host file's owner, and a
+	// Kubernetes projected volume is read-only: through such a mount nobody
+	// can change the file, so any owner is accepted there.
+	if uid, known := ownerOf(info); (!known || (int(uid) != processUID() && uid != 0)) && !onReadOnlyMount(file) {
+		return "", fmt.Errorf("%w (owned by another user on a writable mount)", ErrSubjectUnreadable)
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+2))
 	if err != nil {
