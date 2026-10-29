@@ -40,6 +40,13 @@ type entry struct {
 	usableUntil time.Time
 }
 
+// usableAt is the token window at one clock reading: the strictest legal
+// verifier's rule (now >= nbf, now < exp) less the safety margin. Every token
+// Token returns passes it at the reading taken when it is returned.
+func (e *entry) usableAt(now time.Time) bool {
+	return e != nil && !now.Before(e.notBefore) && now.Before(e.usableUntil)
+}
+
 type slot struct {
 	entry    *entry
 	flight   chan struct{}
@@ -143,7 +150,7 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 			c.slots[key] = s
 		}
 		now := c.now()
-		if s.entry != nil && (!now.Before(s.entry.usableUntil) || now.Before(s.entry.notBefore)) {
+		if s.entry != nil && !s.entry.usableAt(now) {
 			s.entry = nil
 		}
 		if s.entry != nil && now.Before(s.entry.refreshAt) {
@@ -187,6 +194,9 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 		c.mu.Lock()
 		s.flight = nil
 		close(flight)
+		if exchangeErr == nil && !fresh.usableAt(c.now()) {
+			exchangeErr = unavailable("token outside its usable window when returned")
+		}
 		if exchangeErr == nil {
 			s.entry, s.failures, s.retryAt, s.lastErr = fresh, 0, time.Time{}, nil
 			c.mu.Unlock()
@@ -195,7 +205,7 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 		s.failures++
 		s.lastErr = exchangeErr
 		s.retryAt = c.now().Add(c.backoff(s.failures))
-		if s.entry != nil && c.now().Before(s.entry.usableUntil) {
+		if s.entry.usableAt(c.now()) {
 			token := s.entry.token
 			c.mu.Unlock()
 			return token, nil

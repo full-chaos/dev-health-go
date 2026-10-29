@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -71,7 +72,7 @@ func (c *Client) exchange(ctx context.Context, audience string, actions []string
 	if lifetime <= c.margin {
 		return nil, unavailable("lifetime inside the safety margin")
 	}
-	notBefore, expires, err := tokenDates(token)
+	notBefore, expires, err := tokenClaims(token, audience)
 	if err != nil {
 		return nil, err
 	}
@@ -91,32 +92,63 @@ func (c *Client) exchange(ctx context.Context, audience string, actions []string
 	if refreshAt.After(usableUntil) {
 		refreshAt = usableUntil
 	}
-	if !c.now().Before(usableUntil) {
-		return nil, unavailable("answer arrived past its usable window")
+	fresh := &entry{token: token, notBefore: notBefore, refreshAt: refreshAt, usableUntil: usableUntil}
+	if !fresh.usableAt(c.now()) {
+		return nil, unavailable("answer arrived outside its usable window")
 	}
-	return &entry{token: token, notBefore: notBefore, refreshAt: refreshAt, usableUntil: usableUntil}, nil
+	return fresh, nil
 }
 
-// tokenDates reads nbf and exp of a workload token's payload (no signature
-// check: the client is not the verifier) and checks the workload-token.v1
-// date contract: integer NumericDates, iat <= nbf < exp, exp - iat <= 300.
-func tokenDates(token string) (time.Time, time.Time, error) {
+// The workload-token.v1 claim shapes its verifier enforces (authverify
+// workload_token.go and accesstoken_wire.go); the client checks every one it
+// can know before it caches or sends a token. The iss VALUE is the verifier's
+// configuration, so only its shape is checked here.
+var (
+	claimMembers   = []string{"iss", "aud", "sub", "principal_type", "jti", "iat", "nbf", "exp"}
+	issuerShape    = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$`)
+	subjectShape   = regexp.MustCompile(`^prn_[A-Za-z0-9_-]+$`)
+	tokenIDShape   = regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`)
+	errClaimsShape = unavailable("token claims break the workload-token contract")
+)
+
+// tokenClaims reads the payload of a workload token (no signature check: the
+// client is not the verifier) and checks it as the verifier will: exactly the
+// workload-token.v1 claims, each once; aud the requested audience (one string);
+// principal_type workload; iss, sub and jti in their shapes; integer
+// NumericDates with iat <= nbf < exp and exp - iat <= 300. It returns nbf and
+// exp.
+func tokenClaims(token, audience string) (time.Time, time.Time, error) {
 	parts := strings.Split(token, ".")
 	payload, err := base64.RawURLEncoding.Strict().DecodeString(parts[1])
 	if err != nil {
 		return time.Time{}, time.Time{}, unavailable("token payload is not base64url")
 	}
-	var members map[string]json.RawMessage
-	if json.Unmarshal(payload, &members) != nil || members == nil {
-		return time.Time{}, time.Time{}, unavailable("token payload is not a JSON object")
+	members, ok := uniqueObject(payload)
+	if !ok || len(members) != len(claimMembers) {
+		return time.Time{}, time.Time{}, errClaimsShape
+	}
+	for _, name := range claimMembers {
+		if _, ok := members[name]; !ok {
+			return time.Time{}, time.Time{}, errClaimsShape
+		}
+	}
+	text := func(name string, shape *regexp.Regexp, want string) bool {
+		var value string
+		if json.Unmarshal(members[name], &value) != nil {
+			return false
+		}
+		if shape != nil {
+			return shape.MatchString(value)
+		}
+		return value == want
+	}
+	if !text("aud", nil, audience) || !text("principal_type", nil, "workload") || !text("iss", issuerShape, "") ||
+		!text("sub", subjectShape, "") || !text("jti", tokenIDShape, "") {
+		return time.Time{}, time.Time{}, errClaimsShape
 	}
 	var dates [3]int64
 	for i, name := range []string{"iat", "nbf", "exp"} {
-		raw, ok := members[name]
-		if !ok {
-			return time.Time{}, time.Time{}, unavailable("token lacks " + name)
-		}
-		value, err := strconv.ParseInt(string(bytes.TrimSpace(raw)), 10, 64)
+		value, err := strconv.ParseInt(string(bytes.TrimSpace(members[name])), 10, 64)
 		if err != nil {
 			return time.Time{}, time.Time{}, unavailable("token " + name + " is not an integer")
 		}
@@ -127,6 +159,37 @@ func tokenDates(token string) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, unavailable("token dates break the workload-token contract")
 	}
 	return time.Unix(nbf, 0), time.Unix(exp, 0), nil
+}
+
+// uniqueObject decodes a JSON object whose member names are all distinct.
+func uniqueObject(raw []byte) (map[string]json.RawMessage, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if open, err := decoder.Token(); err != nil || open != json.Delim('{') {
+		return nil, false
+	}
+	members := map[string]json.RawMessage{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		name, isName := key.(string)
+		if err != nil || !isName {
+			return nil, false
+		}
+		if _, seen := members[name]; seen {
+			return nil, false
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, false
+		}
+		members[name] = value
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
+		return nil, false
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return members, true
 }
 
 func unavailable(class string) error {

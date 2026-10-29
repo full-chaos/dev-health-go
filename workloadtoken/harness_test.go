@@ -107,19 +107,27 @@ func mustKey() (ed25519.PublicKey, ed25519.PrivateKey) {
 
 // signToken signs a workload-token.v1 token for testAudience with jti n and the given dates.
 func signToken(n int, iat, nbf, exp int64) string {
+	return signTokenFor(testAudience, n, iat, nbf, exp)
+}
+
+// signTokenFor is signToken for another audience.
+func signTokenFor(audience string, n int, iat, nbf, exp int64) string {
 	enc := base64.RawURLEncoding
 	header := `{"alg":"EdDSA","typ":"workload+jwt","kid":"test-key"}`
 	payload := fmt.Sprintf(`{"iss":%q,"aud":%q,"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","principal_type":"workload","jti":"%024d","iat":%d,"nbf":%d,"exp":%d}`,
-		testIssuerURL, testAudience, n, iat, nbf, exp)
+		testIssuerURL, audience, n, iat, nbf, exp)
 	input := enc.EncodeToString([]byte(header)) + "." + enc.EncodeToString([]byte(payload))
 	return input + "." + enc.EncodeToString(ed25519.Sign(testIssuerPrivate, []byte(input)))
 }
 
 // mintToken signs token n issued now (on the clock of the caller: the bubble clock inside synctest) for lifetime
 // seconds, and records it as tokenN(n).
-func mintToken(n int, lifetime int) string {
+func mintToken(n int, lifetime int) string { return mintTokenFor(testAudience, n, lifetime) }
+
+// mintTokenFor is mintToken for another audience.
+func mintTokenFor(audience string, n int, lifetime int) string {
 	now := time.Now().Unix()
-	token := signToken(n, now, now, now+int64(lifetime))
+	token := signTokenFor(audience, n, now, now, now+int64(lifetime))
 	mintedMu.Lock()
 	minted[n] = token
 	mintedMu.Unlock()
@@ -158,10 +166,14 @@ func issued(token string, expiresIn int) *http.Response {
 	return jsonResponse(http.StatusOK, string(body))
 }
 
-// issueEach answers call n with a token minted now for the given lifetime (recorded as tokenN(n)).
+// issueEach answers call n with a token minted now, for the audience asked, for the given lifetime (recorded as tokenN(n)).
 func issueEach(expiresIn int) func(int, url.Values) (*http.Response, error) {
-	return func(n int, _ url.Values) (*http.Response, error) {
-		return issued(mintToken(n, expiresIn), expiresIn), nil
+	return func(n int, form url.Values) (*http.Response, error) {
+		audience := form.Get("audience")
+		if audience == "" {
+			audience = testAudience
+		}
+		return issued(mintTokenFor(audience, n, expiresIn), expiresIn), nil
 	}
 }
 
