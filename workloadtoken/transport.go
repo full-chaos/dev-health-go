@@ -1,7 +1,12 @@
 package workloadtoken
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 )
 
 // RoundTripper returns a transport that sends requests for target (the
@@ -27,7 +32,7 @@ func (c *Client) RoundTripper(next http.RoundTripper, target, audience string, s
 	if _, _, err := requestKey(audience, scope); err != nil {
 		return nil, err
 	}
-	return &bearerTransport{client: c, next: next, origin: origin(base), audience: audience, scope: scope}, nil
+	return &bearerTransport{client: c, next: next, origin: origin(base), audience: audience, scope: slices.Clone(scope)}, nil
 }
 
 type bearerTransport struct {
@@ -39,7 +44,7 @@ type bearerTransport struct {
 }
 
 func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL == nil || req.Response != nil || origin(req.URL) != t.origin {
+	if !t.forTarget(req) {
 		closeBody(req)
 		return nil, ErrRequestRefused
 	}
@@ -53,7 +58,50 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		authorized.Header = http.Header{}
 	}
 	authorized.Header.Set("Authorization", "Bearer "+token)
-	return t.next.RoundTrip(authorized)
+	resp, err := t.next.RoundTrip(authorized)
+	if err != nil {
+		return nil, resourceError(err)
+	}
+	// The response hands back the caller's request, not the copy that
+	// carried the token.
+	if resp != nil && resp.Request == authorized {
+		resp.Request = req
+	}
+	return resp, nil
+}
+
+// forTarget reports whether req goes to the target and only there: its URL
+// origin and its Host (the authority sent) are the target's, and it is not a
+// redirect hop, an opaque request target or a URL with user info.
+func (t *bearerTransport) forTarget(req *http.Request) bool {
+	u := req.URL
+	if u == nil || req.Response != nil || u.Opaque != "" || u.User != nil || u.Host == "" || origin(u) != t.origin {
+		return false
+	}
+	return req.Host == "" || origin(&url.URL{Scheme: u.Scheme, Host: req.Host}) == t.origin
+}
+
+// errResourceTimeout keeps a transport timeout visible as a net.Error-style
+// Timeout without the failure's text.
+type errResourceTimeout struct{}
+
+func (errResourceTimeout) Error() string { return "timeout" }
+func (errResourceTimeout) Timeout() bool { return true }
+
+// resourceError drops the text of a failure behind the token transport (a
+// transport may quote the request's Authorization header); only context
+// cancellation, a deadline or a timeout stays visible.
+func resourceError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("%w: %w", ErrResourceTransport, context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", ErrResourceTransport, context.DeadlineExceeded)
+	case isTimeout(err):
+		return fmt.Errorf("%w: %w", ErrResourceTransport, errResourceTimeout{})
+	default:
+		return ErrResourceTransport
+	}
 }
 
 func closeBody(req *http.Request) {

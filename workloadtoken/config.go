@@ -43,8 +43,11 @@ const (
 	ExchangePath           = "/internal/v1/token/exchange"
 	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
 	TokenTypeJWT           = "urn:ietf:params:oauth:token-type:jwt"
-	// MaxLifetime is the workload-token.v1 lifetime ceiling; a longer
-	// expires_in is not a workload token answer.
+	// MaxLifetime is the workload-token.v1 lifetime ceiling: auth-service
+	// caps every issued token at it and authverify's WorkloadVerifier refuses
+	// a longer one, so a longer expires_in is not a workload token answer.
+	// (authverify.WorkloadAccessTokenLifetime, 10 minutes, belongs to the
+	// older acr-hosted exchange mechanism, not to this exchange.)
 	MaxLifetime = 300 * time.Second
 )
 
