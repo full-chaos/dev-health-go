@@ -122,3 +122,15 @@ func make65() []string {
 	}
 	return out
 }
+
+// A dependency may replace http.DefaultTransport with a RoundTripper of its own; it is still the process default (and may
+// still honour the environment proxy), so it is refused by identity, not only as an *http.Transport.
+func TestNewRefusesAReplacedDefaultTransport(t *testing.T) {
+	replaced := &fakeExchange{answer: issueEach(300)}
+	previous := http.DefaultTransport
+	http.DefaultTransport = replaced
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	if _, err := New(Config{ExchangeURL: testBase, Subject: KubernetesTokenFile(writeSubject(t, testSubject)), Transport: replaced}); err == nil {
+		t.Fatal("New accepted the replaced http.DefaultTransport")
+	}
+}
