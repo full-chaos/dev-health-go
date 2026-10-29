@@ -74,6 +74,9 @@ func (c *Client) exchange(ctx context.Context, audience string, actions []string
 	if refreshAt.After(usableUntil) {
 		refreshAt = usableUntil
 	}
+	if !c.now().Before(usableUntil) {
+		return nil, unavailable("answer arrived past its usable window")
+	}
 	return &entry{token: token, refreshAt: refreshAt, usableUntil: usableUntil}, nil
 }
 

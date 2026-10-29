@@ -20,6 +20,9 @@ var (
 	// failure or timeout, a 503 or any other status, or an answer that does
 	// not have the token-exchange shape.
 	ErrExchangeUnavailable = errors.New("workloadtoken: the exchange is unavailable")
+	// ErrRequestRefused is a request the token transport will not send: not
+	// for its target origin, a redirect hop, or without a URL.
+	ErrRequestRefused = errors.New("workloadtoken: the request is not for the token's target")
 	// ErrSubjectUnreadable is a subject token file that is missing, not a
 	// regular file, empty, too large or not a compact JWS.
 	ErrSubjectUnreadable = errors.New("workloadtoken: the subject token could not be read")

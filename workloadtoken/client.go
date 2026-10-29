@@ -16,6 +16,7 @@ import (
 // one token per (audience, scope). It is safe for concurrent use.
 type Client struct {
 	endpoint        string
+	allowPlainHTTP  bool
 	subject         Subject
 	http            *http.Client
 	timeout         time.Duration
@@ -58,7 +59,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{
-		endpoint: endpoint.String(), subject: cfg.Subject, timeout: cfg.Timeout, refreshFraction: cfg.RefreshFraction,
+		endpoint: endpoint.String(), allowPlainHTTP: cfg.AllowPlainHTTP, subject: cfg.Subject, timeout: cfg.Timeout, refreshFraction: cfg.RefreshFraction,
 		margin: cfg.SafetyMargin, backoffFloor: cfg.BackoffFloor, backoffCeiling: cfg.BackoffCeiling, now: cfg.Now,
 		slots: map[string]*slot{},
 	}

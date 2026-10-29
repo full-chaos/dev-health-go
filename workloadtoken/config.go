@@ -31,8 +31,10 @@ package workloadtoken
 import (
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -135,21 +137,41 @@ func CheckTransport(rt http.RoundTripper) error {
 }
 
 func endpointFor(raw string, allowPlainHTTP bool) (*url.URL, error) {
+	base, err := baseURL(raw, allowPlainHTTP)
+	if err != nil {
+		return nil, err
+	}
+	return &url.URL{Scheme: base.Scheme, Host: base.Host, Path: ExchangePath}, nil
+}
+
+// baseURL checks a URL that may hold only a scheme (https, or http with
+// allowPlainHTTP), a host and a port.
+func baseURL(raw string, allowPlainHTTP bool) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "" {
-		return nil, errors.New("workloadtoken: the exchange URL must be an absolute URL with a host")
+		return nil, errors.New("workloadtoken: the URL must be an absolute URL with a host")
 	}
 	switch u.Scheme {
 	case "https":
 	case "http":
 		if !allowPlainHTTP {
-			return nil, errors.New("workloadtoken: an http exchange URL needs AllowPlainHTTP")
+			return nil, errors.New("workloadtoken: an http URL needs AllowPlainHTTP")
 		}
 	default:
-		return nil, errors.New("workloadtoken: the exchange URL scheme must be https or http")
+		return nil, errors.New("workloadtoken: the URL scheme must be https or http")
 	}
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, errors.New("workloadtoken: the exchange URL must hold only a scheme, a host and a port")
+		return nil, errors.New("workloadtoken: the URL must hold only a scheme, a host and a port")
 	}
-	return &url.URL{Scheme: u.Scheme, Host: u.Host, Path: ExchangePath}, nil
+	return u, nil
+}
+
+// origin is the canonical scheme://host:port of u: the host in lower case
+// and the scheme's default port made explicit.
+func origin(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+	}
+	return u.Scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 }
