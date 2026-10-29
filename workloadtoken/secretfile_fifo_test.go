@@ -52,3 +52,40 @@ func TestAFIFOSubjectPathNeverBlocks(t *testing.T) {
 		})
 	}
 }
+
+// TestAFIFOHoldingAValidSubjectIsRefused: a FIFO whose writer already put a valid subject in it is still not a regular
+// file and is refused (a stream is not a secret file).
+func TestAFIFOHoldingAValidSubjectIsRefused(t *testing.T) {
+	for _, kind := range []string{"kubernetes", "bootstrap"} {
+		t.Run(kind, func(t *testing.T) {
+			fifo := filepath.Join(t.TempDir(), "subject")
+			if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+				t.Skipf("mkfifo: %v", err)
+			}
+			holder, err := os.OpenFile(fifo, os.O_RDWR, 0)
+			if err != nil {
+				t.Skipf("open the FIFO read-write: %v", err)
+			}
+			defer holder.Close()
+			value := testSubject
+			if kind == "bootstrap" {
+				value = testBootstrap
+			}
+			if _, err := holder.WriteString(value); err != nil {
+				t.Fatal(err)
+			}
+			exchange := &fakeExchange{answer: issueEach(300)}
+			var c *Client
+			if kind == "kubernetes" {
+				c = newTestClient(t, exchange, fifo)
+			} else {
+				c = newBootstrapClient(t, exchange, fifo)
+			}
+			_, err = c.Token(context.Background(), testAudience)
+			mustNoUsable(t, err, ErrSubjectUnreadable)
+			if exchange.count() != 0 {
+				t.Fatal("a value from a FIFO reached the exchange")
+			}
+		})
+	}
+}
