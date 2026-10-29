@@ -2,7 +2,6 @@ package workloadtoken
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -78,56 +77,68 @@ func TestOneExchangeServesEveryCallBeforeTheRefreshPoint(t *testing.T) {
 	})
 }
 
-// skewedIssue answers with a token whose exp claim is stamped by an issuer
-// clock skew away from the client's, and expires_in from that clock.
+// skewedIssue answers with a token whose dates are stamped by an issuer clock skew away from the client's.
 func skewedIssue(skew time.Duration, expiresIn int) func(int, url.Values) (*http.Response, error) {
 	return func(n int, _ url.Values) (*http.Response, error) {
-		issuerNow := time.Now().Add(skew)
-		payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"jti":"t%d","iat":%d,"exp":%d}`,
-			n, issuerNow.Unix(), issuerNow.Add(time.Duration(expiresIn)*time.Second).Unix())))
-		return issued("eyJhbGciOiJFZERTQSJ9."+payload+".c2ln", expiresIn), nil
+		issuerNow := time.Now().Add(skew).Unix()
+		return issued(signToken(n, issuerNow, issuerNow, issuerNow+int64(expiresIn)), expiresIn), nil
 	}
 }
 
-func TestTheRefreshPointDependsOnlyOnExpiresInUnderClockSkew(t *testing.T) {
-	for _, skew := range []time.Duration{-10 * time.Minute, -30 * time.Second, 30 * time.Second, 10 * time.Minute} {
-		for _, tc := range []struct {
-			expiresIn             int
-			refreshAt, usableTill time.Duration
-		}{
-			{300, 150 * time.Second, 270 * time.Second},
-			{100, 50 * time.Second, 70 * time.Second},
-			{80, 40 * time.Second, 50 * time.Second},
-		} {
-			t.Run(fmt.Sprintf("skew %v expires_in %d", skew, tc.expiresIn), func(t *testing.T) {
-				synctest.Test(t, func(t *testing.T) {
-					exchange := &fakeExchange{answer: skewedIssue(skew, tc.expiresIn)}
-					c := newTestClient(t, exchange, writeSubject(t, testSubject))
-					start := time.Now()
-					first, err := c.Token(context.Background(), testAudience)
-					if err != nil {
-						t.Fatal(err)
-					}
-					sleepUntil(start, tc.refreshAt-time.Millisecond)
-					if token, _ := c.Token(context.Background(), testAudience); token != first || exchange.count() != 1 {
-						t.Fatalf("an exchange before %v (count %d)", tc.refreshAt, exchange.count())
-					}
-					exchange.set(outage)
+// TestTheWindowUnderIssuerClockSkew: the window is [nbf, min(exp, sent + expires_in) - 30 s) on the client's clock. An
+// issuer clock ahead puts nbf in the future: the token is refused at once. An issuer clock behind moves exp earlier: the
+// window ends earlier, or the token is already unusable.
+func TestTheWindowUnderIssuerClockSkew(t *testing.T) {
+	const refused = -1
+	for _, tc := range []struct {
+		skew                  time.Duration
+		expiresIn             int
+		refreshAt, usableTill time.Duration
+	}{
+		{0, 300, 150 * time.Second, 270 * time.Second},
+		{0, 100, 50 * time.Second, 70 * time.Second},
+		{0, 80, 40 * time.Second, 50 * time.Second},
+		{-30 * time.Second, 300, 150 * time.Second, 240 * time.Second},
+		{-30 * time.Second, 100, 40 * time.Second, 40 * time.Second},
+		{-10 * time.Minute, 300, refused, refused},
+		{time.Second, 300, refused, refused},
+		{30 * time.Second, 300, refused, refused},
+		{10 * time.Minute, 300, refused, refused},
+	} {
+		t.Run(fmt.Sprintf("skew %v expires_in %d", tc.skew, tc.expiresIn), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				exchange := &fakeExchange{answer: skewedIssue(tc.skew, tc.expiresIn)}
+				c := newTestClient(t, exchange, writeSubject(t, testSubject))
+				start := time.Now()
+				first, err := c.Token(context.Background(), testAudience)
+				if tc.usableTill == refused {
+					mustNoUsable(t, err, ErrExchangeUnavailable)
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				sleepUntil(start, tc.refreshAt-time.Millisecond)
+				if token, _ := c.Token(context.Background(), testAudience); token != first || exchange.count() != 1 {
+					t.Fatalf("an exchange before %v (count %d)", tc.refreshAt, exchange.count())
+				}
+				exchange.set(outage)
+				if tc.refreshAt < tc.usableTill {
 					sleepUntil(start, tc.refreshAt)
 					if token, err := c.Token(context.Background(), testAudience); err != nil || token != first || exchange.count() != 2 {
 						t.Fatalf("at %v: token changed %v err %v count %d, want one failed re-exchange and the cached token",
 							tc.refreshAt, token != first, err, exchange.count())
 					}
-					sleepUntil(start, tc.usableTill-time.Millisecond)
-					if token, err := c.Token(context.Background(), testAudience); err != nil || token != first {
-						t.Fatalf("just before %v the cached token is still usable: err %v", tc.usableTill, err)
-					}
-					sleepUntil(start, tc.usableTill)
-					_, err = c.Token(context.Background(), testAudience)
-					mustNoUsable(t, err, nil)
-				})
+				}
+				sleepUntil(start, tc.usableTill-time.Millisecond)
+				if token, err := c.Token(context.Background(), testAudience); err != nil || token != first {
+					t.Fatalf("just before %v the cached token is still usable: err %v", tc.usableTill, err)
+				}
+				sleepUntil(start, tc.usableTill)
+				_, err = c.Token(context.Background(), testAudience)
+				mustNoUsable(t, err, nil)
 			})
-		}
+		})
 	}
 }
 
@@ -156,7 +167,7 @@ func runOutage(t *testing.T, failing func(int, url.Values) (*http.Response, erro
 	exchange := &fakeExchange{answer: issueEach(300)}
 	c := newTestClient(t, exchange, writeSubject(t, testSubject), func(cfg *Config) { cfg.Timeout = 10 * time.Millisecond })
 	api := &resource{}
-	rt, err := c.RoundTripper(api, testTarget, testAudience)
+	rt, err := c.Transport(api, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +209,7 @@ func runOutage(t *testing.T, failing func(int, url.Values) (*http.Response, erro
 		}
 	}
 	exchange.mu.Lock()
-	exchange.answer, exchange.hold = func(int, url.Values) (*http.Response, error) { return issued(tokenN(99), 300), nil }, nil
+	exchange.answer, exchange.hold = func(int, url.Values) (*http.Response, error) { return issued(mintToken(99, 300), 300), nil }, nil
 	exchange.mu.Unlock()
 	time.Sleep(DefaultBackoffCeiling)
 	if err := get(t, rt); err != nil {
@@ -221,7 +232,7 @@ func TestAnExchangeRefusalSendsNothing(t *testing.T) {
 			exchange := &fakeExchange{answer: func(int, url.Values) (*http.Response, error) { return jsonResponse(400, tc.body), nil }}
 			c := newTestClient(t, exchange, writeSubject(t, testSubject))
 			api := &resource{}
-			rt, err := c.RoundTripper(api, testTarget, testAudience)
+			rt, err := c.Transport(api, testTarget, testAudience)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -314,7 +325,7 @@ func TestTheRoundTripperSetsTheHeaderOnACopy(t *testing.T) {
 	exchange := &fakeExchange{answer: issueEach(300)}
 	c := newTestClient(t, exchange, writeSubject(t, testSubject))
 	api := &resource{}
-	rt, err := c.RoundTripper(api, testTarget, testAudience)
+	rt, err := c.Transport(api, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}

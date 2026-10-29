@@ -17,7 +17,7 @@ func answerWith(status int, contentType, body string) func(int, url.Values) (*ht
 }
 
 func TestTheAnswerIsCheckedBeforeATokenIsCached(t *testing.T) {
-	good := tokenN(7)
+	good := mintToken(7, 300)
 	const jt = `"issued_token_type":"urn:ietf:params:oauth:token-type:jwt"`
 	accept := map[string]string{
 		"canonical":       `{"access_token":"` + good + `",` + jt + `,"token_type":"Bearer","expires_in":300}`,
@@ -116,7 +116,7 @@ func TestARedirectIsNeverFollowed(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusTemporaryRedirect, Header: http.Header{"Location": {"https://elsewhere.test/collect"}},
 				Body: io.NopCloser(strings.NewReader(""))}, nil
 		}
-		return issued(tokenN(n), 300), nil
+		return issued(mintToken(n, 300), 300), nil
 	}}
 	c := newTestClient(t, exchange, writeSubject(t, testSubject))
 	_, err := c.Token(context.Background(), testAudience)

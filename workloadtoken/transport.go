@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// RoundTripper returns a transport that sends requests for target (the
+// Transport returns a transport that sends requests for target (the
 // resource service's base URL: scheme, host and port) through next with
 // Authorization: Bearer <workload token for audience and scope>.
 //
@@ -22,7 +22,7 @@ import (
 // request leaves without the header, with an old token or with any other
 // credential. next follows the same explicit-transport rule as
 // Config.Transport; an http target needs the client's AllowPlainHTTP.
-func (c *Client) RoundTripper(next http.RoundTripper, target, audience string, scope ...string) (http.RoundTripper, error) {
+func (c *Client) Transport(next http.RoundTripper, target, audience string, scope ...string) (http.RoundTripper, error) {
 	if !c.ready() {
 		return nil, errNotConfigured
 	}
@@ -124,4 +124,9 @@ func closeBody(req *http.Request) {
 	if req.Body != nil {
 		_ = req.Body.Close()
 	}
+}
+
+// HTTPClient is not built yet.
+func (c *Client) HTTPClient(next http.RoundTripper, target, audience string, scope ...string) (*http.Client, error) {
+	return nil, errNotConfigured
 }

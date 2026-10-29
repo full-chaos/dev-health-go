@@ -25,7 +25,7 @@ func TestNoResponseCarriesTheTokenInItsRequest(t *testing.T) {
 	for name, next := range map[string]http.RoundTripper{"same pointer": headerEcho{}, "clone": cloneEcho{}, "no request": &hostResource{}} {
 		t.Run(name, func(t *testing.T) {
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
-			rt, err := c.RoundTripper(next, testTarget, testAudience)
+			rt, err := c.Transport(next, testTarget, testAudience)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestTypedNilTransportsAreRefusedWithoutAPanic(t *testing.T) {
 				t.Fatal("New accepted it")
 			}
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)
-			if _, err := c.RoundTripper(rt, testTarget, testAudience); err == nil {
+			if _, err := c.Transport(rt, testTarget, testAudience); err == nil {
 				t.Fatal("RoundTripper accepted it")
 			}
 		})
@@ -87,9 +87,9 @@ func TestNilAndZeroValuesNeverPanic(t *testing.T) {
 	var nilCtx context.Context
 	checks := map[string]func() error{
 		"nil client Token":         func() error { _, err := nilClient.Token(context.Background(), testAudience); return err },
-		"nil client RoundTripper":  func() error { _, err := nilClient.RoundTripper(&hostResource{}, testTarget, testAudience); return err },
+		"nil client RoundTripper":  func() error { _, err := nilClient.Transport(&hostResource{}, testTarget, testAudience); return err },
 		"zero client Token":        func() error { _, err := zeroClient.Token(context.Background(), testAudience); return err },
-		"zero client RoundTripper": func() error { _, err := zeroClient.RoundTripper(&hostResource{}, testTarget, testAudience); return err },
+		"zero client RoundTripper": func() error { _, err := zeroClient.Transport(&hostResource{}, testTarget, testAudience); return err },
 		"nil context": func() error {
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)
 			_, err := c.Token(nilCtx, testAudience)
@@ -97,7 +97,7 @@ func TestNilAndZeroValuesNeverPanic(t *testing.T) {
 		},
 		"nil request": func() error {
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)
-			rt, err := c.RoundTripper(&hostResource{}, testTarget, testAudience)
+			rt, err := c.Transport(&hostResource{}, testTarget, testAudience)
 			if err != nil {
 				return nil
 			}
@@ -106,7 +106,7 @@ func TestNilAndZeroValuesNeverPanic(t *testing.T) {
 		},
 		"next answers nil, nil": func() error {
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)
-			rt, err := c.RoundTripper(roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, nil }), testTarget, testAudience)
+			rt, err := c.Transport(roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, nil }), testTarget, testAudience)
 			if err != nil {
 				return nil
 			}

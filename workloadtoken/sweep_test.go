@@ -16,7 +16,7 @@ func TestTheTargetCheckCoversEveryDestinationField(t *testing.T) {
 	exchange := &fakeExchange{answer: issueEach(300)}
 	c := newTestClient(t, exchange, writeSubject(t, testSubject))
 	api := &hostResource{}
-	rt, err := c.RoundTripper(api, testTarget, testAudience)
+	rt, err := c.Transport(api, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestAResourceTransportErrorNeverCarriesTheToken(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
-			rt, err := c.RoundTripper(echoTransport{cause: cause}, testTarget, testAudience)
+			rt, err := c.Transport(echoTransport{cause: cause}, testTarget, testAudience)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -111,7 +111,7 @@ func TestTheTransportPinsItsScope(t *testing.T) {
 	exchange := &fakeExchange{answer: issueEach(300)}
 	c := newTestClient(t, exchange, writeSubject(t, testSubject))
 	scope := []string{"read"}
-	rt, err := c.RoundTripper(&hostResource{}, testTarget, testAudience, scope...)
+	rt, err := c.Transport(&hostResource{}, testTarget, testAudience, scope...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func (headerEcho) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestTheResponseDoesNotCarryTheAuthorizedRequest(t *testing.T) {
 	c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
-	rt, err := c.RoundTripper(headerEcho{}, testTarget, testAudience)
+	rt, err := c.Transport(headerEcho{}, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}

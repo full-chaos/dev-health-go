@@ -2,6 +2,8 @@ package workloadtoken
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 const (
@@ -83,10 +87,61 @@ func (f *fakeExchange) set(answer func(n int, form url.Values) (*http.Response, 
 	f.mu.Unlock()
 }
 
-// tokenN is a compact JWS whose payload names n, so each issued token differs.
+// testIssuer signs the test workload tokens; testVerifier is the strictest legal verifier of them (leeway 0), the oracle
+// for "a token the client sends is one the verifier accepts".
+const testIssuerURL = "https://auth-service.test"
+
+var (
+	testIssuerPublic, testIssuerPrivate = mustKey()
+	mintedMu                            sync.Mutex
+	minted                              = map[int]string{}
+)
+
+func mustKey() (ed25519.PublicKey, ed25519.PrivateKey) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return pub, priv
+}
+
+// signToken signs a workload-token.v1 token for testAudience with jti n and the given dates.
+func signToken(n int, iat, nbf, exp int64) string {
+	enc := base64.RawURLEncoding
+	header := `{"alg":"EdDSA","typ":"workload+jwt","kid":"test-key"}`
+	payload := fmt.Sprintf(`{"iss":%q,"aud":%q,"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","principal_type":"workload","jti":"%024d","iat":%d,"nbf":%d,"exp":%d}`,
+		testIssuerURL, testAudience, n, iat, nbf, exp)
+	input := enc.EncodeToString([]byte(header)) + "." + enc.EncodeToString([]byte(payload))
+	return input + "." + enc.EncodeToString(ed25519.Sign(testIssuerPrivate, []byte(input)))
+}
+
+// mintToken signs token n issued now (on the clock of the caller: the bubble clock inside synctest) for lifetime
+// seconds, and records it as tokenN(n).
+func mintToken(n int, lifetime int) string {
+	now := time.Now().Unix()
+	token := signToken(n, now, now, now+int64(lifetime))
+	mintedMu.Lock()
+	minted[n] = token
+	mintedMu.Unlock()
+	return token
+}
+
+// tokenN is the token last minted with jti n.
 func tokenN(n int) string {
-	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"jti":"t%d"}`, n)))
-	return "eyJhbGciOiJFZERTQSJ9." + payload + ".c2lnbmF0dXJl"
+	mintedMu.Lock()
+	defer mintedMu.Unlock()
+	return minted[n]
+}
+
+func testVerifier(t *testing.T) *authverify.WorkloadVerifier {
+	t.Helper()
+	v, err := authverify.NewWorkloadVerifier(authverify.WorkloadVerifierConfig{
+		Issuer: testIssuerURL, Audience: testAudience, Keys: authverify.StaticKeys{"test-key": testIssuerPublic},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }
 
 func jsonResponse(status int, body string) *http.Response {
@@ -103,9 +158,11 @@ func issued(token string, expiresIn int) *http.Response {
 	return jsonResponse(http.StatusOK, string(body))
 }
 
-// issueEach answers call n with tokenN(n) and the given lifetime.
+// issueEach answers call n with a token minted now for the given lifetime (recorded as tokenN(n)).
 func issueEach(expiresIn int) func(int, url.Values) (*http.Response, error) {
-	return func(n int, _ url.Values) (*http.Response, error) { return issued(tokenN(n), expiresIn), nil }
+	return func(n int, _ url.Values) (*http.Response, error) {
+		return issued(mintToken(n, expiresIn), expiresIn), nil
+	}
 }
 
 func outage(n int, _ url.Values) (*http.Response, error) {

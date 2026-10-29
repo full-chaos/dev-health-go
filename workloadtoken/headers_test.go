@@ -40,7 +40,7 @@ func TestNoOtherCredentialHeaderLeavesWithTheToken(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
 			wire := &wireHeaders{}
-			rt, err := c.RoundTripper(wire, testTarget, testAudience)
+			rt, err := c.Transport(wire, testTarget, testAudience)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -39,7 +39,7 @@ func TestNewLogsTheExchangeSchemeAndHostOnce(t *testing.T) {
 				calls++
 				switch n {
 				case 0:
-					return issued(tokenN(0), 300), nil
+					return issued(mintToken(0, 300), 300), nil
 				case 1:
 					return jsonResponse(400, `{"error":"invalid_grant"}`), nil
 				default:

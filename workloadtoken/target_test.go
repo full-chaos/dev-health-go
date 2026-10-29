@@ -52,7 +52,7 @@ func TestTheTokenNeverFollowsARedirect(t *testing.T) {
 			t.Run(name+" "+http.StatusText(status), func(t *testing.T) {
 				c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
 				api := &hostResource{status: status, redirect: map[string]string{"api.test/v1/thing": location}}
-				rt, err := c.RoundTripper(api, testTarget, testAudience)
+				rt, err := c.Transport(api, testTarget, testAudience)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -77,7 +77,7 @@ func TestTheTokenNeverFollowsARedirect(t *testing.T) {
 func TestTheTokenIsSentOnlyToItsTarget(t *testing.T) {
 	c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
 	api := &hostResource{}
-	rt, err := c.RoundTripper(api, testTarget, testAudience)
+	rt, err := c.Transport(api, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,12 +122,12 @@ func TestTheTokenIsSentOnlyToItsTarget(t *testing.T) {
 func TestRoundTripperRefusesABadTarget(t *testing.T) {
 	c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
 	for _, target := range []string{"", "api.test", "https://api.test/v1", "https://u@api.test", "https://api.test?x=1", "https://api.test#f", "http://api.test", "ftp://api.test"} {
-		if _, err := c.RoundTripper(&hostResource{}, target, testAudience); err == nil {
+		if _, err := c.Transport(&hostResource{}, target, testAudience); err == nil {
 			t.Fatalf("target %q accepted", target)
 		}
 	}
 	plain := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject), func(cfg *Config) { cfg.AllowPlainHTTP = true })
-	if _, err := plain.RoundTripper(&hostResource{}, "http://api.test:8080", testAudience); err != nil {
+	if _, err := plain.Transport(&hostResource{}, "http://api.test:8080", testAudience); err != nil {
 		t.Fatalf("an http target with AllowPlainHTTP: %v", err)
 	}
 }
@@ -143,11 +143,11 @@ func TestAnAnswerArrivingAfterItsUsableWindowIsNotUsed(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				exchange := &fakeExchange{answer: func(n int, _ url.Values) (*http.Response, error) {
 					time.Sleep(tc.delay)
-					return issued(tokenN(n), 31), nil
+					return issued(mintToken(n, 31), 31), nil
 				}}
 				c := newTestClient(t, exchange, writeSubject(t, testSubject))
 				api := &hostResource{}
-				rt, err := c.RoundTripper(api, testTarget, testAudience)
+				rt, err := c.Transport(api, testTarget, testAudience)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -175,7 +175,7 @@ func TestAnAnswerArrivingAfterItsUsableWindowIsNotUsed(t *testing.T) {
 func TestAHeaderlessRequestGetsTheTokenWithoutAPanic(t *testing.T) {
 	c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, writeSubject(t, testSubject))
 	api := &hostResource{}
-	rt, err := c.RoundTripper(api, testTarget, testAudience)
+	rt, err := c.Transport(api, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
