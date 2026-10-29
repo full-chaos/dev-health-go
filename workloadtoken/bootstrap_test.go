@@ -115,8 +115,11 @@ func TestAnUnusableBootstrapFileIsNeverSent(t *testing.T) {
 			if exchange.count() != 0 {
 				t.Fatal("an unusable bootstrap value reached the exchange")
 			}
-			if strings.Contains(err.Error(), "AbCdEf") {
-				t.Fatalf("the error carries the value: %v", err)
+			secret := strings.TrimPrefix(testBootstrap, BootstrapPrefix)
+			for _, part := range []string{secret[:12], secret[len(secret)-12:], BootstrapPrefix} {
+				if strings.Contains(err.Error(), part) {
+					t.Fatalf("the error carries the value (%q): %v", part, err)
+				}
 			}
 		})
 	}
@@ -242,6 +245,44 @@ func TestASecretFileAnotherUserCanChangeIsRefused(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestWhereOwnersAreNotReportedTheModeRuleAlone: on a system that does not report file owners (not unix) the owner rule
+// does not apply and the mode rule alone decides, as in v0.31.0; a file is not refused only because its owner is unknown.
+func TestWhereOwnersAreNotReportedTheModeRuleAlone(t *testing.T) {
+	prevOwner, prevRO, prevReported := ownerOf, onReadOnlyMount, ownersReported
+	ownerOf = func(os.FileInfo) (uint32, bool) { return 0, false }
+	onReadOnlyMount = func(*os.File) bool { return false }
+	ownersReported = false
+	t.Cleanup(func() { ownerOf, onReadOnlyMount, ownersReported = prevOwner, prevRO, prevReported })
+	for _, kind := range []string{"kubernetes", "bootstrap"} {
+		exchange := &fakeExchange{answer: issueEach(300)}
+		var c *Client
+		if kind == "kubernetes" {
+			c = newTestClient(t, exchange, writeSubject(t, testSubject))
+		} else {
+			c = newBootstrapClient(t, exchange, writeBootstrap(t, testBootstrap, 0o444))
+		}
+		if _, err := c.Token(context.Background(), testAudience); err != nil {
+			t.Fatalf("%s: refused where owners are not reported: %v", kind, err)
+		}
+		writable := writeBootstrap(t, testBootstrap, 0o666)
+		if kind == "kubernetes" {
+			writable = writeSubject(t, testSubject)
+			if err := os.Chmod(writable, 0o666); err != nil {
+				t.Fatal(err)
+			}
+		}
+		exchange2 := &fakeExchange{answer: issueEach(300)}
+		var c2 *Client
+		if kind == "kubernetes" {
+			c2 = newTestClient(t, exchange2, writable)
+		} else {
+			c2 = newBootstrapClient(t, exchange2, writable)
+		}
+		_, err := c2.Token(context.Background(), testAudience)
+		mustNoUsable(t, err, ErrSubjectUnreadable)
 	}
 }
 
