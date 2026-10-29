@@ -110,6 +110,11 @@ func New(cfg Config) (*Client, error) {
 
 var errRedirect = errors.New("workloadtoken: redirect refused")
 
+// errNotConfigured is a nil Client or one not made by New.
+var errNotConfigured = errors.New("workloadtoken: the client was not made by New")
+
+func (c *Client) ready() bool { return c != nil && c.http != nil && c.slots != nil }
+
 // Token returns a workload token for audience and scope (an empty scope asks
 // for every action the exchange grants). It returns a cached token before its
 // refresh point; from there on it exchanges again, once for all concurrent
@@ -117,6 +122,12 @@ var errRedirect = errors.New("workloadtoken: redirect refused")
 // usable window. With no usable token it returns an error that wraps
 // ErrNoUsableToken: the caller must not send its request.
 func (c *Client) Token(ctx context.Context, audience string, scope ...string) (string, error) {
+	if !c.ready() {
+		return "", noUsable(errNotConfigured)
+	}
+	if ctx == nil {
+		return "", noUsable(errors.New("workloadtoken: a context is required"))
+	}
 	key, actions, err := requestKey(audience, scope)
 	if err != nil {
 		return "", err
@@ -195,6 +206,9 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 // Invalidate drops the cached token for audience and scope (for a caller
 // whose resource server refused the token); the next Token call exchanges.
 func (c *Client) Invalidate(audience string, scope ...string) {
+	if !c.ready() {
+		return
+	}
 	key, _, err := requestKey(audience, scope)
 	if err != nil {
 		return

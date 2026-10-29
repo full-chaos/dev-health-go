@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -127,7 +128,7 @@ type Config struct {
 // an *http.Transport with a Proxy (which would send credentials through the
 // proxy the process environment names).
 func CheckTransport(rt http.RoundTripper) error {
-	if rt == nil {
+	if rt == nil || isNilValue(rt) {
 		return errors.New("workloadtoken: a transport is required")
 	}
 	if rt == http.DefaultTransport {
@@ -177,4 +178,16 @@ func origin(u *url.URL) string {
 		port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
 	}
 	return u.Scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+}
+
+// isNilValue reports an interface that holds a nil pointer, map, func, chan
+// or slice: not nil itself, but unusable.
+func isNilValue(v any) bool {
+	value := reflect.ValueOf(v)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Func, reflect.Chan, reflect.Slice, reflect.Interface:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

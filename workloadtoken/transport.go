@@ -22,6 +22,9 @@ import (
 // credential. next follows the same explicit-transport rule as
 // Config.Transport; an http target needs the client's AllowPlainHTTP.
 func (c *Client) RoundTripper(next http.RoundTripper, target, audience string, scope ...string) (http.RoundTripper, error) {
+	if !c.ready() {
+		return nil, errNotConfigured
+	}
 	if err := CheckTransport(next); err != nil {
 		return nil, err
 	}
@@ -44,6 +47,9 @@ type bearerTransport struct {
 }
 
 func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil {
+		return nil, ErrRequestRefused
+	}
 	if !t.forTarget(req) {
 		closeBody(req)
 		return nil, ErrRequestRefused
@@ -62,11 +68,12 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, resourceError(err)
 	}
-	// The response hands back the caller's request, not the copy that
-	// carried the token.
-	if resp != nil && resp.Request == authorized {
-		resp.Request = req
+	if resp == nil {
+		return nil, ErrResourceTransport
 	}
+	// The response hands back the caller's request, never the copy that
+	// carried the token or any request the transport behind built from it.
+	resp.Request = req
 	return resp, nil
 }
 
