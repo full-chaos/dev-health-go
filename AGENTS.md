@@ -15,6 +15,7 @@ Store/contract layer ONLY:
 - `authverify/` — JWKS, k8s TokenReview, and workload-token-exchange
   verification MECHANISMS. No principal/claim shape — each consumer defines
   its own on top.
+- `workloadtoken/` — the client half of the workload-token exchange (one subject per deployment, cache, early re-exchange, fail closed, explicit transport); no audience or scope vocabulary.
 
 One amendment to "store/contract layer only" (chris, 2026-10-16, CHAOS-8719:
 "ACR will need it too, unless we plan to duplicate the llm provider code"):
