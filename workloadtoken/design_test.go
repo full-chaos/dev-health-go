@@ -328,3 +328,34 @@ func TestTheTokenDatesAreChecked(t *testing.T) {
 }
 
 func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+// TestAClockSteppedBackNeverUsesATokenBeforeItsNbf: the window is checked when Token returns, not only when the token
+// arrives; after this host's clock steps back before a cached token's nbf, that token is not used.
+func TestAClockSteppedBackNeverUsesATokenBeforeItsNbf(t *testing.T) {
+	clock := time.Unix(2_000_000_000, 0)
+	var mu sync.Mutex
+	now := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	exchange := &fakeExchange{answer: func(n int, _ url.Values) (*http.Response, error) {
+		if n > 0 {
+			return outage(n, nil)
+		}
+		at := now().Unix()
+		return issued(signToken(n, at, at, at+300), 300), nil
+	}}
+	c := newTestClient(t, exchange, writeSubject(t, testSubject), func(cfg *Config) { cfg.Now = now })
+	if _, err := c.Token(context.Background(), testAudience); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	clock = clock.Add(-5 * time.Second)
+	mu.Unlock()
+	token, err := c.Token(context.Background(), testAudience)
+	if err == nil {
+		t.Fatalf("a token was used 5 s before its nbf (the verifier refuses it): %q", token[:10])
+	}
+	mustNoUsable(t, err, nil)
+}
