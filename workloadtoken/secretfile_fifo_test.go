@@ -81,8 +81,18 @@ func TestAFIFOHoldingAValidSubjectIsRefused(t *testing.T) {
 			} else {
 				c = newBootstrapClient(t, exchange, fifo)
 			}
-			_, err = c.Token(context.Background(), testAudience)
-			mustNoUsable(t, err, ErrSubjectUnreadable)
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.Token(context.Background(), testAudience)
+				done <- err
+			}()
+			// The 30 s wait is a guard for the failure path only: a reader of the stream would wait for more data.
+			select {
+			case err := <-done:
+				mustNoUsable(t, err, ErrSubjectUnreadable)
+			case <-time.After(30 * time.Second):
+				t.Fatal("Token is reading the FIFO stream instead of refusing it")
+			}
 			if exchange.count() != 0 {
 				t.Fatal("a value from a FIFO reached the exchange")
 			}
