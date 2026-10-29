@@ -193,6 +193,11 @@ func readKubernetesToken(path string) (string, error) {
 	if err != nil || !info.Mode().IsRegular() {
 		return "", fmt.Errorf("%w (not a regular file)", ErrSubjectUnreadable)
 	}
+	// Group or other may not write it: whoever can write it can swap the
+	// credential. Read bits are allowed (secret mounts are 0444).
+	if info.Mode().Perm()&0o022 != 0 {
+		return "", fmt.Errorf("%w (writable by group or other)", ErrSubjectUnreadable)
+	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxSubjectBytes+2))
 	if err != nil {
 		return "", fmt.Errorf("%w (read)", ErrSubjectUnreadable)

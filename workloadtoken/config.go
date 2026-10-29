@@ -134,22 +134,22 @@ func CheckTransport(rt http.RoundTripper) error {
 	return nil
 }
 
-func endpointFor(raw string, allowPlainHTTP bool) (string, error) {
+func endpointFor(raw string, allowPlainHTTP bool) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "" {
-		return "", errors.New("workloadtoken: the exchange URL must be an absolute URL with a host")
+		return nil, errors.New("workloadtoken: the exchange URL must be an absolute URL with a host")
 	}
 	switch u.Scheme {
 	case "https":
 	case "http":
 		if !allowPlainHTTP {
-			return "", errors.New("workloadtoken: an http exchange URL needs AllowPlainHTTP")
+			return nil, errors.New("workloadtoken: an http exchange URL needs AllowPlainHTTP")
 		}
 	default:
-		return "", errors.New("workloadtoken: the exchange URL scheme must be https or http")
+		return nil, errors.New("workloadtoken: the exchange URL scheme must be https or http")
 	}
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return "", errors.New("workloadtoken: the exchange URL must hold only a scheme, a host and a port")
+		return nil, errors.New("workloadtoken: the exchange URL must hold only a scheme, a host and a port")
 	}
-	return u.Scheme + "://" + u.Host + ExchangePath, nil
+	return &url.URL{Scheme: u.Scheme, Host: u.Host, Path: ExchangePath}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -57,7 +58,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{
-		endpoint: endpoint, subject: cfg.Subject, timeout: cfg.Timeout, refreshFraction: cfg.RefreshFraction,
+		endpoint: endpoint.String(), subject: cfg.Subject, timeout: cfg.Timeout, refreshFraction: cfg.RefreshFraction,
 		margin: cfg.SafetyMargin, backoffFloor: cfg.BackoffFloor, backoffCeiling: cfg.BackoffCeiling, now: cfg.Now,
 		slots: map[string]*slot{},
 	}
@@ -91,6 +92,11 @@ func New(cfg Config) (*Client, error) {
 	if c.now == nil {
 		c.now = time.Now
 	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("workload token exchange endpoint", "scheme", endpoint.Scheme, "host", endpoint.Host)
 	c.http = &http.Client{
 		Transport: cfg.Transport,
 		Timeout:   c.timeout,
