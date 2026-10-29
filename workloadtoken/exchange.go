@@ -12,7 +12,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -386,7 +385,7 @@ func (s Subject) read() (string, string, error) {
 // read-only mount), holding 1 to maxBytes bytes and at most one trailing
 // newline.
 func readSubjectFile(path string, maxBytes int) (string, error) {
-	file, err := os.Open(path)
+	file, err := openSecretFile(path)
 	if err != nil {
 		return "", fmt.Errorf("%w (open)", ErrSubjectUnreadable)
 	}
@@ -400,11 +399,12 @@ func readSubjectFile(path string, maxBytes int) (string, error) {
 	if info.Mode().Perm()&0o022 != 0 {
 		return "", fmt.Errorf("%w (writable by group or other)", ErrSubjectUnreadable)
 	}
-	// Its owner can write it whatever the mode says. A Compose or Docker secret
+	// Its owner can write it whatever the mode says (where the system reports
+	// owners; elsewhere the mode rule alone decides, as in v0.31.0). A Compose or Docker secret
 	// is a read-only bind mount that keeps the host file's owner, and a
 	// Kubernetes projected volume is read-only: through such a mount nobody
 	// can change the file, so any owner is accepted there.
-	if uid, known := ownerOf(info); (!known || (int(uid) != processUID() && uid != 0)) && !onReadOnlyMount(file) {
+	if uid, known := ownerOf(info); ownersReported && (!known || (int(uid) != processUID() && uid != 0)) && !onReadOnlyMount(file) {
 		return "", fmt.Errorf("%w (owned by another user on a writable mount)", ErrSubjectUnreadable)
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+2))
