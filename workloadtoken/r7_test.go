@@ -62,9 +62,10 @@ func TestOnlyAWholeWorkloadTokenIsUsed(t *testing.T) {
 // must be present and base64url.
 func TestASubjectWithAnEmptyOrBrokenSegmentIsNeverSent(t *testing.T) {
 	for name, value := range map[string]string{
-		"empty signature": "eyJhbGciOiJSUzI1NiJ9.c3ViamVjdA.",
-		"empty header":    ".c3ViamVjdA.c2ln",
-		"broken payload":  "eyJhbGciOiJSUzI1NiJ9.c3V!amVjdA.c2ln",
+		"empty signature":  "eyJhbGciOiJSUzI1NiJ9.c3ViamVjdA.",
+		"empty header":     ".c3ViamVjdA.c2ln",
+		"broken payload":   "eyJhbGciOiJSUzI1NiJ9.c3V!amVjdA.c2ln",
+		"truncated base64": "eyJhbGciOiJSUzI1NiJ9.abcde.c2ln",
 	} {
 		t.Run(name, func(t *testing.T) {
 			exchange := &fakeExchange{answer: issueEach(300)}
