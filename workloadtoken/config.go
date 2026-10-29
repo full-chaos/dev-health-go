@@ -113,9 +113,39 @@ type Config struct {
 	Now func() time.Time
 }
 
-// CheckTransport is not built yet.
-func CheckTransport(rt http.RoundTripper) error { return errNotBuilt }
+// CheckTransport is the explicit-transport rule this package applies to
+// every transport it is given: not nil, not http.DefaultTransport, and not
+// an *http.Transport with a Proxy (which would send credentials through the
+// proxy the process environment names).
+func CheckTransport(rt http.RoundTripper) error {
+	if rt == nil {
+		return errors.New("workloadtoken: a transport is required")
+	}
+	if rt == http.DefaultTransport {
+		return errors.New("workloadtoken: http.DefaultTransport is refused: it uses the environment proxy")
+	}
+	if t, ok := rt.(*http.Transport); ok && t.Proxy != nil {
+		return errors.New("workloadtoken: a transport with a Proxy is refused")
+	}
+	return nil
+}
 
-var errNotBuilt = errors.New("workloadtoken: not built yet")
-
-var _ = url.Parse
+func endpointFor(raw string, allowPlainHTTP bool) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "" {
+		return "", errors.New("workloadtoken: the exchange URL must be an absolute URL with a host")
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !allowPlainHTTP {
+			return "", errors.New("workloadtoken: an http exchange URL needs AllowPlainHTTP")
+		}
+	default:
+		return "", errors.New("workloadtoken: the exchange URL scheme must be https or http")
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return "", errors.New("workloadtoken: the exchange URL must hold only a scheme, a host and a port")
+	}
+	return u.Scheme + "://" + u.Host + ExchangePath, nil
+}
