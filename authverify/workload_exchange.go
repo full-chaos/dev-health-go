@@ -41,6 +41,9 @@ var (
 	// expiry that is not after its issue time: the lifetime cannot be shown
 	// to be within the ceiling, so the exchange fails closed.
 	ErrIssuedLifetimeUnknown = errors.New("issued token lifetime is missing or not positive")
+	// ErrIssuedLifetimeMismatch is returned by Exchange when a JWT-shaped
+	// token's own iat or exp differs from the issuer's IssuedAt or ExpiresAt.
+	ErrIssuedLifetimeMismatch = errors.New("issued token claims disagree with its lifetime metadata")
 )
 
 // SubjectIdentity is the validated k8s ServiceAccount identity a subject
@@ -89,11 +92,20 @@ type GrantResolver interface {
 }
 
 // IssuedToken is the neutral result of minting an access token for a
-// resolved workload binding -- the opaque token and its lifetime, with no
+// resolved workload binding -- the token and its lifetime, with no
 // dependency on any particular credential wire schema. IssuedAt and ExpiresAt
-// are the token's own iat and exp: Exchange judges ExpiresAt - IssuedAt
-// against WorkloadTokenLifetimeCeiling, and refuses a token that lacks either
-// (ErrIssuedLifetimeUnknown).
+// are the token's iat and exp.
+//
+// Exchange judges the lifetime in two ways. A token in the compact JWT shape
+// (the workload-token.v1 format) is read for its OWN iat and exp claims
+// (the signature is WorkloadVerifier's job, not Exchange's): they must be
+// readable (else ErrIssuedLifetimeUnknown), within
+// WorkloadTokenLifetimeCeiling (else ErrIssuedLifetimeExceedsCeiling), and
+// equal to IssuedAt and ExpiresAt to the second (else
+// ErrIssuedLifetimeMismatch). An opaque token has no claims, so its
+// lifetime is IssuedAt and ExpiresAt alone, both required (else
+// ErrIssuedLifetimeUnknown), and ExpiresAt - IssuedAt must be within the
+// ceiling.
 type IssuedToken struct {
 	Token     string
 	IssuedAt  *time.Time
