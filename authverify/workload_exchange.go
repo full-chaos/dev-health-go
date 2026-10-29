@@ -36,6 +36,11 @@ var (
 	// ErrIssuedLifetimeExceedsCeiling is returned by Exchange when the
 	// AccessTokenIssuer minted a token that outlives WorkloadTokenLifetimeCeiling.
 	ErrIssuedLifetimeExceedsCeiling = errors.New("issued token lifetime exceeds the workload token ceiling")
+	// ErrIssuedLifetimeUnknown is returned by Exchange when the issuer
+	// returned a token without both IssuedAt and ExpiresAt, or with an
+	// expiry that is not after its issue time: the lifetime cannot be shown
+	// to be within the ceiling, so the exchange fails closed.
+	ErrIssuedLifetimeUnknown = errors.New("issued token lifetime is missing or not positive")
 )
 
 // SubjectIdentity is the validated k8s ServiceAccount identity a subject
@@ -84,10 +89,14 @@ type GrantResolver interface {
 }
 
 // IssuedToken is the neutral result of minting an access token for a
-// resolved workload binding -- just the opaque token and its expiry, with
-// no dependency on any particular credential wire schema.
+// resolved workload binding -- the opaque token and its lifetime, with no
+// dependency on any particular credential wire schema. IssuedAt and ExpiresAt
+// are the token's own iat and exp: Exchange judges ExpiresAt - IssuedAt
+// against WorkloadTokenLifetimeCeiling, and refuses a token that lacks either
+// (ErrIssuedLifetimeUnknown).
 type IssuedToken struct {
 	Token     string
+	IssuedAt  *time.Time
 	ExpiresAt *time.Time
 }
 

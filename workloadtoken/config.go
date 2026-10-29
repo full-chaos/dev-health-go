@@ -49,8 +49,8 @@ const (
 	// MaxLifetime is the workload-token.v1 lifetime ceiling: auth-service
 	// caps every issued token at it and authverify's WorkloadVerifier refuses
 	// a longer one, so a longer expires_in is not a workload token answer.
-	// (authverify.WorkloadAccessTokenLifetime, 10 minutes, belongs to the
-	// older acr-hosted exchange mechanism, not to this exchange.)
+	// (authverify.WorkloadAccessTokenLifetime equals it: the older
+	// acr-hosted exchange mechanism now mints within the same ceiling.)
 	MaxLifetime = 300 * time.Second
 )
 
