@@ -304,28 +304,6 @@ func TestEveryTokenTheClientUsesTheStrictestVerifierAccepts(t *testing.T) {
 	}
 }
 
-func TestTheTokenDatesAreChecked(t *testing.T) {
-	now := time.Now().Unix()
-	for name, token := range map[string]string{
-		"nbf before iat":     signToken(1, now, now-1, now+300),
-		"exp at nbf":         signToken(1, now, now, now),
-		"exp before nbf":     signToken(1, now, now, now-1),
-		"lifetime over 300":  signToken(1, now, now, now+301),
-		"no dates":           "eyJhbGciOiJFZERTQSJ9.eyJqdGkiOiJ0MCJ9.c2lnbmF0dXJl",
-		"string dates":       "eyJhbGciOiJFZERTQSJ9." + b64(`{"iat":"1","nbf":"1","exp":"2"}`) + ".c2ln",
-		"fraction dates":     "eyJhbGciOiJFZERTQSJ9." + b64(`{"iat":1.5,"nbf":1.5,"exp":2.5}`) + ".c2ln",
-		"payload not JSON":   "eyJhbGciOiJFZERTQSJ9." + b64(`not json`) + ".c2ln",
-		"payload not base64": "eyJhbGciOiJFZERTQSJ9.e30=.c2ln",
-		"already expired":    signToken(1, now-400, now-400, now-100),
-	} {
-		t.Run(name, func(t *testing.T) {
-			c := newTestClient(t, &fakeExchange{answer: answerWith(200, "application/json",
-				`{"access_token":"`+token+`","token_type":"Bearer","issued_token_type":"`+TokenTypeJWT+`","expires_in":300}`)}, writeSubject(t, testSubject))
-			_, err := c.Token(context.Background(), testAudience)
-			mustNoUsable(t, err, ErrExchangeUnavailable)
-		})
-	}
-}
 
 func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
 

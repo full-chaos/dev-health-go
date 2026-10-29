@@ -47,7 +47,7 @@ func TestNewLogsTheExchangeSchemeAndHostOnce(t *testing.T) {
 				}
 			}}
 			path := writeSubject(t, testSubject)
-			c, err := New(Config{ExchangeURL: tc.base, AllowPlainHTTP: tc.plain, Subject: KubernetesTokenFile(path),
+			c, err := New(Config{ExchangeURL: tc.base, AllowPlainHTTP: tc.plain, Issuer: testIssuerURL, Subject: KubernetesTokenFile(path),
 				Transport: exchange, Logger: logger, BackoffFloor: 1, BackoffCeiling: 1})
 			if err != nil {
 				t.Fatal(err)

@@ -120,6 +120,10 @@ type Config struct {
 	BackoffCeiling time.Duration
 	// Now is the clock. Default time.Now.
 	Now func() time.Time
+	// Issuer is the expected iss of every workload token (auth-service's
+	// token issuer URL, https). Required: a token from any other issuer is
+	// refused.
+	Issuer string
 	// Logger receives the one startup line naming the exchange scheme and
 	// host (never a token or a subject). Default slog.Default().
 	Logger *slog.Logger

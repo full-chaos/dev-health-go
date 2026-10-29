@@ -31,7 +31,7 @@ func TestNewRefusesAnImplicitOrProxiedTransport(t *testing.T) {
 	}
 	for name, rt := range map[string]http.RoundTripper{"no proxy": &http.Transport{}, "custom": &fakeExchange{}} {
 		t.Run("accept "+name, func(t *testing.T) {
-			if _, err := New(Config{ExchangeURL: testBase, Subject: KubernetesTokenFile(path), Transport: rt}); err != nil {
+			if _, err := New(Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(path), Transport: rt}); err != nil {
 				t.Fatalf("New: %v", err)
 			}
 		})
@@ -41,10 +41,13 @@ func TestNewRefusesAnImplicitOrProxiedTransport(t *testing.T) {
 func TestNewRefusesABadConfig(t *testing.T) {
 	path := writeSubject(t, testSubject)
 	base := func() Config {
-		return Config{ExchangeURL: testBase, Subject: KubernetesTokenFile(path), Transport: &fakeExchange{}}
+		return Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(path), Transport: &fakeExchange{}}
 	}
 	refused := map[string]func(*Config){
 		"no subject":          func(c *Config) { c.Subject = Subject{} },
+		"no issuer":           func(c *Config) { c.Issuer = "" },
+		"issuer http":         func(c *Config) { c.Issuer = "http://auth-service.test" },
+		"issuer with query":   func(c *Config) { c.Issuer = testIssuerURL + "?x" },
 		"empty subject path":  func(c *Config) { c.Subject = KubernetesTokenFile("") },
 		"no URL":              func(c *Config) { c.ExchangeURL = "" },
 		"relative URL":        func(c *Config) { c.ExchangeURL = "auth-service:8095" },

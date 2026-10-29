@@ -192,7 +192,7 @@ func writeSubject(t *testing.T, value string) string {
 
 func newTestClient(t *testing.T, exchange http.RoundTripper, subjectPath string, mutate ...func(*Config)) *Client {
 	t.Helper()
-	cfg := Config{ExchangeURL: testBase, Subject: KubernetesTokenFile(subjectPath), Transport: exchange}
+	cfg := Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(subjectPath), Transport: exchange}
 	for _, m := range mutate {
 		m(&cfg)
 	}

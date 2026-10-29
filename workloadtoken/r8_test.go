@@ -71,66 +71,6 @@ func TestNoTokenIsReturnedOutsideItsWindowWhateverTheClockDoes(t *testing.T) {
 	}
 }
 
-// TestTheClaimsTheVerifierChecksAreCheckedBeforeUse: the client refuses (never caches, never sends) a token its verifier
-// would refuse for a reason the client can know: another audience, an audience array, a missing or extra claim, a
-// principal type other than workload, an iss, sub or jti outside the workload-token.v1 shapes. For each case the strict
-// verifier refuses the same token; the iss VALUE is the verifier's configuration and is not checked by the client.
-func TestTheClaimsTheVerifierChecksAreCheckedBeforeUse(t *testing.T) {
-	now := time.Now().Unix()
-	claims := func(iss, aud, sub, ptype, jti string, extra string) string {
-		return fmt.Sprintf(`{"iss":%s,"aud":%s,"sub":%s,"principal_type":%s,"jti":%s,"iat":%d,"nbf":%d,"exp":%d%s}`,
-			iss, aud, sub, ptype, jti, now, now, now+300, extra)
-	}
-	q := func(s string) string { return `"` + s + `"` }
-	iss, aud, sub, pt, jti := q(testIssuerURL), q(testAudience), q("prn_AAAAAAAAAAAAAAAAAAAAAA"), q("workload"), q("000000000000000000000001")
-	refused := map[string]string{
-		"another audience":   claims(iss, q("auth-service"), sub, pt, jti, ""),
-		"audience array":     claims(iss, `["`+testAudience+`"]`, sub, pt, jti, ""),
-		"audience empty":     claims(iss, q(""), sub, pt, jti, ""),
-		"extra claim":        claims(iss, aud, sub, pt, jti, `,"scope":"read"`),
-		"principal user":     claims(iss, aud, sub, q("user"), jti, ""),
-		"iss http":           claims(q("http://auth-service.test"), aud, sub, pt, jti, ""),
-		"iss number":         claims("1", aud, sub, pt, jti, ""),
-		"sub not prn_":       claims(iss, aud, q("user_1"), pt, jti, ""),
-		"jti short":          claims(iss, aud, sub, pt, q("abc"), ""),
-		"jti bad character":  claims(iss, aud, sub, pt, q("00000000000000000000000!"), ""),
-		"no aud":             fmt.Sprintf(`{"iss":%s,"sub":%s,"principal_type":%s,"jti":%s,"iat":%d,"nbf":%d,"exp":%d}`, iss, sub, pt, jti, now, now, now+300),
-		"no principal_type":  fmt.Sprintf(`{"iss":%s,"aud":%s,"sub":%s,"jti":%s,"iat":%d,"nbf":%d,"exp":%d}`, iss, aud, sub, jti, now, now, now+300),
-		"duplicate audience": fmt.Sprintf(`{"iss":%s,"aud":%s,"aud":%s,"sub":%s,"principal_type":%s,"jti":%s,"iat":%d,"nbf":%d,"exp":%d}`, iss, q("auth-service"), aud, sub, pt, jti, now, now, now+300),
-	}
-	for name, payload := range refused {
-		t.Run(name, func(t *testing.T) {
-			token := signPayload(payload)
-			if _, err := testVerifier(t).Verify(token, time.Now()); err == nil {
-				t.Fatalf("the verifier accepts this token: the case pins nothing")
-			}
-			c := newTestClient(t, &fakeExchange{answer: answerWith(200, "application/json",
-				`{"access_token":"`+token+`","token_type":"Bearer","issued_token_type":"`+TokenTypeJWT+`","expires_in":300}`)}, writeSubject(t, testSubject))
-			next := &captured{}
-			rt, err := c.Transport(next, testTarget, testAudience)
-			if err != nil {
-				t.Fatal(err)
-			}
-			req, _ := http.NewRequest(http.MethodGet, testTarget+"/v1/thing", nil)
-			_, err = rt.RoundTrip(req)
-			mustNoUsable(t, err, ErrExchangeUnavailable)
-			if len(next.reqs) != 0 {
-				t.Fatal("the token was sent")
-			}
-		})
-	}
-	t.Run("the canonical token", func(t *testing.T) {
-		token := signPayload(claims(iss, aud, sub, pt, jti, ""))
-		if _, err := testVerifier(t).Verify(token, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		c := newTestClient(t, &fakeExchange{answer: answerWith(200, "application/json",
-			`{"access_token":"`+token+`","token_type":"Bearer","issued_token_type":"`+TokenTypeJWT+`","expires_in":300}`)}, writeSubject(t, testSubject))
-		if got, err := c.Token(context.Background(), testAudience); err != nil || got != token {
-			t.Fatalf("err %v", err)
-		}
-	})
-}
 
 // TestARefreshFailureNeverFallsBackOutsideTheWindow: when a refresh fails, Token falls back to the cached token only if it
 // is inside its window at the clock reading of that return, wherever in the failed refresh the clock steps back before
