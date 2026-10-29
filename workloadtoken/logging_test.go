@@ -62,9 +62,16 @@ func TestNewLogsTheExchangeSchemeAndHostOnce(t *testing.T) {
 			if !strings.Contains(lines[0], "scheme="+tc.scheme) || !strings.Contains(lines[0], "host="+tc.hostPort) {
 				t.Fatalf("the startup line lacks the scheme and host: %s", lines[0])
 			}
-			for _, banned := range []string{testSubject, tokenN(0), path, strconv.Itoa(len(testSubject))} {
+			for _, banned := range []string{testSubject, tokenN(0), path} {
 				if strings.Contains(logs.String(), banned) {
 					t.Fatalf("a log line carries %q:\n%s", banned, logs.String())
+				}
+			}
+			// The length is matched as a whole field value, never as a substring of another value.
+			length := strconv.Itoa(len(testSubject))
+			for _, field := range strings.Fields(lines[0]) {
+				if _, value, ok := strings.Cut(field, "="); ok && strings.Trim(value, `"`) == length {
+					t.Fatalf("a log field carries the subject length %s: %s", length, lines[0])
 				}
 			}
 		})
