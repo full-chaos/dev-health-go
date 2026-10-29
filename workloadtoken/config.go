@@ -30,6 +30,7 @@ package workloadtoken
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -111,6 +112,9 @@ type Config struct {
 	BackoffCeiling time.Duration
 	// Now is the clock. Default time.Now.
 	Now func() time.Time
+	// Logger receives the one startup line naming the exchange scheme and
+	// host (never a token or a subject). Default slog.Default().
+	Logger *slog.Logger
 }
 
 // CheckTransport is the explicit-transport rule this package applies to
