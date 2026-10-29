@@ -10,6 +10,7 @@ import (
 type jwtCell struct {
 	tokenLifetime int64
 	metaLifetime  int64
+	metaIatShift  int64
 }
 
 func exchangeSignedJWT(t *testing.T, cell jwtCell) (WorkloadTokenExchangeResult, error, error) {
@@ -17,7 +18,7 @@ func exchangeSignedJWT(t *testing.T, cell jwtCell) (WorkloadTokenExchangeResult,
 	s := newSigner(t)
 	iat := time.Now().Unix()
 	token := s.token(workloadHeader("wl-a"), workloadPayload(iat, iat, iat+cell.tokenLifetime))
-	issuedAt := time.Unix(iat, 0)
+	issuedAt := time.Unix(iat+cell.metaIatShift, 0)
 	expiresAt := time.Unix(iat+cell.metaLifetime, 0)
 	service, err := NewWorkloadTokenExchangeService(
 		fakeSubjectTokenValidator{identity: SubjectIdentity{ExpiresAt: time.Now().Add(time.Hour)}},
@@ -28,15 +29,15 @@ func exchangeSignedJWT(t *testing.T, cell jwtCell) (WorkloadTokenExchangeResult,
 		t.Fatal(err)
 	}
 	result, exchangeErr := service.Exchange(context.Background(), "subject-token", nil)
-	_, verifyErr := rtVerifier(t, StaticKeys{"wl-a": s.pub}, 0).Verify(token, issuedAt)
+	_, verifyErr := rtVerifier(t, StaticKeys{"wl-a": s.pub}, 0).Verify(token, time.Unix(iat, 0))
 	return result, exchangeErr, verifyErr
 }
 
 func TestWorkloadExchangeAndVerifierAgreeOnASignedToken(t *testing.T) {
-	if result, exchangeErr, verifyErr := exchangeSignedJWT(t, jwtCell{300, 300}); exchangeErr != nil || verifyErr != nil || result.AccessToken == "" {
+	if result, exchangeErr, verifyErr := exchangeSignedJWT(t, jwtCell{tokenLifetime: 300, metaLifetime: 300}); exchangeErr != nil || verifyErr != nil || result.AccessToken == "" {
 		t.Fatalf("300 s: exchange = %v, verifier = %v", exchangeErr, verifyErr)
 	}
-	result, exchangeErr, verifyErr := exchangeSignedJWT(t, jwtCell{301, 301})
+	result, exchangeErr, verifyErr := exchangeSignedJWT(t, jwtCell{tokenLifetime: 301, metaLifetime: 301})
 	if !errors.Is(exchangeErr, ErrIssuedLifetimeExceedsCeiling) || ReasonOf(verifyErr) != ReasonContract {
 		t.Fatalf("301 s: exchange = %v, verifier = %q; both must refuse", exchangeErr, ReasonOf(verifyErr))
 	}
@@ -58,6 +59,9 @@ func TestWorkloadExchangeRefusesMetadataThatDisagreesWithTheToken(t *testing.T) 
 	}
 	if _, exchangeErr, _ := exchangeSignedJWT(t, jwtCell{tokenLifetime: 200, metaLifetime: 300}); !errors.Is(exchangeErr, ErrIssuedLifetimeMismatch) {
 		t.Fatalf("token 200 s, metadata 300 s: error = %v, want ErrIssuedLifetimeMismatch", exchangeErr)
+	}
+	if _, exchangeErr, _ := exchangeSignedJWT(t, jwtCell{tokenLifetime: 300, metaLifetime: 300, metaIatShift: -5}); !errors.Is(exchangeErr, ErrIssuedLifetimeMismatch) {
+		t.Fatalf("metadata iat 5 s off the token iat, same exp: error = %v, want ErrIssuedLifetimeMismatch", exchangeErr)
 	}
 }
 
