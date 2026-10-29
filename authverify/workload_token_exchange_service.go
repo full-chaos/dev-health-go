@@ -35,7 +35,7 @@ func NewWorkloadTokenExchangeService(validator SubjectTokenValidator, resolver G
 // (TokenReview), resolve its declarative binding, narrow scope, and issue
 // an access token capped at the subject token's own expiry. Every error
 // this returns is one of ErrSubjectTokenInvalid, ErrWorkloadBindingNotFound,
-// or ErrScopeNotGranted, or an opaque infrastructure error -- callers map
+// ErrScopeNotGranted, ErrIssuedLifetimeExceedsCeiling, or an opaque infrastructure error -- callers map
 // these to their own wire error codes.
 func (s *WorkloadTokenExchangeService) Exchange(ctx context.Context, subjectToken string, requestedScope []string) (WorkloadTokenExchangeResult, error) {
 	identity, err := s.validator.Validate(ctx, subjectToken)
@@ -56,6 +56,9 @@ func (s *WorkloadTokenExchangeService) Exchange(ctx context.Context, subjectToke
 	}
 	expiresIn := 0
 	if issued.ExpiresAt != nil {
+		if time.Until(*issued.ExpiresAt) > WorkloadTokenLifetimeCeiling {
+			return WorkloadTokenExchangeResult{}, ErrIssuedLifetimeExceedsCeiling
+		}
 		if remaining := time.Until(*issued.ExpiresAt); remaining > 0 {
 			expiresIn = int(remaining / time.Second)
 		}

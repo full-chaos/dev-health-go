@@ -6,11 +6,17 @@ import (
 	"time"
 )
 
+// WorkloadTokenLifetimeCeiling is the longest lifetime (exp - iat) a workload
+// token may have (ACP-ADR-03). WorkloadVerifier refuses a longer one, so an
+// exchange must never mint one: Exchange refuses an issuer that does
+// (ErrIssuedLifetimeExceedsCeiling).
+const WorkloadTokenLifetimeCeiling = 300 * time.Second
+
 // WorkloadAccessTokenLifetime is the RFC 8693 access token lifetime for a
-// workload-exchanged token: a short TTL capped at the subject token's own
-// expiry, with no refresh tokens -- callers re-exchange the projected
-// token instead.
-const WorkloadAccessTokenLifetime = 10 * time.Minute
+// workload-exchanged token: a short TTL, equal to WorkloadTokenLifetimeCeiling,
+// capped at the subject token's own expiry, with no refresh tokens -- callers
+// re-exchange the projected token instead.
+const WorkloadAccessTokenLifetime = WorkloadTokenLifetimeCeiling
 
 var (
 	// ErrSubjectTokenInvalid is returned by a SubjectTokenValidator (and
@@ -27,6 +33,9 @@ var (
 	// for more than the resolved binding grants -- RFC 8693 scope may only
 	// narrow, never widen, a grant.
 	ErrScopeNotGranted = errors.New("requested scope exceeds the workload binding's grant")
+	// ErrIssuedLifetimeExceedsCeiling is returned by Exchange when the
+	// AccessTokenIssuer minted a token that outlives WorkloadTokenLifetimeCeiling.
+	ErrIssuedLifetimeExceedsCeiling = errors.New("issued token lifetime exceeds the workload token ceiling")
 )
 
 // SubjectIdentity is the validated k8s ServiceAccount identity a subject
