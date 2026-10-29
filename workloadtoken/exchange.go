@@ -23,14 +23,14 @@ import (
 // its answer. The window starts at the clock reading taken before the request
 // is sent, so the time on the wire only shortens it.
 func (c *Client) exchange(ctx context.Context, audience string, actions []string) (*entry, error) {
-	subject, err := c.subject.read()
+	subject, subjectType, err := c.subject.read()
 	if err != nil {
 		return nil, err
 	}
 	form := url.Values{
 		"grant_type":         {GrantTypeTokenExchange},
 		"subject_token":      {subject},
-		"subject_token_type": {TokenTypeJWT},
+		"subject_token_type": {subjectType},
 		"audience":           {audience},
 	}
 	if len(actions) > 0 {
@@ -337,18 +337,41 @@ func workloadTokenShape(token string) bool {
 	return err == nil && len(signature) == ed25519.SignatureSize
 }
 
-// read returns the subject token. It is read for every exchange and never
-// kept: a rotated file is used at once.
-func (s Subject) read() (string, error) {
+// bootstrapPattern is the whole bootstrap value: the prefix and 32 random
+// bytes as unpadded base64url.
+var bootstrapPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(BootstrapPrefix) + `[A-Za-z0-9_-]{43}$`)
+
+// read returns the subject token and its subject_token_type. It is read for
+// every exchange and never kept: a rotated file is used at once.
+func (s Subject) read() (string, string, error) {
 	switch s.kind {
 	case subjectKubernetes:
-		return readKubernetesToken(s.path)
+		value, err := readSubjectFile(s.path, maxSubjectBytes)
+		if err != nil {
+			return "", "", err
+		}
+		if !compactJWS(value) {
+			return "", "", fmt.Errorf("%w (shape)", ErrSubjectUnreadable)
+		}
+		return value, TokenTypeJWT, nil
+	case subjectBootstrap:
+		value, err := readSubjectFile(s.path, bootstrapValueBytes)
+		if err != nil {
+			return "", "", err
+		}
+		if !bootstrapPattern.MatchString(value) {
+			return "", "", fmt.Errorf("%w (shape)", ErrSubjectUnreadable)
+		}
+		return value, TokenTypeWorkloadBootstrap, nil
 	default:
-		return "", ErrSubjectUnreadable
+		return "", "", ErrSubjectUnreadable
 	}
 }
 
-func readKubernetesToken(path string) (string, error) {
+// readSubjectFile reads a secret file (a symlink is followed: secret mounts
+// use them): a regular file that group and other cannot write, holding 1 to
+// maxBytes bytes and at most one trailing newline.
+func readSubjectFile(path string, maxBytes int) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("%w (open)", ErrSubjectUnreadable)
@@ -363,16 +386,13 @@ func readKubernetesToken(path string) (string, error) {
 	if info.Mode().Perm()&0o022 != 0 {
 		return "", fmt.Errorf("%w (writable by group or other)", ErrSubjectUnreadable)
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, maxSubjectBytes+2))
+	raw, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+2))
 	if err != nil {
 		return "", fmt.Errorf("%w (read)", ErrSubjectUnreadable)
 	}
 	value := strings.TrimSuffix(string(raw), "\n")
-	if value == "" || len(value) > maxSubjectBytes {
+	if value == "" || len(value) > maxBytes {
 		return "", fmt.Errorf("%w (size)", ErrSubjectUnreadable)
-	}
-	if !compactJWS(value) {
-		return "", fmt.Errorf("%w (shape)", ErrSubjectUnreadable)
 	}
 	return value, nil
 }
