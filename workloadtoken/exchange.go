@@ -69,16 +69,8 @@ func (c *Client) exchange(ctx context.Context, audience string, actions []string
 	if err != nil {
 		return nil, err
 	}
-	fresh := &entry{token: token, audience: audience, sent: start, lifetime: lifetime}
-	now := c.now()
-	if err := c.checkToken(fresh, now); err != nil {
-		if errors.Is(err, errNotYetValid) {
-			c.logger.Warn("workload token not yet valid: the issuer clock is ahead of this host",
-				"audience", audience, "ahead_seconds", int64((fresh.notBefore.Sub(now)+time.Second-1)/time.Second))
-		}
-		return nil, err
-	}
-	return fresh, nil
+	// Unchecked: Token runs checkToken on it before it is cached or returned.
+	return &entry{token: token, audience: audience, sent: start, lifetime: lifetime}, nil
 }
 
 // errNotYetValid is the check's refusal of a token whose nbf is after now.
@@ -93,10 +85,11 @@ var errNotYetValid = unavailable("token not yet valid")
 //     base64url segments; a signature of the Ed25519 length;
 //   - the claims: exactly the workload-token.v1 set, each once; iss the
 //     configured issuer; aud the requested audience (one string); sub, jti in
-//     their shapes; principal_type workload; integer iat <= nbf < exp with
+//     their shapes; principal_type workload; integer iat <= nbf with
 //     exp - iat <= 300;
 //   - the window at now: now >= nbf, and now before min(exp, sent +
-//     expires_in) - SafetyMargin, with expires_in more than the margin.
+//     expires_in) - SafetyMargin (so exp <= nbf, or an expires_in inside the
+//     margin, leaves no window and is refused).
 //
 // It fills e's window (notBefore, refreshAt, usableUntil). Any miss refuses
 // the token: it is not cached, or it is dropped from the cache, and not sent.
@@ -107,9 +100,6 @@ func (c *Client) checkToken(e *entry, now time.Time) error {
 	notBefore, expires, err := tokenClaims(e.token, c.issuer, e.audience)
 	if err != nil {
 		return err
-	}
-	if e.lifetime <= c.margin {
-		return unavailable("lifetime inside the safety margin")
 	}
 	usableUntil := e.sent.Add(e.lifetime)
 	if expires.Before(usableUntil) {
@@ -146,8 +136,8 @@ var (
 // workload-token.v1 claims, each once; iss the configured issuer; aud the
 // requested audience (one string); principal_type workload; sub and jti in
 // their shapes; integer
-// NumericDates with iat <= nbf < exp and exp - iat <= 300. It returns nbf and
-// exp.
+// NumericDates with iat <= nbf and exp - iat <= 300 (exp <= nbf leaves no
+// usable window, which checkToken refuses). It returns nbf and exp.
 func tokenClaims(token, issuer, audience string) (time.Time, time.Time, error) {
 	parts := strings.Split(token, ".")
 	payload, err := base64.RawURLEncoding.Strict().DecodeString(parts[1])
@@ -186,7 +176,7 @@ func tokenClaims(token, issuer, audience string) (time.Time, time.Time, error) {
 		dates[i] = value
 	}
 	iat, nbf, exp := dates[0], dates[1], dates[2]
-	if nbf < iat || exp <= nbf || exp-iat > int64(MaxLifetime/time.Second) {
+	if nbf < iat || exp-iat > int64(MaxLifetime/time.Second) {
 		return time.Time{}, time.Time{}, unavailable("token dates break the workload-token contract")
 	}
 	return time.Unix(nbf, 0), time.Unix(exp, 0), nil

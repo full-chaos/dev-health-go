@@ -195,7 +195,11 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 		s.flight = nil
 		close(flight)
 		if exchangeErr == nil {
-			exchangeErr = c.checkToken(fresh, c.now())
+			now := c.now()
+			if exchangeErr = c.checkToken(fresh, now); errors.Is(exchangeErr, errNotYetValid) {
+				c.logger.Warn("workload token not yet valid: the issuer clock is ahead of this host",
+					"audience", audience, "ahead_seconds", int64((fresh.notBefore.Sub(now)+time.Second-1)/time.Second))
+			}
 		}
 		if exchangeErr == nil {
 			s.entry, s.failures, s.retryAt, s.lastErr = fresh, 0, time.Time{}, nil
