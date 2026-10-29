@@ -19,13 +19,12 @@ func TestWorkloadLifetimeConstantsShareOneCeiling(t *testing.T) {
 	}
 }
 
-func exchangeWithIssued(t *testing.T, lifetime time.Duration) (WorkloadTokenExchangeResult, error) {
+func exchangeIssued(t *testing.T, issuedAt, expiresAt *time.Time) (WorkloadTokenExchangeResult, error) {
 	t.Helper()
-	expiresAt := time.Now().Add(lifetime)
 	service, err := NewWorkloadTokenExchangeService(
 		fakeSubjectTokenValidator{identity: SubjectIdentity{ExpiresAt: time.Now().Add(time.Hour)}},
 		fakeGrantResolver{binding: WorkloadBinding{BindingID: "wlb_1", GrantedScopes: []string{"a"}}},
-		&fakeAccessTokenIssuer{issued: IssuedToken{Token: "opaque_test", ExpiresAt: &expiresAt}},
+		&fakeAccessTokenIssuer{issued: IssuedToken{Token: "opaque_test", IssuedAt: issuedAt, ExpiresAt: expiresAt}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -33,8 +32,15 @@ func exchangeWithIssued(t *testing.T, lifetime time.Duration) (WorkloadTokenExch
 	return service.Exchange(context.Background(), "subject-token", nil)
 }
 
+func exchangeLifetime(t *testing.T, issuedAgo, lifetime time.Duration) (WorkloadTokenExchangeResult, error) {
+	t.Helper()
+	issuedAt := time.Now().Add(-issuedAgo)
+	expiresAt := issuedAt.Add(lifetime)
+	return exchangeIssued(t, &issuedAt, &expiresAt)
+}
+
 func TestWorkloadExchangeRefusesAnIssuerPastTheCeiling(t *testing.T) {
-	result, err := exchangeWithIssued(t, 10*time.Minute)
+	result, err := exchangeLifetime(t, 0, 10*time.Minute)
 	if !errors.Is(err, ErrIssuedLifetimeExceedsCeiling) {
 		t.Fatalf("error = %v, want ErrIssuedLifetimeExceedsCeiling", err)
 	}
@@ -43,18 +49,38 @@ func TestWorkloadExchangeRefusesAnIssuerPastTheCeiling(t *testing.T) {
 	}
 }
 
-func TestWorkloadExchangeAcceptsALifetimeAtTheCeiling(t *testing.T) {
-	result, err := exchangeWithIssued(t, WorkloadTokenLifetimeCeiling-time.Second)
-	if err != nil {
-		t.Fatal(err)
+func TestWorkloadExchangeLifetimeBoundaryIsExact(t *testing.T) {
+	if _, err := exchangeLifetime(t, 0, WorkloadTokenLifetimeCeiling); err != nil {
+		t.Fatalf("exp-iat = 300s refused: %v", err)
 	}
-	if result.ExpiresIn <= 0 || time.Duration(result.ExpiresIn)*time.Second > WorkloadTokenLifetimeCeiling {
-		t.Fatalf("expires_in = %d, want 1..300", result.ExpiresIn)
+	if _, err := exchangeLifetime(t, 0, WorkloadTokenLifetimeCeiling+time.Second); !errors.Is(err, ErrIssuedLifetimeExceedsCeiling) {
+		t.Fatalf("exp-iat = 301s: error = %v, want ErrIssuedLifetimeExceedsCeiling", err)
 	}
 }
 
-func TestWorkloadExchangeRefusesOneSecondOverTheCeiling(t *testing.T) {
-	if _, err := exchangeWithIssued(t, WorkloadTokenLifetimeCeiling+2*time.Second); !errors.Is(err, ErrIssuedLifetimeExceedsCeiling) {
+func TestWorkloadExchangeJudgesTheTokenNotTheTimeLeftAfterIssue(t *testing.T) {
+	// A slow issuer: the token lives 302 s but 3 s passed before Issue returned, so 299 s remain.
+	if _, err := exchangeLifetime(t, 3*time.Second, WorkloadTokenLifetimeCeiling+2*time.Second); !errors.Is(err, ErrIssuedLifetimeExceedsCeiling) {
 		t.Fatalf("error = %v, want ErrIssuedLifetimeExceedsCeiling", err)
+	}
+}
+
+func TestWorkloadExchangeFailsClosedOnMissingLifetimeMetadata(t *testing.T) {
+	now := time.Now()
+	exp := now.Add(time.Minute)
+	for name, tc := range map[string]struct{ iat, exp *time.Time }{
+		"no expiry":         {iat: &now, exp: nil},
+		"no issued-at":      {iat: nil, exp: &exp},
+		"neither":           {iat: nil, exp: nil},
+		"expiry equals iat": {iat: &now, exp: &now},
+		"expiry before iat": {iat: &exp, exp: &now},
+	} {
+		result, err := exchangeIssued(t, tc.iat, tc.exp)
+		if !errors.Is(err, ErrIssuedLifetimeUnknown) {
+			t.Fatalf("%s: error = %v, want ErrIssuedLifetimeUnknown", name, err)
+		}
+		if result.AccessToken != "" {
+			t.Fatalf("%s: a refused exchange returned a token", name)
+		}
 	}
 }
