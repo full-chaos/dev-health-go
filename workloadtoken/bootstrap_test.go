@@ -3,6 +3,7 @@ package workloadtoken
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -14,9 +15,10 @@ import (
 	"time"
 )
 
-const (
-	testBootstrap        = "fcwlb_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abcde"
-	testBootstrapRotated = "fcwlb_" + "zYxWvUtSrQpOnMlKjIhGfEdCbA9876543210_-edcba"
+// Canonical bootstrap values: the prefix and 32 bytes as unpadded base64url, as the create verb mints them.
+var (
+	testBootstrap        = BootstrapPrefix + base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	testBootstrapRotated = BootstrapPrefix + base64.RawURLEncoding.EncodeToString([]byte("fedcba9876543210fedcba9876543210"))
 )
 
 func writeBootstrap(t *testing.T, value string, mode os.FileMode) string {
@@ -84,23 +86,25 @@ func TestTheBootstrapFileIsReadForEveryExchangeThroughASymlink(t *testing.T) {
 func TestAnUnusableBootstrapFileIsNeverSent(t *testing.T) {
 	dir := t.TempDir()
 	cases := map[string]string{
-		"missing":          filepath.Join(dir, "absent"),
-		"directory":        dir,
-		"empty":            writeBootstrap(t, "", 0o444),
-		"group writable":   writeBootstrap(t, testBootstrap, 0o664),
-		"other writable":   writeBootstrap(t, testBootstrap, 0o646),
-		"no prefix":        writeBootstrap(t, strings.TrimPrefix(testBootstrap, BootstrapPrefix), 0o444),
-		"other prefix":     writeBootstrap(t, "svc_"+strings.TrimPrefix(testBootstrap, BootstrapPrefix), 0o444),
-		"one char short":   writeBootstrap(t, testBootstrap[:len(testBootstrap)-1], 0o444),
-		"one char long":    writeBootstrap(t, testBootstrap+"a", 0o444),
-		"padding":          writeBootstrap(t, testBootstrap[:len(testBootstrap)-1]+"=", 0o444),
-		"standard base64":  writeBootstrap(t, testBootstrap[:len(testBootstrap)-1]+"+", 0o444),
-		"two lines":        writeBootstrap(t, testBootstrap+"\n"+testBootstrap, 0o444),
-		"two newlines":     writeBootstrap(t, testBootstrap+"\n\n", 0o444),
-		"carriage return":  writeBootstrap(t, testBootstrap+"\r\n", 0o444),
-		"leading space":    writeBootstrap(t, " "+testBootstrap, 0o444),
-		"a JWT":            writeBootstrap(t, testSubject, 0o444),
-		"oversize garbage": writeBootstrap(t, strings.Repeat("a", 1<<20), 0o444),
+		"missing":                      filepath.Join(dir, "absent"),
+		"directory":                    dir,
+		"empty":                        writeBootstrap(t, "", 0o444),
+		"group writable":               writeBootstrap(t, testBootstrap, 0o664),
+		"other writable":               writeBootstrap(t, testBootstrap, 0o646),
+		"no prefix":                    writeBootstrap(t, strings.TrimPrefix(testBootstrap, BootstrapPrefix), 0o444),
+		"other prefix":                 writeBootstrap(t, "svc_"+strings.TrimPrefix(testBootstrap, BootstrapPrefix), 0o444),
+		"one char short":               writeBootstrap(t, testBootstrap[:len(testBootstrap)-1], 0o444),
+		"one char long":                writeBootstrap(t, testBootstrap+"a", 0o444),
+		"padding":                      writeBootstrap(t, testBootstrap[:len(testBootstrap)-1]+"=", 0o444),
+		"standard base64":              writeBootstrap(t, testBootstrap[:len(testBootstrap)-1]+"+", 0o444),
+		"two lines":                    writeBootstrap(t, testBootstrap+"\n"+testBootstrap, 0o444),
+		"two newlines":                 writeBootstrap(t, testBootstrap+"\n\n", 0o444),
+		"carriage return":              writeBootstrap(t, testBootstrap+"\r\n", 0o444),
+		"leading space":                writeBootstrap(t, " "+testBootstrap, 0o444),
+		"non-canonical last character": writeBootstrap(t, BootstrapPrefix+strings.Repeat("A", 42)+"B", 0o444),
+		"non-canonical trailing bits":  writeBootstrap(t, testBootstrap[:len(testBootstrap)-1]+"_", 0o444),
+		"a JWT":                        writeBootstrap(t, testSubject, 0o444),
+		"oversize garbage":             writeBootstrap(t, strings.Repeat("a", 1<<20), 0o444),
 	}
 	for name, path := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -180,5 +184,84 @@ func TestTheBootstrapConstantsMatchTheOpsCredentialClassRow(t *testing.T) {
 	shape := regexp.MustCompile(`^` + regexp.QuoteMeta(BootstrapPrefix) + `<32-byte urlsafe base64 secret> \((\d+) characters\)$`).FindStringSubmatch(row.Transport.Shape)
 	if shape == nil || shape[1] != "43" || bootstrapValueBytes != len(BootstrapPrefix)+43 {
 		t.Fatalf("the row's shape %q against the client's %d-byte value", row.Transport.Shape, bootstrapValueBytes)
+	}
+}
+
+// TestTheTestBootstrapValuesAreCanonical: the fixtures are what the create verb mints (32 bytes, canonical encoding).
+func TestTheTestBootstrapValuesAreCanonical(t *testing.T) {
+	for _, value := range []string{testBootstrap, testBootstrapRotated} {
+		raw, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimPrefix(value, BootstrapPrefix))
+		if err != nil || len(raw) != 32 || BootstrapPrefix+base64.RawURLEncoding.EncodeToString(raw) != value {
+			t.Fatalf("%q is not a canonical 32-byte value", value)
+		}
+	}
+}
+
+// TestASecretFileAnotherUserCanChangeIsRefused: a subject file (either kind) owned by a user other than this process or
+// root is refused, unless it is on a read-only mount (a Compose or Docker secret is a read-only bind mount that keeps
+// the host file's owner; a Kubernetes projected volume is read-only and root-owned): nobody can change it through that
+// mount. A file whose owner cannot be read is refused unless it is on a read-only mount.
+func TestASecretFileAnotherUserCanChangeIsRefused(t *testing.T) {
+	euid := os.Geteuid()
+	for _, kind := range []string{"kubernetes", "bootstrap"} {
+		for name, tc := range map[string]struct {
+			owner    int
+			known    bool
+			readOnly bool
+			ok       bool
+		}{
+			"owned by this process":          {euid, true, false, true},
+			"owned by root":                  {0, true, false, true},
+			"another owner, writable mount":  {euid + 4242, true, false, false},
+			"another owner, read-only mount": {euid + 4242, true, true, true},
+			"owner unknown, writable mount":  {0, false, false, false},
+			"owner unknown, read-only mount": {0, false, true, true},
+		} {
+			t.Run(kind+" "+name, func(t *testing.T) {
+				prevOwner, prevRO := ownerOf, onReadOnlyMount
+				ownerOf = func(os.FileInfo) (uint32, bool) { return uint32(tc.owner), tc.known }
+				onReadOnlyMount = func(*os.File) bool { return tc.readOnly }
+				t.Cleanup(func() { ownerOf, onReadOnlyMount = prevOwner, prevRO })
+				exchange := &fakeExchange{answer: issueEach(300)}
+				var c *Client
+				if kind == "kubernetes" {
+					c = newTestClient(t, exchange, writeSubject(t, testSubject))
+				} else {
+					c = newBootstrapClient(t, exchange, writeBootstrap(t, testBootstrap, 0o444))
+				}
+				_, err := c.Token(context.Background(), testAudience)
+				if tc.ok {
+					if err != nil {
+						t.Fatalf("refused: %v", err)
+					}
+					return
+				}
+				mustNoUsable(t, err, ErrSubjectUnreadable)
+				if exchange.count() != 0 {
+					t.Fatal("a file another user can change reached the exchange")
+				}
+			})
+		}
+	}
+}
+
+// TestTheRealOwnerAndMountAreRead: on this host the test's own temp file is owned by this process and its temp
+// directory is not a read-only mount; the real seams read both.
+func TestTheRealOwnerAndMountAreRead(t *testing.T) {
+	path := writeSubject(t, testSubject)
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid, ok := fileOwnerUID(info); !ok || int(uid) != os.Geteuid() {
+		t.Fatalf("owner %d (known %v), want this process %d", uid, ok, os.Geteuid())
+	}
+	if readOnlyFile(file) {
+		t.Fatal("the temp directory reads as a read-only mount")
 	}
 }
