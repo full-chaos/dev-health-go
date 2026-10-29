@@ -23,6 +23,11 @@ var (
 	// ErrRequestRefused is a request the token transport will not send: not
 	// for its target origin, a redirect hop, or without a URL.
 	ErrRequestRefused = errors.New("workloadtoken: the request is not for the token's target")
+	// ErrResourceTransport wraps a failure of the transport behind the token
+	// transport. Its text never carries the failure's own text, which may
+	// quote the request's headers; context cancellation and deadline stay
+	// visible to errors.Is.
+	ErrResourceTransport = errors.New("workloadtoken: the resource request failed")
 	// ErrSubjectUnreadable is a subject token file that is missing, not a
 	// regular file, empty, too large or not a compact JWS.
 	ErrSubjectUnreadable = errors.New("workloadtoken: the subject token could not be read")
