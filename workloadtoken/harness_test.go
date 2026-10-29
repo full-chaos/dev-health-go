@@ -21,6 +21,7 @@ const (
 	testBase     = "https://auth-service.test:8095"
 	testAudience = "dev-health-api"
 	testSubject  = "eyJhbGciOiJSUzI1NiJ9.c3ViamVjdC12MQ.c2lnbmF0dXJl"
+	testTarget   = "https://api.test"
 )
 
 // recorded is one request the fake exchange received.

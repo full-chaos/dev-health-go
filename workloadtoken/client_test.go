@@ -156,7 +156,7 @@ func runOutage(t *testing.T, failing func(int, url.Values) (*http.Response, erro
 	exchange := &fakeExchange{answer: issueEach(300)}
 	c := newTestClient(t, exchange, writeSubject(t, testSubject), func(cfg *Config) { cfg.Timeout = 10 * time.Millisecond })
 	api := &resource{}
-	rt, err := c.RoundTripper(api, testAudience)
+	rt, err := c.RoundTripper(api, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestAnExchangeRefusalSendsNothing(t *testing.T) {
 			exchange := &fakeExchange{answer: func(int, url.Values) (*http.Response, error) { return jsonResponse(400, tc.body), nil }}
 			c := newTestClient(t, exchange, writeSubject(t, testSubject))
 			api := &resource{}
-			rt, err := c.RoundTripper(api, testAudience)
+			rt, err := c.RoundTripper(api, testTarget, testAudience)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -314,7 +314,7 @@ func TestTheRoundTripperSetsTheHeaderOnACopy(t *testing.T) {
 	exchange := &fakeExchange{answer: issueEach(300)}
 	c := newTestClient(t, exchange, writeSubject(t, testSubject))
 	api := &resource{}
-	rt, err := c.RoundTripper(api, testAudience)
+	rt, err := c.RoundTripper(api, testTarget, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}

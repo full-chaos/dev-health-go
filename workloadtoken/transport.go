@@ -9,7 +9,7 @@ import (
 // usable token can be had it returns the error and next is never called: no
 // request leaves without the header, with an old token or with any other
 // credential. next follows the same explicit-transport rule as Config.Transport.
-func (c *Client) RoundTripper(next http.RoundTripper, audience string, scope ...string) (http.RoundTripper, error) {
+func (c *Client) RoundTripper(next http.RoundTripper, target, audience string, scope ...string) (http.RoundTripper, error) {
 	if err := CheckTransport(next); err != nil {
 		return nil, err
 	}

@@ -24,7 +24,7 @@ func TestNewRefusesAnImplicitOrProxiedTransport(t *testing.T) {
 				t.Fatal("New accepted the transport")
 			}
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)
-			if _, err := c.RoundTripper(rt, testAudience); err == nil {
+			if _, err := c.RoundTripper(rt, testTarget, testAudience); err == nil {
 				t.Fatal("RoundTripper accepted the transport")
 			}
 		})
@@ -105,7 +105,7 @@ func TestTheAudienceAndScopeAreBounded(t *testing.T) {
 		"empty action":        func() error { _, err := c.Token(t.Context(), testAudience, ""); return err },
 		"long action":         func() error { _, err := c.Token(t.Context(), testAudience, strings.Repeat("a", 129)); return err },
 		"too many actions":    func() error { _, err := c.Token(t.Context(), testAudience, make65()...); return err },
-		"round tripper scope": func() error { _, err := c.RoundTripper(&fakeExchange{}, testAudience, "a b"); return err },
+		"round tripper scope": func() error { _, err := c.RoundTripper(&fakeExchange{}, testTarget, testAudience, "a b"); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
 			if call() == nil {
