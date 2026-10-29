@@ -133,8 +133,9 @@ func TestAKubernetesDeploymentNeverSendsABootstrapValue(t *testing.T) {
 //	git show <ops sha>:contracts/auth/v1/credential-classes.json | python3 -c 'import json,sys; d=json.load(sys.stdin); \
 //	  print(json.dumps([r for r in d["classes"] if r["class_id"]=="workload_bootstrap_credential"][0], indent=2, sort_keys=True))'
 //
-// at ops 0f2c923df0662bd6ce8942e2643efc0448652c07 (full-chaos/dev-health-ops PR #5215 head). A change of the row is a change
-// of this pin: update the file, its sha256 below and the constants together.
+// at ops main ae7c981b55b08eb64670b6413f62622ff68e3fc0 (it holds the full-chaos/dev-health-ops #5215 merge 46f0604c; the row is
+// byte-identical to the one taken at the PR head 0f2c923d). A change of the row is a change of this pin: update the file,
+// its sha256 below and the constants together.
 const opsRowSHA256 = "4de1cb69a956990ad9d8fc929c90e61bcbb7dd6e4fdc519dc5babf511b513ee1"
 
 func TestTheBootstrapConstantsMatchTheOpsCredentialClassRow(t *testing.T) {
