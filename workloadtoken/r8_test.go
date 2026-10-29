@@ -131,3 +131,39 @@ func TestTheClaimsTheVerifierChecksAreCheckedBeforeUse(t *testing.T) {
 		}
 	})
 }
+
+// TestARefreshFailureNeverFallsBackOutsideTheWindow: when a refresh fails, Token falls back to the cached token only if it
+// is inside its window at the clock reading of that return, wherever in the failed refresh the clock steps back before
+// the cached token's nbf.
+func TestARefreshFailureNeverFallsBackOutsideTheWindow(t *testing.T) {
+	base := time.Unix(2_000_000_000, 0)
+	for step := 1; step <= 8; step++ {
+		t.Run(fmt.Sprintf("step at reading %d", step), func(t *testing.T) {
+			clock := &steppingClock{base: base, shift: 0, step: 1 << 30}
+			exchange := &fakeExchange{answer: func(n int, _ url.Values) (*http.Response, error) {
+				if n > 0 {
+					return outage(n, nil)
+				}
+				at := base.Unix()
+				return issued(signToken(n, at, at, at+300), 300), nil
+			}}
+			c := newTestClient(t, exchange, writeSubject(t, testSubject), func(cfg *Config) { cfg.Now = clock.now })
+			if _, err := c.Token(context.Background(), testAudience); err != nil {
+				t.Fatal(err)
+			}
+			clock.mu.Lock()
+			clock.base, clock.shift, clock.step, clock.calls = base.Add(150*time.Second), -155*time.Second, step, 0
+			clock.mu.Unlock()
+			token, err := c.Token(context.Background(), testAudience)
+			if err != nil {
+				return
+			}
+			clock.mu.Lock()
+			at := clock.last
+			clock.mu.Unlock()
+			if _, verr := testVerifier(t).Verify(token, at); verr != nil {
+				t.Fatalf("the fallback token is refused by the verifier at the clock reading of its return (%v): %v", at, verr)
+			}
+		})
+	}
+}

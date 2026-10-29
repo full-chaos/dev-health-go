@@ -92,11 +92,7 @@ func (c *Client) exchange(ctx context.Context, audience string, actions []string
 	if refreshAt.After(usableUntil) {
 		refreshAt = usableUntil
 	}
-	fresh := &entry{token: token, notBefore: notBefore, refreshAt: refreshAt, usableUntil: usableUntil}
-	if !fresh.usableAt(c.now()) {
-		return nil, unavailable("answer arrived outside its usable window")
-	}
-	return fresh, nil
+	return &entry{token: token, notBefore: notBefore, refreshAt: refreshAt, usableUntil: usableUntil}, nil
 }
 
 // The workload-token.v1 claim shapes its verifier enforces (authverify
