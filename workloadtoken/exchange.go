@@ -3,6 +3,7 @@ package workloadtoken
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -192,7 +193,7 @@ func parseAnswer(contentType string, body []byte) (string, time.Duration, error)
 	if issuedType != TokenTypeJWT {
 		return "", 0, unavailable("issued_token_type is not a JWT")
 	}
-	if len(accessToken) > maxAccessTokenBytes || !compactJWS(accessToken) {
+	if len(accessToken) > maxAccessTokenBytes || !workloadTokenShape(accessToken) {
 		return "", 0, unavailable("access_token is not a compact JWS")
 	}
 	raw, ok := members["expires_in"]
@@ -206,21 +207,53 @@ func parseAnswer(contentType string, body []byte) (string, time.Duration, error)
 	return accessToken, time.Duration(seconds) * time.Second, nil
 }
 
-// compactJWS is the shape check of a compact JWS: three base64url segments,
-// the first two non-empty.
+// compactJWS is the shape check of a compact JWS of any algorithm (the
+// subject): three segments, each non-empty unpadded base64url.
 func compactJWS(value string) bool {
 	parts := strings.Split(value, ".")
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
+	if len(parts) != 3 {
 		return false
 	}
 	for _, part := range parts {
+		if part == "" {
+			return false
+		}
 		for _, r := range part {
 			if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
 				return false
 			}
 		}
+		if _, err := base64.RawURLEncoding.DecodeString(part); err != nil {
+			return false
+		}
 	}
 	return true
+}
+
+// workloadTokenShape is the shape of a workload-token.v1 access token as its
+// verifier requires it, short of the signature check: a compact JWS whose
+// header is a JSON object with alg EdDSA, typ workload+jwt and a kid, and
+// whose signature has the Ed25519 length.
+func workloadTokenShape(token string) bool {
+	if !compactJWS(token) {
+		return false
+	}
+	parts := strings.Split(token, ".")
+	enc := base64.RawURLEncoding.Strict()
+	rawHeader, err := enc.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+	var header struct {
+		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+		Kid string `json:"kid"`
+	}
+	if json.Unmarshal(rawHeader, &header) != nil || header.Alg != "EdDSA" || header.Typ != "workload+jwt" || header.Kid == "" {
+		return false
+	}
+	signature, err := enc.DecodeString(parts[2])
+	return err == nil && len(signature) == ed25519.SignatureSize
 }
 
 // read returns the subject token. It is read for every exchange and never

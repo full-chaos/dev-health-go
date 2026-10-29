@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -105,7 +104,5 @@ func TestInvalidateClearsTheBackoff(t *testing.T) {
 		if exchange.count() != 3 || token != tokenN(2) {
 			t.Fatalf("exchanges %d, want 3 (the new token right after Invalidate)", exchange.count())
 		}
-		// Another key's backoff is untouched.
-		_ = url.Values{}
 	})
 }

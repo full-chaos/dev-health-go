@@ -219,7 +219,7 @@ func (c *Client) Invalidate(audience string, scope ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if s := c.slots[key]; s != nil {
-		s.entry = nil
+		s.entry, s.retryAt, s.failures, s.lastErr = nil, time.Time{}, 0, nil
 	}
 }
 
