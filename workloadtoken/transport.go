@@ -71,11 +71,12 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // forTarget reports whether req goes to the target and only there: its URL
-// origin and its Host (the authority sent) are the target's, and it is not a
-// redirect hop, an opaque request target or a URL with user info.
+// origin (an empty host never matches) and its Host (the authority sent) are
+// the target's, and it is not a redirect hop, an opaque request target or a
+// URL with user info.
 func (t *bearerTransport) forTarget(req *http.Request) bool {
 	u := req.URL
-	if u == nil || req.Response != nil || u.Opaque != "" || u.User != nil || u.Host == "" || origin(u) != t.origin {
+	if u == nil || req.Response != nil || u.Opaque != "" || u.User != nil || origin(u) != t.origin {
 		return false
 	}
 	return req.Host == "" || origin(&url.URL{Scheme: u.Scheme, Host: req.Host}) == t.origin
