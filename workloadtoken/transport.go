@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 )
 
 // RoundTripper returns a transport that sends requests for target (the
@@ -62,6 +63,13 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	authorized := req.Clone(req.Context())
 	if authorized.Header == nil {
 		authorized.Header = http.Header{}
+	}
+	// Header names are case-insensitive on the wire: a caller credential
+	// under any spelling of the key would leave next to the token.
+	for key := range authorized.Header {
+		if strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "Proxy-Authorization") {
+			delete(authorized.Header, key)
+		}
 	}
 	authorized.Header.Set("Authorization", "Bearer "+token)
 	resp, err := t.next.RoundTrip(authorized)
