@@ -27,7 +27,13 @@ func TestNewLogsTheExchangeSchemeAndHostOnce(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var logs bytes.Buffer
-			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			// No time attribute: the length check below must not match a time stamp.
+			logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				if len(groups) == 0 && a.Key == slog.TimeKey {
+					return slog.Attr{}
+				}
+				return a
+			}}))
 			calls := 0
 			exchange := &fakeExchange{answer: func(n int, _ url.Values) (*http.Response, error) {
 				calls++
