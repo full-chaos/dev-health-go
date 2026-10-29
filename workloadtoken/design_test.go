@@ -186,7 +186,7 @@ func TestACallerURLIsReadNeverRewritten(t *testing.T) {
 func TestAnEmptyHostnameIsRefused(t *testing.T) {
 	path := writeSubject(t, testSubject)
 	for _, raw := range []string{"https://:443", "https://:8095", "https://[]:443"} {
-		if _, err := New(Config{ExchangeURL: raw, Subject: KubernetesTokenFile(path), Transport: &fakeExchange{}}); err == nil {
+		if _, err := New(Config{ExchangeURL: raw, Issuer: testIssuerURL, Subject: KubernetesTokenFile(path), Transport: &fakeExchange{}}); err == nil {
 			t.Fatalf("New accepted the exchange URL %q", raw)
 		}
 		c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)

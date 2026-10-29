@@ -64,7 +64,7 @@ func TestTypedNilTransportsAreRefusedWithoutAPanic(t *testing.T) {
 			if err := CheckTransport(rt); err == nil {
 				t.Fatal("CheckTransport accepted it")
 			}
-			if _, err := New(Config{ExchangeURL: testBase, Subject: KubernetesTokenFile(path), Transport: rt}); err == nil {
+			if _, err := New(Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(path), Transport: rt}); err == nil {
 				t.Fatal("New accepted it")
 			}
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)

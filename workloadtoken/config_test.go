@@ -20,7 +20,7 @@ func TestNewRefusesAnImplicitOrProxiedTransport(t *testing.T) {
 	path := writeSubject(t, testSubject)
 	for name, rt := range refused {
 		t.Run(name, func(t *testing.T) {
-			if _, err := New(Config{ExchangeURL: testBase, Subject: KubernetesTokenFile(path), Transport: rt}); err == nil {
+			if _, err := New(Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(path), Transport: rt}); err == nil {
 				t.Fatal("New accepted the transport")
 			}
 			c := newTestClient(t, &fakeExchange{answer: issueEach(300)}, path)
@@ -133,7 +133,7 @@ func TestNewRefusesAReplacedDefaultTransport(t *testing.T) {
 	previous := http.DefaultTransport
 	http.DefaultTransport = replaced
 	t.Cleanup(func() { http.DefaultTransport = previous })
-	if _, err := New(Config{ExchangeURL: testBase, Subject: KubernetesTokenFile(writeSubject(t, testSubject)), Transport: replaced}); err == nil {
+	if _, err := New(Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(writeSubject(t, testSubject)), Transport: replaced}); err == nil {
 		t.Fatal("New accepted the replaced http.DefaultTransport")
 	}
 }

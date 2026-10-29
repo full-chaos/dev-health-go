@@ -277,9 +277,6 @@ func parseAnswer(contentType string, body []byte) (string, time.Duration, error)
 	if issuedType != TokenTypeJWT {
 		return "", 0, unavailable("issued_token_type is not a JWT")
 	}
-	if accessToken == "" {
-		return "", 0, unavailable("access_token is empty")
-	}
 	raw, ok := members["expires_in"]
 	if !ok {
 		return "", 0, unavailable("answer lacks expires_in")
