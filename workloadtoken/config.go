@@ -79,6 +79,17 @@ type subjectKind int
 const (
 	subjectNone subjectKind = iota
 	subjectKubernetes
+	subjectBootstrap
+)
+
+// The Compose bootstrap credential (ops class workload_bootstrap_credential):
+// the subject_token_type it is presented with, its prefix and its whole shape
+// (the prefix and 32 random bytes as unpadded base64url). Pinned against the
+// ops credential-classes.json row by a test.
+const (
+	TokenTypeWorkloadBootstrap = "urn:dev-health:params:oauth:token-type:workload-bootstrap"
+	BootstrapPrefix            = "fcwlb_"
+	bootstrapValueBytes        = len(BootstrapPrefix) + 43
 )
 
 // Subject is the one credential a deployment presents to the exchange.
@@ -92,6 +103,13 @@ type Subject struct {
 // (the kubelet rotates it); the projected volume's symlink is followed.
 func KubernetesTokenFile(path string) Subject {
 	return Subject{kind: subjectKubernetes, path: path}
+}
+
+// BootstrapCredentialFile is a Compose bootstrap credential in a secret file
+// at path (for a deployment without Kubernetes). The file is read again for
+// every exchange (rotation without a restart); a symlink is followed.
+func BootstrapCredentialFile(path string) Subject {
+	return Subject{kind: subjectBootstrap, path: path}
 }
 
 // Config configures a Client. Zero durations take the defaults.
