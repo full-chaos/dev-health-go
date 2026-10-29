@@ -304,7 +304,6 @@ func TestEveryTokenTheClientUsesTheStrictestVerifierAccepts(t *testing.T) {
 	}
 }
 
-
 func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
 
 // TestAClockSteppedBackNeverUsesATokenBeforeItsNbf: the window is checked when Token returns, not only when the token

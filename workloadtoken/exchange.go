@@ -69,36 +69,70 @@ func (c *Client) exchange(ctx context.Context, audience string, actions []string
 	if err != nil {
 		return nil, err
 	}
-	if lifetime <= c.margin {
-		return nil, unavailable("lifetime inside the safety margin")
-	}
-	notBefore, expires, err := tokenClaims(token, audience)
-	if err != nil {
+	fresh := &entry{token: token, audience: audience, sent: start, lifetime: lifetime}
+	now := c.now()
+	if err := c.checkToken(fresh, now); err != nil {
+		if errors.Is(err, errNotYetValid) {
+			c.logger.Warn("workload token not yet valid: the issuer clock is ahead of this host",
+				"audience", audience, "ahead_seconds", int64((fresh.notBefore.Sub(now)+time.Second-1)/time.Second))
+		}
 		return nil, err
 	}
-	// The strictest legal verifier (leeway 0, this host's clock) refuses a
-	// token before its nbf: the issuer's clock is ahead. Refused at once.
-	if now := c.now(); now.Before(notBefore) {
-		c.logger.Warn("workload token not yet valid: the issuer clock is ahead of this host",
-			"audience", audience, "ahead_seconds", int64((notBefore.Sub(now)+time.Second-1)/time.Second))
-		return nil, unavailable("token not yet valid")
+	return fresh, nil
+}
+
+// errNotYetValid is the check's refusal of a token whose nbf is after now.
+var errNotYetValid = unavailable("token not yet valid")
+
+// checkToken is the ONE check of a workload token, run when its answer
+// arrives (before it is cached) and every time Token returns it, at one clock
+// reading now. It checks everything the strictest legal verifier (an
+// authverify.WorkloadVerifier with leeway 0 on this host's clock) checks that
+// the client can know, plus the client's own bounds:
+//   - the header: alg EdDSA, typ workload+jwt, a kid; three non-empty
+//     base64url segments; a signature of the Ed25519 length;
+//   - the claims: exactly the workload-token.v1 set, each once; iss the
+//     configured issuer; aud the requested audience (one string); sub, jti in
+//     their shapes; principal_type workload; integer iat <= nbf < exp with
+//     exp - iat <= 300;
+//   - the window at now: now >= nbf, and now before min(exp, sent +
+//     expires_in) - SafetyMargin, with expires_in more than the margin.
+//
+// It fills e's window (notBefore, refreshAt, usableUntil). Any miss refuses
+// the token: it is not cached, or it is dropped from the cache, and not sent.
+func (c *Client) checkToken(e *entry, now time.Time) error {
+	if e == nil || len(e.token) > maxAccessTokenBytes || !workloadTokenShape(e.token) {
+		return unavailable("access_token is not a workload token")
 	}
-	usableUntil := start.Add(lifetime)
+	notBefore, expires, err := tokenClaims(e.token, c.issuer, e.audience)
+	if err != nil {
+		return err
+	}
+	if e.lifetime <= c.margin {
+		return unavailable("lifetime inside the safety margin")
+	}
+	usableUntil := e.sent.Add(e.lifetime)
 	if expires.Before(usableUntil) {
 		usableUntil = expires
 	}
 	usableUntil = usableUntil.Add(-c.margin)
-	refreshAt := start.Add(time.Duration(float64(lifetime) * c.refreshFraction))
+	refreshAt := e.sent.Add(time.Duration(float64(e.lifetime) * c.refreshFraction))
 	if refreshAt.After(usableUntil) {
 		refreshAt = usableUntil
 	}
-	return &entry{token: token, notBefore: notBefore, refreshAt: refreshAt, usableUntil: usableUntil}, nil
+	e.notBefore, e.refreshAt, e.usableUntil = notBefore, refreshAt, usableUntil
+	if now.Before(notBefore) {
+		return errNotYetValid
+	}
+	if !now.Before(usableUntil) {
+		return unavailable("token outside its usable window")
+	}
+	return nil
 }
 
 // The workload-token.v1 claim shapes its verifier enforces (authverify
-// workload_token.go and accesstoken_wire.go); the client checks every one it
-// can know before it caches or sends a token. The iss VALUE is the verifier's
-// configuration, so only its shape is checked here.
+// workload_token.go and accesstoken_wire.go); issuerShape is also the rule
+// for Config.Issuer.
 var (
 	claimMembers   = []string{"iss", "aud", "sub", "principal_type", "jti", "iat", "nbf", "exp"}
 	issuerShape    = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$`)
@@ -109,11 +143,12 @@ var (
 
 // tokenClaims reads the payload of a workload token (no signature check: the
 // client is not the verifier) and checks it as the verifier will: exactly the
-// workload-token.v1 claims, each once; aud the requested audience (one string);
-// principal_type workload; iss, sub and jti in their shapes; integer
+// workload-token.v1 claims, each once; iss the configured issuer; aud the
+// requested audience (one string); principal_type workload; sub and jti in
+// their shapes; integer
 // NumericDates with iat <= nbf < exp and exp - iat <= 300. It returns nbf and
 // exp.
-func tokenClaims(token, audience string) (time.Time, time.Time, error) {
+func tokenClaims(token, issuer, audience string) (time.Time, time.Time, error) {
 	parts := strings.Split(token, ".")
 	payload, err := base64.RawURLEncoding.Strict().DecodeString(parts[1])
 	if err != nil {
@@ -138,7 +173,7 @@ func tokenClaims(token, audience string) (time.Time, time.Time, error) {
 		}
 		return value == want
 	}
-	if !text("aud", nil, audience) || !text("principal_type", nil, "workload") || !text("iss", issuerShape, "") ||
+	if !text("aud", nil, audience) || !text("principal_type", nil, "workload") || !text("iss", nil, issuer) ||
 		!text("sub", subjectShape, "") || !text("jti", tokenIDShape, "") {
 		return time.Time{}, time.Time{}, errClaimsShape
 	}
@@ -252,8 +287,8 @@ func parseAnswer(contentType string, body []byte) (string, time.Duration, error)
 	if issuedType != TokenTypeJWT {
 		return "", 0, unavailable("issued_token_type is not a JWT")
 	}
-	if len(accessToken) > maxAccessTokenBytes || !workloadTokenShape(accessToken) {
-		return "", 0, unavailable("access_token is not a compact JWS")
+	if accessToken == "" {
+		return "", 0, unavailable("access_token is empty")
 	}
 	raw, ok := members["expires_in"]
 	if !ok {

@@ -71,7 +71,6 @@ func TestNoTokenIsReturnedOutsideItsWindowWhateverTheClockDoes(t *testing.T) {
 	}
 }
 
-
 // TestARefreshFailureNeverFallsBackOutsideTheWindow: when a refresh fails, Token falls back to the cached token only if it
 // is inside its window at the clock reading of that return, wherever in the failed refresh the clock steps back before
 // the cached token's nbf.

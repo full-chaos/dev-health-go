@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-
 // TestASubjectWithAnEmptyOrBrokenSegmentIsNeverSent: the subject is a compact JWS of an unknown algorithm; every segment
 // must be present and base64url.
 func TestASubjectWithAnEmptyOrBrokenSegmentIsNeverSent(t *testing.T) {

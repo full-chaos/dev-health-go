@@ -16,6 +16,7 @@ import (
 // one token per (audience, scope). It is safe for concurrent use.
 type Client struct {
 	endpoint        string
+	issuer          string
 	allowPlainHTTP  bool
 	subject         Subject
 	http            *http.Client
@@ -35,16 +36,12 @@ type Client struct {
 // clock reading taken before the request was sent.
 type entry struct {
 	token       string
+	audience    string
+	sent        time.Time
+	lifetime    time.Duration
 	notBefore   time.Time
 	refreshAt   time.Time
 	usableUntil time.Time
-}
-
-// usableAt is the token window at one clock reading: the strictest legal
-// verifier's rule (now >= nbf, now < exp) less the safety margin. Every token
-// Token returns passes it at the reading taken when it is returned.
-func (e *entry) usableAt(now time.Time) bool {
-	return e != nil && !now.Before(e.notBefore) && now.Before(e.usableUntil)
 }
 
 type slot struct {
@@ -63,12 +60,15 @@ func New(cfg Config) (*Client, error) {
 	if err := CheckTransport(cfg.Transport); err != nil {
 		return nil, err
 	}
+	if !issuerShape.MatchString(cfg.Issuer) {
+		return nil, errors.New("workloadtoken: the issuer must be the https token issuer URL")
+	}
 	endpoint, err := endpointFor(cfg.ExchangeURL, cfg.AllowPlainHTTP)
 	if err != nil {
 		return nil, err
 	}
 	c := &Client{
-		endpoint: endpoint.String(), allowPlainHTTP: cfg.AllowPlainHTTP, subject: cfg.Subject, timeout: cfg.Timeout, refreshFraction: cfg.RefreshFraction,
+		endpoint: endpoint.String(), issuer: cfg.Issuer, allowPlainHTTP: cfg.AllowPlainHTTP, subject: cfg.Subject, timeout: cfg.Timeout, refreshFraction: cfg.RefreshFraction,
 		margin: cfg.SafetyMargin, backoffFloor: cfg.BackoffFloor, backoffCeiling: cfg.BackoffCeiling, now: cfg.Now,
 		slots: map[string]*slot{},
 	}
@@ -150,7 +150,7 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 			c.slots[key] = s
 		}
 		now := c.now()
-		if s.entry != nil && !s.entry.usableAt(now) {
+		if s.entry != nil && c.checkToken(s.entry, now) != nil {
 			s.entry = nil
 		}
 		if s.entry != nil && now.Before(s.entry.refreshAt) {
@@ -194,8 +194,8 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 		c.mu.Lock()
 		s.flight = nil
 		close(flight)
-		if exchangeErr == nil && !fresh.usableAt(c.now()) {
-			exchangeErr = unavailable("token outside its usable window when returned")
+		if exchangeErr == nil {
+			exchangeErr = c.checkToken(fresh, c.now())
 		}
 		if exchangeErr == nil {
 			s.entry, s.failures, s.retryAt, s.lastErr = fresh, 0, time.Time{}, nil
@@ -205,7 +205,7 @@ func (c *Client) Token(ctx context.Context, audience string, scope ...string) (s
 		s.failures++
 		s.lastErr = exchangeErr
 		s.retryAt = c.now().Add(c.backoff(s.failures))
-		if s.entry.usableAt(c.now()) {
+		if s.entry != nil && c.checkToken(s.entry, c.now()) == nil {
 			token := s.entry.token
 			c.mu.Unlock()
 			return token, nil
