@@ -10,7 +10,7 @@ import (
 const (
 	typWorkloadToken = "workload+jwt"
 	// workloadLifetimeCeiling is the ceiling on exp - iat, in seconds (ACP-ADR-03).
-	workloadLifetimeCeiling = 300
+	workloadLifetimeCeiling = int64(WorkloadTokenLifetimeCeiling / time.Second)
 )
 
 // workloadAudiences are the audiences whose token classes include workload_token.

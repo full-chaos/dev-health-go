@@ -48,8 +48,8 @@ func TestWorkloadTokenExchangeService_happyPath(t *testing.T) {
 	// regardless of when the test runs.
 	now := time.Now()
 	subjectExpiry := now.Add(30 * time.Minute)
-	expiresAt := now.Add(10 * time.Minute)
-	issuer := &fakeAccessTokenIssuer{issued: IssuedToken{Token: "opaque_test", ExpiresAt: &expiresAt}}
+	expiresAt := now.Add(WorkloadAccessTokenLifetime)
+	issuer := &fakeAccessTokenIssuer{issued: IssuedToken{Token: "opaque_test", IssuedAt: &now, ExpiresAt: &expiresAt}}
 	service, err := NewWorkloadTokenExchangeService(
 		fakeSubjectTokenValidator{identity: SubjectIdentity{ExpiresAt: subjectExpiry}},
 		fakeGrantResolver{binding: WorkloadBinding{BindingID: "wlb_1", OrgID: "org1", GrantedScopes: []string{"a", "b", "c"}}},

@@ -6,11 +6,17 @@ import (
 	"time"
 )
 
+// WorkloadTokenLifetimeCeiling is the longest lifetime (exp - iat) a workload
+// token may have (ACP-ADR-03). WorkloadVerifier refuses a longer one, so an
+// exchange must never mint one: Exchange refuses an issuer that does
+// (ErrIssuedLifetimeExceedsCeiling).
+const WorkloadTokenLifetimeCeiling = 300 * time.Second
+
 // WorkloadAccessTokenLifetime is the RFC 8693 access token lifetime for a
-// workload-exchanged token: a short TTL capped at the subject token's own
-// expiry, with no refresh tokens -- callers re-exchange the projected
-// token instead.
-const WorkloadAccessTokenLifetime = 10 * time.Minute
+// workload-exchanged token: a short TTL, equal to WorkloadTokenLifetimeCeiling,
+// capped at the subject token's own expiry, with no refresh tokens -- callers
+// re-exchange the projected token instead.
+const WorkloadAccessTokenLifetime = WorkloadTokenLifetimeCeiling
 
 var (
 	// ErrSubjectTokenInvalid is returned by a SubjectTokenValidator (and
@@ -27,6 +33,17 @@ var (
 	// for more than the resolved binding grants -- RFC 8693 scope may only
 	// narrow, never widen, a grant.
 	ErrScopeNotGranted = errors.New("requested scope exceeds the workload binding's grant")
+	// ErrIssuedLifetimeExceedsCeiling is returned by Exchange when the
+	// AccessTokenIssuer minted a token that outlives WorkloadTokenLifetimeCeiling.
+	ErrIssuedLifetimeExceedsCeiling = errors.New("issued token lifetime exceeds the workload token ceiling")
+	// ErrIssuedLifetimeUnknown is returned by Exchange when the issuer
+	// returned a token without both IssuedAt and ExpiresAt, or with an
+	// expiry that is not after its issue time: the lifetime cannot be shown
+	// to be within the ceiling, so the exchange fails closed.
+	ErrIssuedLifetimeUnknown = errors.New("issued token lifetime is missing or not positive")
+	// ErrIssuedLifetimeMismatch is returned by Exchange when a JWT-shaped
+	// token's own iat or exp differs from the issuer's IssuedAt or ExpiresAt.
+	ErrIssuedLifetimeMismatch = errors.New("issued token claims disagree with its lifetime metadata")
 )
 
 // SubjectIdentity is the validated k8s ServiceAccount identity a subject
@@ -75,10 +92,23 @@ type GrantResolver interface {
 }
 
 // IssuedToken is the neutral result of minting an access token for a
-// resolved workload binding -- just the opaque token and its expiry, with
-// no dependency on any particular credential wire schema.
+// resolved workload binding -- the token and its lifetime, with no
+// dependency on any particular credential wire schema. IssuedAt and ExpiresAt
+// are the token's iat and exp.
+//
+// Exchange judges the lifetime in two ways. A token in the compact JWT shape
+// (the workload-token.v1 format) is read for its OWN iat and exp claims
+// (the signature is WorkloadVerifier's job, not Exchange's): they must be
+// readable (else ErrIssuedLifetimeUnknown), within
+// WorkloadTokenLifetimeCeiling (else ErrIssuedLifetimeExceedsCeiling), and
+// equal to IssuedAt and ExpiresAt to the second (else
+// ErrIssuedLifetimeMismatch). An opaque token has no claims, so its
+// lifetime is IssuedAt and ExpiresAt alone, both required (else
+// ErrIssuedLifetimeUnknown), and ExpiresAt - IssuedAt must be within the
+// ceiling.
 type IssuedToken struct {
 	Token     string
+	IssuedAt  *time.Time
 	ExpiresAt *time.Time
 }
 
