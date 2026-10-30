@@ -11,8 +11,12 @@ func TestWorkloadLifetimeConstantsShareOneCeiling(t *testing.T) {
 	if WorkloadTokenLifetimeCeiling != 300*time.Second {
 		t.Fatalf("WorkloadTokenLifetimeCeiling = %s, want 300s", WorkloadTokenLifetimeCeiling)
 	}
-	if WorkloadAccessTokenLifetime != WorkloadTokenLifetimeCeiling || WorkloadAccessTokenLifetime != 300*time.Second {
-		t.Fatalf("WorkloadAccessTokenLifetime = %s, want the ceiling %s = 300s", WorkloadAccessTokenLifetime, WorkloadTokenLifetimeCeiling)
+	lifetime, ceiling := WorkloadAccessTokenLifetime, WorkloadTokenLifetimeCeiling
+	if lifetime != ceiling {
+		t.Fatalf("WorkloadAccessTokenLifetime = %s, want the ceiling %s", lifetime, ceiling)
+	}
+	if lifetime != 300*time.Second {
+		t.Fatalf("WorkloadAccessTokenLifetime = %s, want 300s", lifetime)
 	}
 	if time.Duration(workloadLifetimeCeiling)*time.Second != WorkloadTokenLifetimeCeiling {
 		t.Fatalf("verifier ceiling %ds differs from WorkloadTokenLifetimeCeiling %s", workloadLifetimeCeiling, WorkloadTokenLifetimeCeiling)
