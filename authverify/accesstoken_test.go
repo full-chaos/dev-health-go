@@ -106,8 +106,9 @@ func corpusVerifier(t testing.TB, m corpusManifest, row corpusRow) *Verifier {
 }
 
 // corpusOpsCommit is the dev-health-ops commit the access-token, discovery and
-// jwks corpora were copied from. A corpus sync (scripts/sync-corpus.sh) moves
-// this constant, testdata/SOURCE and the vector set together, in one commit.
+// jwks corpora were copied from. scripts/sync-corpus.sh rewrites testdata/SOURCE
+// and the corpus files only; the same commit must also update this constant by
+// hand, so the three move together.
 const corpusOpsCommit = "86251fe93a2e09e05081f3b7d287de44c5295547"
 
 // corpusFileSet is the exact file set the three corpora may hold: each
