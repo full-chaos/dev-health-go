@@ -71,7 +71,7 @@ func TestEveryTokenCheckRefusesItsCase(t *testing.T) {
 		"header kid case-folded":  {signWith(`{"alg":"EdDSA","typ":"workload+jwt","KID":"test-key"}`, payload(nil)), 300, 0, true},
 		"header alg case-folded":  {signWith(`{"ALG":"EdDSA","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
 		"header extra member":     {signWith(`{"alg":"EdDSA","typ":"workload+jwt","kid":"test-key","jku":"https://x.test/k"}`, payload(nil)), 300, 0, true},
-		"header duplicate alg":    {signWith(`{"alg":"RS256","alg":"EdDSA","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, false},
+		"header duplicate alg":    {signWith(`{"alg":"RS256","alg":"EdDSA","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
 		"header kid with a space": {signWith(`{"alg":"EdDSA","typ":"workload+jwt","kid":"test key"}`, payload(nil)), 300, 0, true},
 		// claims
 		"wrong iss":                    {signWith(goodHeader, payload(map[string]string{"iss": q("https://other-issuer.test")})), 300, 0, true},
