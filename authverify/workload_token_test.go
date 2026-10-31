@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -21,6 +20,12 @@ import (
 )
 
 const workloadCorpusDir = "testdata/workload-token"
+
+// workloadCorpusOpsCommit is the dev-health-ops commit the workload corpus was
+// copied from. A corpus refresh updates this constant and
+// testdata/workload-token.SOURCE together, so the SOURCE file cannot name a
+// commit the corpus was not taken from.
+const workloadCorpusOpsCommit = "d4f65a4367c2437a97f548a2ee153d4469082008"
 
 func loadWorkloadManifest(t testing.TB) corpusManifest {
 	t.Helper()
@@ -119,15 +124,15 @@ func TestWorkloadCorpusSourceIsPinned(t *testing.T) {
 	defer file.Close()
 	pinned := map[string]string{}
 	var paths []string
-	sawCommit := false
+	commits := 0
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if value, ok := strings.CutPrefix(line, "ops_commit "); ok {
-			if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(value) {
-				t.Fatal("SOURCE ops_commit is not a full commit sha")
+			if value != workloadCorpusOpsCommit {
+				t.Fatalf("SOURCE ops_commit is %q, the corpus is pinned to %q", value, workloadCorpusOpsCommit)
 			}
-			sawCommit = true
+			commits++
 			continue
 		}
 		if value, ok := strings.CutPrefix(line, "ops_path "); ok {
@@ -140,8 +145,8 @@ func TestWorkloadCorpusSourceIsPinned(t *testing.T) {
 		}
 		pinned[name] = sum
 	}
-	if !sawCommit || strings.Join(paths, ",") != "contracts/auth/v1/golden/workload-token" {
-		t.Fatal("SOURCE lacks ops_commit or the ops_path line")
+	if commits != 1 || strings.Join(paths, ",") != "contracts/auth/v1/golden/workload-token" {
+		t.Fatalf("SOURCE must hold exactly one ops_commit line and the ops_path line (ops_commit lines: %d)", commits)
 	}
 	var onDisk []string
 	err = filepath.Walk(workloadCorpusDir, func(path string, info os.FileInfo, err error) error {
@@ -155,8 +160,30 @@ func TestWorkloadCorpusSourceIsPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	sort.Strings(onDisk)
-	if len(onDisk) != len(pinned) || len(onDisk) < 64+3 {
-		t.Fatalf("corpus holds %d files, SOURCE pins %d", len(onDisk), len(pinned))
+	expected := workloadCorpusFileSet(t)
+	if len(onDisk) != len(expected) {
+		t.Errorf("corpus holds %d files, the manifest names %d", len(onDisk), len(expected))
+	}
+	for _, name := range onDisk {
+		if !expected[name] {
+			t.Errorf("%s is on disk but the manifest has no row for it", name)
+		}
+		if _, ok := pinned[name]; !ok {
+			t.Errorf("%s is on disk but SOURCE does not pin it", name)
+		}
+	}
+	for name := range expected {
+		if _, ok := pinned[name]; !ok {
+			t.Errorf("%s is named by the manifest but SOURCE does not pin it", name)
+		}
+	}
+	for name := range pinned {
+		if !expected[name] {
+			t.Errorf("SOURCE pins %s, which the manifest does not name", name)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 	for _, name := range onDisk {
 		raw, err := os.ReadFile(filepath.Join("testdata", name))
@@ -168,6 +195,37 @@ func TestWorkloadCorpusSourceIsPinned(t *testing.T) {
 			t.Errorf("%s differs from its pinned sha256", name)
 		}
 	}
+}
+
+// workloadCorpusFileSet is the exact file set the corpus may hold: the three
+// fixed files plus one vectors/ file per manifest row, each named once. A
+// vector with no manifest row would get no decision in
+// TestWorkloadCorpusDecisions, and a row with no file could not be decided.
+func workloadCorpusFileSet(t testing.TB) map[string]bool {
+	t.Helper()
+	m := loadWorkloadManifest(t)
+	if len(m.Vectors) != 64 {
+		t.Fatalf("manifest holds %d rows, want 64", len(m.Vectors))
+	}
+	set := map[string]bool{
+		"workload-token/README.md":     true,
+		"workload-token/jwks.json":     true,
+		"workload-token/manifest.json": true,
+	}
+	for _, row := range m.Vectors {
+		name := "workload-token/vectors/" + row.File
+		if row.File == "" || row.File != filepath.Base(row.File) {
+			t.Fatalf("manifest row names the file %q, want a bare file name", row.File)
+		}
+		if set[name] {
+			t.Fatalf("manifest names %s twice", name)
+		}
+		set[name] = true
+		if _, err := os.Stat(filepath.Join("testdata", name)); err != nil {
+			t.Fatalf("manifest row has no file: %v", err)
+		}
+	}
+	return set
 }
 
 func TestWorkloadCorpusDecisions(t *testing.T) {
