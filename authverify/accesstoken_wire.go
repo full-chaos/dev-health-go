@@ -25,9 +25,10 @@ var (
 	digitsOnly      = regexp.MustCompile(`^[0-9]+$`)
 	scopeByAudience = map[string]string{"dev-health-api": "api:access", "auth-service": "auth:session"}
 	headerMembers   = []string{"alg", "typ", "kid"}
-	claimsMembers   = []string{"iss", "aud", "sub", "principal_type", "sid", "jti", "iat", "nbf", "exp", "org_id", "scope"}
+	claimsMembers   = []string{"iss", "aud", "sub", "principal_type", "sid", "jti", "iat", "nbf", "exp", "org_id", "act", "scope"}
 	claimsRequired  = []string{"iss", "aud", "sub", "principal_type", "sid", "jti", "iat", "nbf", "exp", "scope"}
 	headerRequired  = headerMembers
+	actMembers      = []string{"sub"}
 )
 
 // decodeObject parses raw as exactly one JSON object with no repeated member
@@ -111,7 +112,7 @@ func parseAccessHeader(raw []byte) (accessHeader, bool) {
 
 // parseAccessClaims checks the payload against access-token.v1: the closed
 // claim set and patterns, integer NumericDates, iat <= nbf < exp and a
-// lifetime of at most one hour.
+// lifetime of at most one hour. An act claim is one closed object: one hop.
 func parseAccessClaims(raw []byte) (AccessClaims, bool) {
 	var claims AccessClaims
 	object, ok := decodeObject(raw)
@@ -142,6 +143,17 @@ func parseAccessClaims(raw []byte) (AccessClaims, bool) {
 			return AccessClaims{}, false
 		}
 		claims.OrgID = &org
+	}
+	if raw, present := object["act"]; present {
+		act, ok := raw.(map[string]any)
+		if !ok || !closedSet(act, actMembers, actMembers) {
+			return AccessClaims{}, false
+		}
+		actor, ok := stringMember(act, "sub", subjectPattern)
+		if !ok {
+			return AccessClaims{}, false
+		}
+		claims.ActorSubject = &actor
 	}
 	var dates [3]bool
 	claims.IssuedAt, dates[0] = numericDate(object, "iat")
