@@ -104,9 +104,12 @@ type AccessClaims struct {
 	TokenID   string
 	Scope     string
 	OrgID     *string
-	IssuedAt  int64
-	NotBefore int64
-	ExpiresAt int64
+	// ActorSubject is the real actor of a delegated token, the sub of its act
+	// claim; Subject stays the effective subject (G-49). Nil means not delegated.
+	ActorSubject *string
+	IssuedAt     int64
+	NotBefore    int64
+	ExpiresAt    int64
 }
 
 // VerifierConfig configures a Verifier.
