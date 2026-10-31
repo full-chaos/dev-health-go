@@ -59,15 +59,21 @@ func TestEveryTokenCheckRefusesItsCase(t *testing.T) {
 	}
 	rows := map[string]row{
 		// header and signature
-		"alg RS256":        {signWith(`{"alg":"RS256","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
-		"alg none":         {signWith(`{"alg":"none","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
-		"typ JWT":          {signWith(`{"alg":"EdDSA","typ":"JWT","kid":"test-key"}`, payload(nil)), 300, 0, true},
-		"no kid":           {signWith(`{"alg":"EdDSA","typ":"workload+jwt"}`, payload(nil)), 300, 0, true},
-		"empty signature":  {gp[0] + "." + gp[1] + ".", 300, 0, true},
-		"short signature":  {gp[0] + "." + gp[1] + "." + enc.EncodeToString(make([]byte, 63)), 300, 0, true},
-		"long signature":   {gp[0] + "." + gp[1] + "." + enc.EncodeToString(make([]byte, 65)), 300, 0, true},
-		"padded signature": {gp[0] + "." + gp[1] + "." + gp[2] + "==", 300, 0, true},
-		"header not JSON":  {enc.EncodeToString([]byte("x")) + "." + gp[1] + "." + gp[2], 300, 0, true},
+		"alg RS256":                      {signWith(`{"alg":"RS256","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
+		"alg none":                       {signWith(`{"alg":"none","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
+		"typ JWT":                        {signWith(`{"alg":"EdDSA","typ":"JWT","kid":"test-key"}`, payload(nil)), 300, 0, true},
+		"no kid":                         {signWith(`{"alg":"EdDSA","typ":"workload+jwt"}`, payload(nil)), 300, 0, true},
+		"empty signature":                {gp[0] + "." + gp[1] + ".", 300, 0, true},
+		"short signature":                {gp[0] + "." + gp[1] + "." + enc.EncodeToString(make([]byte, 63)), 300, 0, true},
+		"long signature":                 {gp[0] + "." + gp[1] + "." + enc.EncodeToString(make([]byte, 65)), 300, 0, true},
+		"padded signature":               {gp[0] + "." + gp[1] + "." + gp[2] + "==", 300, 0, true},
+		"header not JSON":                {enc.EncodeToString([]byte("x")) + "." + gp[1] + "." + gp[2], 300, 0, true},
+		"header kid case-folded":         {signWith(`{"alg":"EdDSA","typ":"workload+jwt","KID":"test-key"}`, payload(nil)), 300, 0, true},
+		"header alg case-folded":         {signWith(`{"ALG":"EdDSA","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
+		"header extra member":            {signWith(`{"alg":"EdDSA","typ":"workload+jwt","kid":"test-key","jku":"https://x.test/k"}`, payload(nil)), 300, 0, true},
+		"header duplicate alg":           {signWith(`{"alg":"RS256","alg":"EdDSA","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
+		"header case-fold duplicate alg": {signWith(`{"alg":"EdDSA","ALG":"EdDSA","typ":"workload+jwt","kid":"test-key"}`, payload(nil)), 300, 0, true},
+		"header kid with a space":        {signWith(`{"alg":"EdDSA","typ":"workload+jwt","kid":"test key"}`, payload(nil)), 300, 0, true},
 		// claims
 		"wrong iss":                    {signWith(goodHeader, payload(map[string]string{"iss": q("https://other-issuer.test")})), 300, 0, true},
 		"missing iss":                  {signWith(goodHeader, payload(nil, "iss")), 300, 0, true},
@@ -83,6 +89,7 @@ func TestEveryTokenCheckRefusesItsCase(t *testing.T) {
 		"duplicate aud":                {signWith(goodHeader, strings.Replace(payload(nil), `"aud":`, `"aud":"auth-service","aud":`, 1)), 300, 0, true},
 		"iat not integer":              {signWith(goodHeader, payload(map[string]string{"iat": fmt.Sprint(T) + ".5"})), 300, 0, true},
 		"nbf before iat":               {signWith(goodHeader, payload(map[string]string{"nbf": fmt.Sprint(T - 1)})), 300, 0, true},
+		"iat wraps exp-iat":            {signWith(goodHeader, payload(map[string]string{"iat": "-9223372036854775808", "nbf": fmt.Sprint(T), "exp": fmt.Sprint(T + 300)})), 300, 0, true},
 		"exp at nbf":                   {signWith(goodHeader, payload(map[string]string{"exp": fmt.Sprint(T)})), 300, 0, true},
 		"expires_in inside the margin": {good, 30, 0, false},
 		"lifetime 301 s":               {signWith(goodHeader, payload(map[string]string{"exp": fmt.Sprint(T + 301)})), 300, 0, true},
@@ -162,4 +169,18 @@ func TestEveryTokenCheckRefusesItsCase(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestTokenClaimsUpperDateBound(t *testing.T) {
+	const goodHeader = `{"alg":"EdDSA","typ":"workload+jwt","kid":"test-key"}`
+	token := func(iat, nbf, exp int64) string {
+		return signWith(goodHeader, fmt.Sprintf(`{"iss":%q,"aud":%q,"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","principal_type":"workload","jti":"000000000000000000000001","iat":%d,"nbf":%d,"exp":%d}`,
+			testIssuerURL, testAudience, iat, nbf, exp))
+	}
+	if _, _, err := tokenClaims(token(253402300700, 253402300700, 253402300800), testIssuerURL, testAudience); err == nil {
+		t.Fatal("exp beyond 253402300799 is accepted")
+	}
+	if _, _, err := tokenClaims(token(253402300500, 253402300500, 253402300799), testIssuerURL, testAudience); err != nil {
+		t.Fatalf("exp at 253402300799 is refused: %v", err)
+	}
 }
