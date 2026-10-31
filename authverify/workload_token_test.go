@@ -130,7 +130,7 @@ func TestWorkloadCorpusSourceIsPinned(t *testing.T) {
 		line := scanner.Text()
 		if value, ok := strings.CutPrefix(line, "ops_commit "); ok {
 			if value != workloadCorpusOpsCommit {
-				t.Fatalf("SOURCE ops_commit is %q, the corpus is pinned to %q", value, workloadCorpusOpsCommit)
+				t.Fatalf("SOURCE ops_commit is %q, the corpus is pinned to %q: a corpus refresh updates workloadCorpusOpsCommit, testdata/workload-token.SOURCE and the vector set together", value, workloadCorpusOpsCommit)
 			}
 			commits++
 			continue
