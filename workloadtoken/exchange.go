@@ -421,8 +421,9 @@ func readSubjectFile(path string, maxBytes int) (string, error) {
 	// Its owner can write it whatever the mode says (where the system reports
 	// owners; elsewhere the mode rule alone decides, as in v0.31.0). A Compose or Docker secret
 	// is a read-only bind mount that keeps the host file's owner, and a
-	// Kubernetes projected volume is read-only: through such a mount nobody
-	// can change the file, so any owner is accepted there.
+	// Kubernetes projected volume is read-only: through such a mount no process
+	// of this container can change the file (the host owner still can, on the
+	// host, outside this process's reach), so any owner is accepted there.
 	if uid, known := ownerOf(info); ownersReported && (!known || (int(uid) != processUID() && uid != 0)) && !onReadOnlyMount(file) {
 		return "", fmt.Errorf("%w (owned by another user on a writable mount)", ErrSubjectUnreadable)
 	}
