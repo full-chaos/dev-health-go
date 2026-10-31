@@ -80,12 +80,13 @@ var errNotYetValid = unavailable("token not yet valid")
 // reading now. It checks everything the strictest legal verifier (an
 // authverify.WorkloadVerifier with leeway 0 on this host's clock) checks that
 // the client can know, plus the client's own bounds:
-//   - the header: alg EdDSA, typ workload+jwt, a kid; three non-empty
+//   - the header: exactly alg, typ, kid (no duplicates), each a string; alg
+//     EdDSA, typ workload+jwt, kid in the verifier's shape; three non-empty
 //     base64url segments; a signature of the Ed25519 length;
 //   - the claims: exactly the workload-token.v1 set, each once; iss the
 //     configured issuer; aud the requested audience (one string); sub, jti in
 //     their shapes; principal_type workload; integer iat <= nbf with
-//     exp - iat <= 300;
+//     exp - iat <= 300, each date within 1..253402300799;
 //   - the window at now: now >= nbf, and now before min(exp, sent +
 //     expires_in) - SafetyMargin (so exp <= nbf, or an expires_in inside the
 //     margin, leaves no window and is refused).
@@ -128,14 +129,19 @@ var (
 	subjectShape   = regexp.MustCompile(`^prn_[A-Za-z0-9_-]+$`)
 	tokenIDShape   = regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`)
 	errClaimsShape = unavailable("token claims break the workload-token contract")
+	// kidShape is the verifier's kid rule (authverify/accesstoken_wire.go kidPattern).
+	kidShape = regexp.MustCompile(`^[!-~]{1,256}$`)
 )
+
+// maxNumericDate is the last NumericDate the verifier accepts (authverify accesstoken_wire.go maxNumericDate).
+const maxNumericDate = 253402300799
 
 // tokenClaims reads the payload of a workload token (no signature check: the
 // client is not the verifier) and checks it as the verifier will: exactly the
 // workload-token.v1 claims, each once; iss the configured issuer; aud the
 // requested audience (one string); principal_type workload; sub and jti in
 // their shapes; integer
-// NumericDates with iat <= nbf and exp - iat <= 300 (exp <= nbf leaves no
+// NumericDates in 1..253402300799 with iat <= nbf and exp - iat <= 300 (exp <= nbf leaves no
 // usable window, which checkToken refuses). It returns nbf and exp.
 func tokenClaims(token, issuer, audience string) (time.Time, time.Time, error) {
 	parts := strings.Split(token, ".")
@@ -171,6 +177,9 @@ func tokenClaims(token, issuer, audience string) (time.Time, time.Time, error) {
 		value, err := strconv.ParseInt(string(bytes.TrimSpace(members[name])), 10, 64)
 		if err != nil {
 			return time.Time{}, time.Time{}, unavailable("token " + name + " is not an integer")
+		}
+		if value < 1 || value > maxNumericDate {
+			return time.Time{}, time.Time{}, unavailable("token dates break the workload-token contract")
 		}
 		dates[i] = value
 	}
@@ -312,8 +321,9 @@ func compactJWS(value string) bool {
 
 // workloadTokenShape is the shape of a workload-token.v1 access token as its
 // verifier requires it, short of the signature check: a compact JWS whose
-// header is a JSON object with alg EdDSA, typ workload+jwt and a kid, and
-// whose signature has the Ed25519 length.
+// header is a JSON object of exactly alg, typ and kid (no duplicates, each a
+// string) with alg EdDSA, typ workload+jwt and a kid in the verifier's shape,
+// and whose signature has the Ed25519 length.
 func workloadTokenShape(token string) bool {
 	if !compactJWS(token) {
 		return false
@@ -324,12 +334,21 @@ func workloadTokenShape(token string) bool {
 	if err != nil {
 		return false
 	}
-	var header struct {
-		Alg string `json:"alg"`
-		Typ string `json:"typ"`
-		Kid string `json:"kid"`
+	members, ok := uniqueObject(rawHeader)
+	if !ok || len(members) != 3 {
+		return false
 	}
-	if json.Unmarshal(rawHeader, &header) != nil || header.Alg != "EdDSA" || header.Typ != "workload+jwt" || header.Kid == "" {
+	text := func(name string) (string, bool) {
+		var value string
+		if raw, ok := members[name]; !ok || json.Unmarshal(raw, &value) != nil {
+			return "", false
+		}
+		return value, true
+	}
+	alg, algOK := text("alg")
+	typ, typOK := text("typ")
+	kid, kidOK := text("kid")
+	if !algOK || !typOK || !kidOK || alg != "EdDSA" || typ != "workload+jwt" || !kidShape.MatchString(kid) {
 		return false
 	}
 	signature, err := enc.DecodeString(parts[2])
