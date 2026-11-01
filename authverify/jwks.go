@@ -44,8 +44,11 @@ var retireAfterGrammar = regexp.MustCompile(
 // retireAfterMember decodes the optional retire_after member strictly: a
 // string that matches the RFC 3339 grammar with a zero UTC offset. Any other
 // JSON type (number, null, bool), an empty string, a comma fraction, a
-// fraction of more than 9 digits (nanosecond precision, fail closed), a
 // non-zero offset or a malformed time fails the decode.
+//
+// A fraction may have any number of digits (RFC 3339 secfrac is "." 1*DIGIT).
+// It is truncated, never rounded, to 9 digits (nanoseconds), which moves the
+// instant earlier and so fails closed.
 //
 // A leap second is admitted only as 23:59:60 (any fraction) and maps to
 // 23:59:59.999999999 UTC of that day, so a key retires no later than the
@@ -61,10 +64,13 @@ func (m *retireAfterMember) UnmarshalJSON(data []byte) error {
 		return ErrInvalidJWKS
 	}
 	parts := retireAfterGrammar.FindStringSubmatch(text)
-	if parts == nil || len(parts[5]) > 9 {
+	if parts == nil {
 		return ErrInvalidJWKS
 	}
 	date, hour, minute, second, fraction := parts[1], parts[2], parts[3], parts[4], parts[5]
+	if len(fraction) > 9 {
+		fraction = fraction[:9]
+	}
 	clock := hour + ":" + minute + ":" + second
 	if fraction != "" {
 		clock += "." + fraction
