@@ -1,4 +1,4 @@
-ops_commit d4f65a4367c2437a97f548a2ee153d4469082008
+ops_commit 67d8fc88fc1c701a2beb62bc965dc066ab801778
 ops_path contracts/auth/v1/golden/workload-token
 67c8c152e679d8898f77a94d892b1d56ab47f8f9b2940a65ccc45060bacd012a  workload-token/README.md
 af9d2a122f7c68ae43d3fbfe1faaacdc66dafa01b1dde1aaaf6eb7983d9174c2  workload-token/jwks.json

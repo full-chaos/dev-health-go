@@ -109,7 +109,7 @@ func corpusVerifier(t testing.TB, m corpusManifest, row corpusRow) *Verifier {
 // jwks corpora were copied from. scripts/sync-corpus.sh rewrites testdata/SOURCE
 // and the corpus files only; the same commit must also update this constant by
 // hand, so the three move together.
-const corpusOpsCommit = "86251fe93a2e09e05081f3b7d287de44c5295547"
+const corpusOpsCommit = "67d8fc88fc1c701a2beb62bc965dc066ab801778"
 
 // corpusFileSet is the exact file set the three corpora may hold: each
 // manifest.json, the access-token README and jwks, and one file per manifest
