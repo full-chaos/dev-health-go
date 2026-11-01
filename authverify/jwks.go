@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -33,9 +34,22 @@ type jwk struct {
 	RetireAfter retireAfterMember `json:"retire_after"`
 }
 
+// retireAfterGrammar is the RFC 3339 date-time grammar, anchored, with a zero
+// offset only: date "T"|"t" time, secfrac "." 1*DIGIT, offset "Z"|"z"|"+00:00"
+// |"-00:00". time.Parse is not used as the validator: it accepts a comma
+// fraction (RFC 3339 refuses it) and refuses lowercase t/z and a leap second.
+var retireAfterGrammar = regexp.MustCompile(
+	`^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|\+00:00|-00:00)$`)
+
 // retireAfterMember decodes the optional retire_after member strictly: a
-// string in RFC 3339 with a zero UTC offset. Any other JSON type (number,
-// null, bool), an empty string or a malformed time fails the decode.
+// string that matches the RFC 3339 grammar with a zero UTC offset. Any other
+// JSON type (number, null, bool), an empty string, a comma fraction, a
+// fraction of more than 9 digits (nanosecond precision, fail closed), a
+// non-zero offset or a malformed time fails the decode.
+//
+// A leap second is admitted only as 23:59:60 (any fraction) and maps to
+// 23:59:59.999999999 UTC of that day, so a key retires no later than the
+// leap second (fail closed).
 type retireAfterMember struct {
 	present bool
 	at      time.Time
@@ -46,11 +60,23 @@ func (m *retireAfterMember) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &text); err != nil {
 		return ErrInvalidJWKS
 	}
-	at, err := time.Parse(time.RFC3339, text)
-	if err != nil {
+	parts := retireAfterGrammar.FindStringSubmatch(text)
+	if parts == nil || len(parts[5]) > 9 {
 		return ErrInvalidJWKS
 	}
-	if _, offset := at.Zone(); offset != 0 {
+	date, hour, minute, second, fraction := parts[1], parts[2], parts[3], parts[4], parts[5]
+	clock := hour + ":" + minute + ":" + second
+	if fraction != "" {
+		clock += "." + fraction
+	}
+	if second == "60" {
+		if hour != "23" || minute != "59" {
+			return ErrInvalidJWKS
+		}
+		clock = "23:59:59.999999999"
+	}
+	at, err := time.Parse(time.RFC3339Nano, date+"T"+clock+"Z")
+	if err != nil {
 		return ErrInvalidJWKS
 	}
 	m.present, m.at = true, at.UTC()
