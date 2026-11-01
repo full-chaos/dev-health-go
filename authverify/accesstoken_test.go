@@ -10,7 +10,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -106,6 +105,59 @@ func corpusVerifier(t testing.TB, m corpusManifest, row corpusRow) *Verifier {
 	return v
 }
 
+// corpusOpsCommit is the dev-health-ops commit the access-token, discovery and
+// jwks corpora were copied from. scripts/sync-corpus.sh rewrites testdata/SOURCE
+// and the corpus files only; the same commit must also update this constant by
+// hand, so the three move together.
+const corpusOpsCommit = "86251fe93a2e09e05081f3b7d287de44c5295547"
+
+// corpusFileSet is the exact file set the three corpora may hold: each
+// manifest.json, the access-token README and jwks, and one file per manifest
+// row. The listed manifest categories are explicit, so a new category in a
+// manifest leaves its files unlisted and fails the pin test until this table
+// is updated with it.
+func corpusFileSet(t testing.TB) map[string]bool {
+	t.Helper()
+	type row struct {
+		File string `json:"file"`
+	}
+	sets := []struct {
+		dir, prefix string
+		categories  []string
+		fixed       []string
+	}{
+		{"access-token", "vectors/", []string{"vectors"}, []string{"README.md", "jwks.json"}},
+		{"discovery", "", []string{"accept", "reject", "reject_by_client"}, nil},
+		{"jwks", "", []string{"accept", "reject", "reject_by_client", "narrower_than_consumer"}, nil},
+	}
+	set := map[string]bool{}
+	for _, s := range sets {
+		var manifest map[string]json.RawMessage
+		readJSON(t, filepath.Join("testdata", s.dir, "manifest.json"), &manifest)
+		set[s.dir+"/manifest.json"] = true
+		for _, name := range s.fixed {
+			set[s.dir+"/"+name] = true
+		}
+		for _, category := range s.categories {
+			var rows []row
+			if err := json.Unmarshal(manifest[category], &rows); err != nil || len(rows) == 0 {
+				t.Fatalf("%s manifest category %q is missing or empty: %v", s.dir, category, err)
+			}
+			for _, r := range rows {
+				name := s.dir + "/" + s.prefix + r.File
+				if r.File == "" || r.File != filepath.Base(r.File) {
+					t.Fatalf("%s manifest names the file %q, want a bare file name", s.dir, r.File)
+				}
+				if set[name] {
+					t.Fatalf("%s manifest names %s twice", s.dir, name)
+				}
+				set[name] = true
+			}
+		}
+	}
+	return set
+}
+
 func TestCorpusSourceIsPinned(t *testing.T) {
 	file, err := os.Open("testdata/SOURCE")
 	if err != nil {
@@ -114,15 +166,15 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 	defer file.Close()
 	pinned := map[string]string{}
 	var paths []string
-	sawCommit := false
+	commits := 0
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if value, ok := strings.CutPrefix(line, "ops_commit "); ok {
-			if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(value) {
-				t.Fatal("SOURCE ops_commit is not a full commit sha")
+			if value != corpusOpsCommit {
+				t.Fatalf("SOURCE ops_commit is %q, the corpus is pinned to %q: a corpus sync updates corpusOpsCommit, testdata/SOURCE and the vector set together", value, corpusOpsCommit)
 			}
-			sawCommit = true
+			commits++
 			continue
 		}
 		if value, ok := strings.CutPrefix(line, "ops_path "); ok {
@@ -136,8 +188,8 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 		pinned[name] = sum
 	}
 	wantPaths := []string{"contracts/auth/v1/golden/access-token", "contracts/auth/v1/examples/discovery", "contracts/auth/v1/examples/jwks"}
-	if !sawCommit || strings.Join(paths, ",") != strings.Join(wantPaths, ",") {
-		t.Fatal("SOURCE lacks ops_commit or the three ops_path lines")
+	if commits != 1 || strings.Join(paths, ",") != strings.Join(wantPaths, ",") {
+		t.Fatalf("SOURCE must hold exactly one ops_commit line and the three ops_path lines (ops_commit lines: %d)", commits)
 	}
 	var onDisk []string
 	for _, set := range []string{"access-token", "discovery", "jwks"} {
@@ -153,8 +205,34 @@ func TestCorpusSourceIsPinned(t *testing.T) {
 		}
 	}
 	sort.Strings(onDisk)
-	if len(onDisk) != len(pinned) || len(onDisk) < 51+20+40 {
-		t.Fatalf("corpus holds %d files, SOURCE pins %d", len(onDisk), len(pinned))
+	expected := corpusFileSet(t)
+	const syncRule = "a corpus sync updates corpusOpsCommit, testdata/SOURCE and the vector set together"
+	if len(onDisk) != len(expected) {
+		t.Errorf("corpus holds %d files, the manifests name %d (%s)", len(onDisk), len(expected), syncRule)
+	}
+	for _, name := range onDisk {
+		if !expected[name] {
+			t.Errorf("%s is on disk but no manifest names it (%s)", name, syncRule)
+		}
+		if _, ok := pinned[name]; !ok {
+			t.Errorf("%s is on disk but SOURCE does not pin it (%s)", name, syncRule)
+		}
+	}
+	for name := range expected {
+		if _, ok := pinned[name]; !ok {
+			t.Errorf("%s is named by a manifest but SOURCE does not pin it (%s)", name, syncRule)
+		}
+		if _, err := os.Stat(filepath.Join("testdata", name)); err != nil {
+			t.Errorf("%s is named by a manifest but is not on disk (%s)", name, syncRule)
+		}
+	}
+	for name := range pinned {
+		if !expected[name] {
+			t.Errorf("SOURCE pins %s, which no manifest names (%s)", name, syncRule)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 	for _, name := range onDisk {
 		raw, err := os.ReadFile(filepath.Join("testdata", name))
