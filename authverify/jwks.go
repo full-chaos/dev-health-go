@@ -8,7 +8,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // ErrInvalidJWKS is returned when the JWKS document at an
@@ -28,6 +30,68 @@ type jwk struct {
 	Use     string `json:"use"`
 	Alg     string `json:"alg"`
 	X       string `json:"x"`
+
+	RetireAfter retireAfterMember `json:"retire_after"`
+}
+
+// retireAfterGrammar is the RFC 3339 date-time grammar, anchored, with a zero
+// offset only: date "T"|"t" time, secfrac "." 1*DIGIT, offset "Z"|"z"|"+00:00"
+// |"-00:00". time.Parse is not used as the validator: it accepts a comma
+// fraction (RFC 3339 refuses it) and refuses lowercase t/z and a leap second.
+var retireAfterGrammar = regexp.MustCompile(
+	`^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|\+00:00|-00:00)$`)
+
+// retireAfterMember decodes the optional retire_after member strictly: a
+// string that matches the RFC 3339 grammar with a zero UTC offset. Any other
+// JSON type (number, null, bool), an empty string, a comma fraction, a
+// non-zero offset or a malformed time fails the decode.
+//
+// A fraction may have any number of digits (RFC 3339 secfrac is "." 1*DIGIT).
+// It is truncated, never rounded, to 9 digits (nanoseconds), which moves the
+// instant earlier and so fails closed.
+//
+// No leap second: a second of 60 is refused on every date (Go time cannot
+// hold one and no leap-second table exists here; refusing fails closed).
+type retireAfterMember struct {
+	present bool
+	at      time.Time
+}
+
+func (m *retireAfterMember) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return ErrInvalidJWKS
+	}
+	parts := retireAfterGrammar.FindStringSubmatch(text)
+	if parts == nil {
+		return ErrInvalidJWKS
+	}
+	date, hour, minute, second, fraction := parts[1], parts[2], parts[3], parts[4], parts[5]
+	if len(fraction) > 9 {
+		fraction = fraction[:9]
+	}
+	clock := hour + ":" + minute + ":" + second
+	if fraction != "" {
+		clock += "." + fraction
+	}
+	if second == "60" {
+		return ErrInvalidJWKS
+	}
+	at, err := time.Parse(time.RFC3339Nano, date+"T"+clock+"Z")
+	if err != nil {
+		return ErrInvalidJWKS
+	}
+	m.present, m.at = true, at.UTC()
+	return nil
+}
+
+// JWKSKey is one key of a file JWKS document with its optional retire time.
+// RetireAfter is the ops registry row's retire_after for the key: authverify
+// parses it and applies no time rule; the caller decides what it means. nil
+// means the member is absent.
+type JWKSKey struct {
+	Public      ed25519.PublicKey
+	RetireAfter *time.Time
 }
 
 // Ed25519JWKSVerifier loads and validates an Ed25519 JWKS document from a
@@ -51,17 +115,56 @@ func NewEd25519JWKSVerifier(path string) *Ed25519JWKSVerifier {
 // byte) key id unique within the document, and a correctly-sized Ed25519
 // public key -- any violation, or an empty/malformed document, is
 // reported as ErrInvalidJWKS. A file-read failure is returned unwrapped.
+//
+// Keys applies no retire_after rule and its result is unchanged by the
+// member: use KeySet to read it. A document whose retire_after member is
+// malformed is refused here as in KeySet.
 func (v *Ed25519JWKSVerifier) Keys() (map[string]ed25519.PublicKey, error) {
+	set, err := v.KeySet()
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]ed25519.PublicKey, len(set))
+	for kid, key := range set {
+		keys[kid] = key.Public
+	}
+	return keys, nil
+}
+
+// KeySet loads the JWKS document like Keys and also returns each key's
+// optional retire_after member (RFC 3339 UTC string, the ops registry row's
+// retire_after). authverify only parses the member; it never compares it
+// with a clock. A malformed member (not RFC 3339, empty, not a string, null,
+// non-UTC offset, repeated in one key) refuses the whole document with
+// ErrInvalidJWKS. The member is admitted on this file path only: the HTTP
+// JWKSClient still refuses a document that carries it.
+func (v *Ed25519JWKSVerifier) KeySet() (map[string]JWKSKey, error) {
 	encoded, err := os.ReadFile(v.path)
 	if err != nil {
 		return nil, err
 	}
-	return parseJWKS(encoded)
+	return parseJWKSDocument(encoded, true)
 }
 
-// parseJWKS is the one strict JWKS parser: the file reader and the HTTP
-// client both use it, so the two paths cannot disagree about a document.
+// parseJWKS is the HTTP-path form of the strict parser: it refuses a
+// document that carries retire_after.
 func parseJWKS(encoded []byte) (map[string]ed25519.PublicKey, error) {
+	set, err := parseJWKSDocument(encoded, false)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]ed25519.PublicKey, len(set))
+	for kid, key := range set {
+		keys[kid] = key.Public
+	}
+	return keys, nil
+}
+
+// parseJWKSDocument is the one strict JWKS parser: the file reader and the
+// HTTP client both use it, so the two paths cannot disagree about a
+// document. admitRetireAfter is its one option: it admits the per-key
+// retire_after member (file path only).
+func parseJWKSDocument(encoded []byte, admitRetireAfter bool) (map[string]JWKSKey, error) {
 	if !singleDocumentWithoutDuplicateMembers(encoded) {
 		return nil, ErrInvalidJWKS
 	}
@@ -71,7 +174,7 @@ func parseJWKS(encoded []byte) (map[string]ed25519.PublicKey, error) {
 	if err := decoder.Decode(&document); err != nil || len(document.Keys) == 0 {
 		return nil, ErrInvalidJWKS
 	}
-	keys := make(map[string]ed25519.PublicKey, len(document.Keys))
+	keys := make(map[string]JWKSKey, len(document.Keys))
 	for _, candidate := range document.Keys {
 		key, err := base64.RawURLEncoding.DecodeString(candidate.X)
 		if err != nil || candidate.KeyType != "OKP" || candidate.Curve != "Ed25519" || candidate.Alg != "EdDSA" ||
@@ -81,7 +184,15 @@ func parseJWKS(encoded []byte) (map[string]ed25519.PublicKey, error) {
 		if _, duplicate := keys[candidate.KeyID]; duplicate {
 			return nil, ErrInvalidJWKS
 		}
-		keys[candidate.KeyID] = ed25519.PublicKey(key)
+		entry := JWKSKey{Public: ed25519.PublicKey(key)}
+		if candidate.RetireAfter.present {
+			if !admitRetireAfter {
+				return nil, ErrInvalidJWKS
+			}
+			at := candidate.RetireAfter.at
+			entry.RetireAfter = &at
+		}
+		keys[candidate.KeyID] = entry
 	}
 	return keys, nil
 }
