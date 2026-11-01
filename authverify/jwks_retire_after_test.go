@@ -64,6 +64,7 @@ func TestKeySetRefusesABadMemberForTheWholeDocument(t *testing.T) {
 		"number":           `"retire_after":1793615400`,
 		"null":             `"retire_after":null`,
 		"bool":             `"retire_after":true`,
+		"non-utc offset":   `"retire_after":"2026-11-02T10:30:00+02:00"`,
 		"duplicate member": `"retire_after":"2026-11-02T10:30:00Z","retire_after":"2026-11-03T10:30:00Z"`,
 	}
 	for name, member := range cases {
