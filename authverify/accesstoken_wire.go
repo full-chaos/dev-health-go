@@ -23,7 +23,7 @@ var (
 	jtiPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`)
 	orgIDPattern    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	digitsOnly      = regexp.MustCompile(`^[0-9]+$`)
-	scopeByAudience = map[string]string{"dev-health-api": "api:access", "auth-service": "auth:session"}
+	scopeByAudience = map[string]string{"dev-health-api": "api:access", "auth-service": "auth:session", "acr-api": "acr:api", "acr-mcp": "acr:mcp"}
 	headerMembers   = []string{"alg", "typ", "kid"}
 	claimsMembers   = []string{"iss", "aud", "sub", "principal_type", "sid", "jti", "iat", "nbf", "exp", "org_id", "act", "scope"}
 	claimsRequired  = []string{"iss", "aud", "sub", "principal_type", "sid", "jti", "iat", "nbf", "exp", "scope"}
