@@ -50,9 +50,8 @@ var retireAfterGrammar = regexp.MustCompile(
 // It is truncated, never rounded, to 9 digits (nanoseconds), which moves the
 // instant earlier and so fails closed.
 //
-// A leap second is admitted only as 23:59:60 (any fraction) and maps to
-// 23:59:59.999999999 UTC of that day, so a key retires no later than the
-// leap second (fail closed).
+// No leap second: a second of 60 is refused on every date (Go time cannot
+// hold one and no leap-second table exists here; refusing fails closed).
 type retireAfterMember struct {
 	present bool
 	at      time.Time
@@ -76,10 +75,7 @@ func (m *retireAfterMember) UnmarshalJSON(data []byte) error {
 		clock += "." + fraction
 	}
 	if second == "60" {
-		if hour != "23" || minute != "59" {
-			return ErrInvalidJWKS
-		}
-		clock = "23:59:59.999999999"
+		return ErrInvalidJWKS
 	}
 	at, err := time.Parse(time.RFC3339Nano, date+"T"+clock+"Z")
 	if err != nil {
