@@ -125,7 +125,7 @@ func TestBatchEveryFailureDeniesEveryItem(t *testing.T) {
 		{"unknown member", replyJSON(replaceOnce(t, good, `"decisions"`, `"extra": 1, "decisions"`)), ReasonMalformed},
 		{"duplicate member", replyJSON(replaceOnce(t, good, `"decisions"`, `"decisions": [], "decisions"`)), ReasonMalformed},
 		{"wrong schema version", replyJSON(replaceOnce(t, good, `authorization_batch_response.v1`, `authorization_decision.v1`)), ReasonMalformed},
-		{"item organization differs", replyJSON(replaceOnce(t, good, `org_EXAMPLE0000000000000001`, `org_EXAMPLE0000000000000002`)), ReasonMismatch},
+		{"item organization differs", replyJSON(replaceOnce(t, good, `"organization_id": "org_EXAMPLE0000000000000001"`, `"organization_id": "org_EXAMPLE0000000000000002"`)), ReasonMismatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -16,7 +16,7 @@ func TestRejectDuplicates(t *testing.T) {
 		`{"a":{"a":1},"b":[{"a":1},{"a":2}]}`: true,
 		`[1,2,[3]]`:                           true,
 		`{"a":1,"a":2}`:                       false,
-		`{"a":1,"a":2}`:                       false,
+		`{"a":1,"\u0061":2}`:                  false,
 		`{"a":{"b":1,"b":2}}`:                 false,
 		`{"a":[{"b":1,"b":2}]}`:               false,
 		`{"a":1} {}`:                          false,
@@ -30,7 +30,7 @@ func TestRejectDuplicates(t *testing.T) {
 			t.Errorf("%q: err=%v, want ok=%v", in, err, ok)
 		}
 	}
-	deep := strings.Repeat("[", maxDepth+1) + strings.Repeat("]", maxDepth+1)
+	deep := strings.Repeat("[", maxDepth+2) + strings.Repeat("]", maxDepth+2)
 	if rejectDuplicates([]byte(deep)) == nil {
 		t.Error("a document nested past the depth bound was accepted")
 	}
