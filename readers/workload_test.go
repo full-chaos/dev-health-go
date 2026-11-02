@@ -3,6 +3,7 @@ package readers_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -103,6 +104,93 @@ func TestReadProjectWorkload(t *testing.T) {
 		rows, err := readers.ReadProjectWorkload(context.Background(), client, "org-1", []string{"linear:proj-1"}, readers.TimeBound{})
 		if err == nil || err.Error() != "boom" || rows != nil {
 			t.Fatalf("rows = %#v, err = %v, want (nil, boom)", rows, err)
+		}
+	})
+}
+
+func TestReadTeamCompletionForecasts(t *testing.T) {
+	t.Parallel()
+	t.Run("scans every column verbatim", func(t *testing.T) {
+		t.Parallel()
+		client := &fakeClient{tables: []fakeTable{
+			{match: "FROM capacity_forecasts", rows: [][]any{
+				{"CHAOS", uint8(0), "", "2026-10-30 04:00:00.000", uint32(10000), int64(42),
+					uint8(1), int64(12), uint8(1), int64(20), uint8(0), int64(0),
+					"2026-11-11", "2026-11-19", "", uint8(0), uint8(1),
+					uint64(3), uint64(3), []uint16{5, 12, 365}, []uint32{100, 9000, 900}},
+			}},
+		}}
+		rows, err := readers.ReadTeamCompletionForecasts(context.Background(), client, "org-1", []string{"CHAOS"}, readers.TimeBound{})
+		if err != nil {
+			t.Fatalf("ReadTeamCompletionForecasts() error = %v", err)
+		}
+		want := []readers.CompletionForecastRow{{
+			TeamID: "CHAOS", HasWorkScope: 0, WorkScopeID: "", ComputedAt: "2026-10-30 04:00:00.000",
+			SimulationCount: 10000, BacklogSize: 42,
+			HasP50Days: 1, P50Days: 12, HasP85Days: 1, P85Days: 20, HasP95Days: 0, P95Days: 0,
+			P50Date: "2026-11-11", P85Date: "2026-11-19", P95Date: "", InsufficientHistory: 0, HighVariance: 1,
+			CompletionDayBins: 3, CompletionCountBins: 3,
+			CompletionDaysValues: []uint16{5, 12, 365}, CompletionDaysCounts: []uint32{100, 9000, 900},
+		}}
+		if !reflect.DeepEqual(rows, want) {
+			t.Fatalf("rows = %#v, want %#v", rows, want)
+		}
+		if client.orgIDBinding() != "org-1" {
+			t.Fatalf("org_id binding = %q", client.orgIDBinding())
+		}
+		if got := client.idsBinding(); len(got) != 1 || got[0] != "CHAOS" {
+			t.Fatalf("ids binding = %#v", got)
+		}
+		statement := client.queries[0].statement
+		for _, part := range []string{
+			// The latest row per (team, scope), with scope partitioned as stored.
+			"PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC",
+			"toUInt8(isNotNull(work_scope_id)) AS has_work_scope",
+			// One entry past the limit is read from each array, and both stored lengths.
+			"arraySlice(completion_days_values, 1, 367)",
+			"arraySlice(completion_days_counts, 1, 367)",
+			"toUInt64(length(completion_days_values))",
+			"toUInt64(length(completion_days_counts))",
+			"\nLIMIT 200",
+		} {
+			if !strings.Contains(statement, part) {
+				t.Errorf("statement lacks %q:\n%s", part, statement)
+			}
+		}
+	})
+
+	t.Run("no ids reads nothing", func(t *testing.T) {
+		t.Parallel()
+		client := &fakeClient{}
+		rows, err := readers.ReadTeamCompletionForecasts(context.Background(), client, "org-1", nil, readers.TimeBound{})
+		if err != nil || rows != nil || len(client.queries) != 0 {
+			t.Fatalf("rows = %#v, err = %v, queries = %d, want no read", rows, err, len(client.queries))
+		}
+	})
+
+	t.Run("query error propagates unwrapped", func(t *testing.T) {
+		t.Parallel()
+		client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", err: errors.New("boom")}}}
+		rows, err := readers.ReadTeamCompletionForecasts(context.Background(), client, "org-1", []string{"CHAOS"}, readers.TimeBound{})
+		if err == nil || err.Error() != "boom" || rows != nil {
+			t.Fatalf("rows = %#v, err = %v, want (nil, boom)", rows, err)
+		}
+	})
+
+	t.Run("time bound and row limit reach the statement", func(t *testing.T) {
+		t.Parallel()
+		client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: nil}}}
+		end := mustTime(t, "2026-01-01T00:00:00Z")
+		_, err := readers.ReadTeamCompletionForecastsWithRowLimit(context.Background(), client, "org-1", []string{"CHAOS"}, readers.TimeBound{Active: true, End: end}, readers.ProbeRowLimit)
+		if err != nil {
+			t.Fatalf("ReadTeamCompletionForecastsWithRowLimit() error = %v", err)
+		}
+		statement := client.queries[0].statement
+		if !strings.Contains(statement, "computed_at <= {"+readers.BoundEndParam+":DateTime64(6,'UTC')}") {
+			t.Fatalf("statement = %q, want the timestamp-bound predicate", statement)
+		}
+		if !strings.HasSuffix(statement, "\nLIMIT 201") {
+			t.Fatalf("statement = %q, want LIMIT 201", statement)
 		}
 	})
 }

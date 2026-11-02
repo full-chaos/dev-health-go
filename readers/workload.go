@@ -1,6 +1,9 @@
 package readers
 
-import "context"
+import (
+	"context"
+	"strconv"
+)
 
 // WorkloadForecastRow is one capacity_forecasts row for a team, scanned
 // verbatim off ReadTeamWorkload's query -- one row per (team_id,
@@ -130,6 +133,120 @@ ORDER BY p.id, p.provider, cf.work_scope_id, cf.has_team, cf.team_key`, DefaultR
 	err := QueryOrgScopedNamed(ctx, client, "ReadProjectWorkload", statement, orgID, ids, func(row RowScanner) error {
 		var r WorkloadProjectRow
 		if err := row.Scan(&r.ProjectSubjectKey, &r.HasTeam, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.ThroughputMean, &r.ThroughputStddev, &r.HasP50Days, &r.P50Days, &r.InsufficientHistory, &r.HighVariance, &r.BacklogSize, &r.ComputedAt); err != nil {
+			return err
+		}
+		rows = append(rows, r)
+		return nil
+	}, timeBound.Bindings()...)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// CompletionDayBinLimit is the most completion-day bins one forecast row
+// carries: the ops Monte Carlo caps a run at a 365-day horizon, so a
+// fixed-scope distribution holds at most 366 distinct values (0 to 365). The
+// reader reads one entry more than this from each array, as evidence, so a
+// caller can tell a row at the cap from a row past it (CompletionDayBins
+// says how long the stored array really is).
+const CompletionDayBinLimit = 366
+
+// CompletionForecastRow is the latest capacity_forecasts row for one
+// (team, work scope), with its fixed-scope Monte Carlo distribution, scanned
+// verbatim. It serves the completion forecast render (CHAOS-4613,
+// CHAOS-12584); nothing about the curve is computed here.
+//
+// HasWorkScope keeps the two empty scopes apart that the ops writer keeps
+// apart: 0 is a NULL work_scope_id (a forecast scoped to no work scope), 1
+// with WorkScopeID "" is discovery's unscoped row. Both are real, distinct
+// forecasts; collapsing them would serve one as the other.
+//
+// The HasP*Days flags and the empty date strings carry the NULLs of the
+// Nullable percentile columns: no percentile is not a percentile of 0.
+//
+// CompletionDaysValues and CompletionDaysCounts are parallel (values
+// ascending, counts summing to SimulationCount when present). Empty arrays
+// mean no distribution (a row written before ops migration 101, or a run
+// that produced none), never a distribution of zeros. Each array is read to
+// at most CompletionDayBinLimit+1 entries; CompletionDayBins and
+// CompletionCountBins are the stored lengths, so a caller can refuse a
+// distribution that is over the limit or whose arrays disagree in length.
+type CompletionForecastRow struct {
+	TeamID               string
+	HasWorkScope         uint8
+	WorkScopeID          string
+	ComputedAt           string
+	SimulationCount      uint32
+	BacklogSize          int64
+	HasP50Days           uint8
+	P50Days              int64
+	HasP85Days           uint8
+	P85Days              int64
+	HasP95Days           uint8
+	P95Days              int64
+	P50Date              string
+	P85Date              string
+	P95Date              string
+	InsufficientHistory  uint8
+	HighVariance         uint8
+	CompletionDayBins    uint64
+	CompletionCountBins  uint64
+	CompletionDaysValues []uint16
+	CompletionDaysCounts []uint32
+}
+
+// ReadTeamCompletionForecasts reads, for the given team ids, the latest
+// capacity_forecasts row of each (team, work scope) with its percentiles and
+// its fixed-scope distribution. See ReadTeamCompletionForecastsWithRowLimit.
+func ReadTeamCompletionForecasts(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound) ([]CompletionForecastRow, error) {
+	return ReadTeamCompletionForecastsWithRowLimit(ctx, client, orgID, ids, timeBound, DefaultRowLimit)
+}
+
+// ReadTeamCompletionForecastsWithRowLimit is ReadTeamCompletionForecasts with
+// the output row bound named by the caller; one row per (team, work scope),
+// so a caller passing ProbeRowLimit can tell a population at its cap from
+// one past it.
+//
+// The latest row is chosen as ReadTeamWorkload chooses it, and for the same
+// reasons: capacity_forecasts is ReplacingMergeTree(computed_at) on
+// (org_id, forecast_id) with a new forecast_id per write, so FINAL does not
+// pick a latest forecast; row_number() over (team_id, work_scope_id) by
+// computed_at, with forecast_id as the final tiebreaker, does. work_scope_id
+// is partitioned as stored (Nullable), so NULL and "" stay two scopes.
+//
+// Rows are ordered by team, then NULL scope before any named scope, then
+// scope, which is a total order on the output.
+func ReadTeamCompletionForecastsWithRowLimit(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound, rowLimit int) ([]CompletionForecastRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	binProbe := strconv.Itoa(CompletionDayBinLimit + 1)
+	statement := WithRowLimit(`SELECT team_key, has_work_scope, ifNull(work_scope_id, ''), toString(computed_at), simulation_count, toInt64(backlog_size),
+	toUInt8(isNotNull(p50_days)), toInt64(ifNull(p50_days, 0)),
+	toUInt8(isNotNull(p85_days)), toInt64(ifNull(p85_days, 0)),
+	toUInt8(isNotNull(p95_days)), toInt64(ifNull(p95_days, 0)),
+	ifNull(toString(p50_date), ''), ifNull(toString(p85_date), ''), ifNull(toString(p95_date), ''),
+	insufficient_history, high_variance,
+	toUInt64(length(completion_days_values)), toUInt64(length(completion_days_counts)),
+	arraySlice(completion_days_values, 1, `+binProbe+`), arraySlice(completion_days_counts, 1, `+binProbe+`)
+FROM (
+	SELECT ifNull(team_id, '') AS team_key, toUInt8(isNotNull(work_scope_id)) AS has_work_scope, work_scope_id, computed_at, simulation_count, backlog_size,
+		p50_days, p85_days, p95_days, p50_date, p85_date, p95_date, insufficient_history, high_variance,
+		completion_days_values, completion_days_counts,
+		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
+	FROM capacity_forecasts FINAL
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}`+timeBound.TimestampPredicate("computed_at")+`
+)
+WHERE rn = 1
+ORDER BY team_key, has_work_scope, work_scope_id`, rowLimit)
+	var rows []CompletionForecastRow
+	err := QueryOrgScopedNamed(ctx, client, "ReadTeamCompletionForecasts", statement, orgID, ids, func(row RowScanner) error {
+		var r CompletionForecastRow
+		if err := row.Scan(&r.TeamID, &r.HasWorkScope, &r.WorkScopeID, &r.ComputedAt, &r.SimulationCount, &r.BacklogSize,
+			&r.HasP50Days, &r.P50Days, &r.HasP85Days, &r.P85Days, &r.HasP95Days, &r.P95Days,
+			&r.P50Date, &r.P85Date, &r.P95Date, &r.InsufficientHistory, &r.HighVariance,
+			&r.CompletionDayBins, &r.CompletionCountBins, &r.CompletionDaysValues, &r.CompletionDaysCounts); err != nil {
 			return err
 		}
 		rows = append(rows, r)
