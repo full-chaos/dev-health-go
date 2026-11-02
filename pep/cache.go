@@ -34,7 +34,8 @@ package pep
 // REVISIONS. The client sees only policy_revision. The watermark is the
 // highest revision of any PDP verdict and only moves up. When it moves up,
 // every entry below it is dropped; an allow below it goes to its caller and is
-// not stored. The wire carries no resource, membership or grant revision, so
+// not stored. A batch whose hits are below the watermark once its misses are
+// answered asks those items again. The wire carries no resource, membership or grant revision, so
 // Invalidate drops every entry whatever aggregate it names, and InvalidateAll
 // does the same. When nobody calls them, the expiry bounds reuse.
 //
@@ -171,7 +172,10 @@ func (c *CachedClient) Decide(ctx context.Context, req Request) Decision {
 // DecideBatch serves the hits and sends the misses as one batch, in request
 // order. As with Client.DecideBatch, a batch over MaxBatch or with one invalid
 // request is denied whole, and a failure of the miss call denies every item,
-// the hits too.
+// the hits too. When, after the miss answers, a hit is below the watermark,
+// every hit is asked again in one more call, so no item that comes back was
+// read from the cache before the watermark moved; a failure of that call also
+// denies every item.
 func (c *CachedClient) DecideBatch(ctx context.Context, reqs []Request) []Decision {
 	if len(reqs) == 0 {
 		return []Decision{}
@@ -189,20 +193,34 @@ func (c *CachedClient) DecideBatch(ctx context.Context, reqs []Request) []Decisi
 	}
 	out := make([]Decision, len(reqs))
 	keys := make([][32]byte, len(reqs))
-	var misses []int
+	var hits, misses []int
 	for i, r := range reqs {
 		keys[i] = cacheKey(r)
 		if d, ok := c.get(keys[i]); ok {
 			out[i] = d
+			hits = append(hits, i)
 		} else {
 			misses = append(misses, i)
 		}
 	}
-	if len(misses) == 0 {
-		return out
+	if len(misses) > 0 {
+		if e := c.ask(ctx, reqs, keys, misses, out); e != nil {
+			return denyAll(e, len(reqs))
+		}
 	}
-	sub := make([]Request, len(misses))
-	for j, i := range misses {
+	if c.belowWatermark(out, hits) {
+		if e := c.ask(ctx, reqs, keys, hits, out); e != nil {
+			return denyAll(e, len(reqs))
+		}
+	}
+	return out
+}
+
+// ask sends the items at idx as one batch and records the answers in out. A
+// local deny of the call is returned as the error that denies the batch.
+func (c *CachedClient) ask(ctx context.Context, reqs []Request, keys [][32]byte, idx []int, out []Decision) *Error {
+	sub := make([]Request, len(idx))
+	for j, i := range idx {
 		sub[j] = reqs[i]
 	}
 	stamp, asked := c.stamp()
@@ -213,14 +231,27 @@ func (c *CachedClient) DecideBatch(ctx context.Context, reqs []Request) []Decisi
 			if e == nil {
 				e = fail(ReasonNoDecision)
 			}
-			return denyAll(e, len(reqs))
+			return e
 		}
 	}
-	for j, i := range misses {
+	for j, i := range idx {
 		c.observe(keys[i], got[j], stamp, asked)
 		out[i] = got[j]
 	}
-	return out
+	return nil
+}
+
+// belowWatermark reports that a decision read from the cache at one of idx is
+// below the current watermark.
+func (c *CachedClient) belowWatermark(out []Decision, idx []int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, i := range idx {
+		if out[i].PolicyRevision() < c.watermark {
+			return true
+		}
+	}
+	return false
 }
 
 // Invalidate drops every entry. The wire does not say which aggregates a
