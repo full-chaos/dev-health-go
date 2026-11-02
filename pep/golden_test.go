@@ -16,6 +16,7 @@ type manifest struct {
 	Accept         []manifestRow   `json:"accept"`
 	Reject         []manifestRow   `json:"reject"`
 	RejectByClient []manifestRow   `json:"reject_by_client"`
+	NotCacheable   []manifestRow   `json:"accept_not_cacheable"`
 	Request        json.RawMessage `json:"request"`
 }
 
@@ -99,9 +100,6 @@ func TestGoldenDecisionRefused(t *testing.T) {
 	m := readManifest(t, "authorization_decision")
 	rows := append(append([]manifestRow{}, m.Reject...), m.RejectByClient...)
 	for _, row := range rows {
-		if row.File == expiredAllowFixture {
-			continue
-		}
 		t.Run(row.File, func(t *testing.T) {
 			raw := readFile(t, "authorization_decision", row.File)
 			var doc wireDoc
@@ -175,9 +173,6 @@ func TestGoldenBatchRefusedEntirely(t *testing.T) {
 	reqs := batchRequests(t, m)
 	rows := append(append([]manifestRow{}, m.Reject...), m.RejectByClient...)
 	for _, row := range rows {
-		if row.File == expiredItemFixture {
-			continue
-		}
 		t.Run(row.File, func(t *testing.T) {
 			pdp := newPDP(t, replyJSON(readFile(t, "authorization_batch_response", row.File)))
 			got := pdp.client(t).DecideBatch(context.Background(), reqs)
@@ -279,8 +274,8 @@ func TestEveryRefusedFixtureNamesItsPath(t *testing.T) {
 // expires_at bounds REUSE only: a decision is always valid for the request it
 // answers, so an expired one is used once and is not cacheable.
 const (
-	expiredAllowFixture = "decision-client-expired-allow.json"
-	expiredItemFixture  = "batch-response-client-expired-item.json"
+	expiredAllowFixture = "decision-valid-allow-expired-not-cacheable.json"
+	expiredItemFixture  = "batch-response-valid-item-expired-not-cacheable.json"
 )
 
 func TestExpiredDecisionIsUsedOnceAndNotCacheable(t *testing.T) {
@@ -298,6 +293,16 @@ func TestExpiredDecisionIsUsedOnceAndNotCacheable(t *testing.T) {
 	edge := decideBody(t, replaceOnce(t, goodAllow(t), `2026-09-03T05:00:30Z`, `2026-09-03T05:00:00Z`), baseRequest())
 	if !edge.Allowed() || edge.Cacheable() {
 		t.Fatalf("expiry equal to now: allowed=%v cacheable=%v", edge.Allowed(), edge.Cacheable())
+	}
+	for _, set := range []string{"authorization_decision", "authorization_batch_response"} {
+		nc := readManifest(t, set).NotCacheable
+		if len(nc) != 1 {
+			t.Fatalf("%s: %d accept_not_cacheable rows", set, len(nc))
+		}
+		want := map[string]string{"authorization_decision": expiredAllowFixture, "authorization_batch_response": expiredItemFixture}[set]
+		if nc[0].File != want {
+			t.Fatalf("%s names %s, tests use %s", set, nc[0].File, want)
+		}
 	}
 	var zero Decision
 	if zero.Cacheable() || deny(fail(ReasonRefused)).Cacheable() {
