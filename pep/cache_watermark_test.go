@@ -145,9 +145,10 @@ func TestCacheBatchConcurrentWatermarkCell(t *testing.T) {
 }
 
 // Race variant: the PDP revision climbs while batches mix hits and a fresh
-// miss. No returned item may carry a revision below the miss answer of its own
-// batch: a hit is at or above the watermark the batch observed, and a re-ask
-// is answered later than the miss.
+// miss. The miss is first, so the PDP answers it before every other item of
+// the batch. No returned item may carry a revision below that answer: a hit is
+// at or above the watermark the batch observed, and every other answer comes
+// later.
 func TestCacheBatchConcurrentWatermarkRace(t *testing.T) {
 	p, c := newMemCachePDP(t, newClock(), CacheConfig{MaxEntries: 64})
 	var rev atomic.Uint64
@@ -180,10 +181,10 @@ func TestCacheBatchConcurrentWatermarkRace(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 200; i++ {
 				m := requestKey(fmt.Sprintf("full-chaos/miss-%d-%d", g, i))
-				reqs := []Request{shared[(g+i)%4], m, shared[(g+i+1)%4]}
+				reqs := []Request{m, shared[(g+i)%4], shared[(g+i+1)%4]}
 				c.Decide(context.Background(), shared[i%4])
 				out := c.DecideBatch(context.Background(), reqs)
-				floor := out[1].PolicyRevision()
+				floor := out[0].PolicyRevision()
 				for j, d := range out {
 					if d.Allowed() && d.PolicyRevision() < floor {
 						stale.Add(1)
