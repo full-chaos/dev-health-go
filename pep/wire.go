@@ -126,7 +126,7 @@ func decodeDecision(o object, req Request, now time.Time) Decision {
 		return deny(fail(ReasonMalformed))
 	}
 	if string(bytes.TrimSpace(o["organization_id"])) != "null" {
-		if w.Organization, ok = asString(o["organization_id"]); !ok || w.Organization == "" || len(w.Organization) > 256 || !printable(w.Organization) {
+		if w.Organization, ok = asString(o["organization_id"]); !ok || w.Organization == "" {
 			return deny(fail(ReasonMalformed))
 		}
 		w.HasOrg = true
@@ -176,7 +176,7 @@ func decodeObligations(raw json.RawMessage) (decision.Obligations, *Error) {
 	var spec decision.ObligationSpec
 	if v, present := o["tenant_scope"]; present {
 		s, ok := asString(v)
-		if !ok || s == "" || len(s) > 256 || !printable(s) {
+		if !ok || s == "" {
 			return zero, fail(ReasonMalformed)
 		}
 		spec.Tenant = s

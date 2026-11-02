@@ -45,7 +45,22 @@ var _ pep.Decider = (*Fake)(nil)
 
 // New copies the rules. With none it denies every request.
 func New(rules ...Rule) *Fake {
-	return &Fake{rules: append([]Rule(nil), rules...)}
+	copied := make([]Rule, len(rules))
+	for i, r := range rules {
+		r.RepositoryAllowlist = cloneNilable(r.RepositoryAllowlist)
+		r.Redaction = cloneNilable(r.Redaction)
+		copied[i] = r
+	}
+	return &Fake{rules: copied}
+}
+
+// cloneNilable keeps nil nil: a nil allowlist is the absent member, an empty
+// one allows no repository.
+func cloneNilable[S ~[]E, E any](s S) S {
+	if s == nil {
+		return nil
+	}
+	return append(S{}, s...)
 }
 
 func (r Rule) complete() bool {

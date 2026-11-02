@@ -68,19 +68,7 @@ func (r Request) valid() bool {
 	} else if !otherKeyRE.MatchString(r.ResourceKey) {
 		return false
 	}
-	if len(r.OrganizationID) > 256 || (r.OrganizationID != "" && !printable(r.OrganizationID)) {
-		return false
-	}
 	return r.RequestID == "" || requestIDPattern.MatchString(r.RequestID)
-}
-
-func printable(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] <= ' ' || s[i] >= 0x7f {
-			return false
-		}
-	}
-	return true
 }
 
 func mintRequestID() string {
