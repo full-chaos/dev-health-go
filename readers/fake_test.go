@@ -101,6 +101,10 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].(time.Time)
 		case *float64:
 			*value = row[index].(float64)
+		case *[]uint16:
+			*value = row[index].([]uint16)
+		case *[]uint32:
+			*value = row[index].([]uint32)
 		default:
 			return errors.New("readers_test: unsupported scan destination")
 		}

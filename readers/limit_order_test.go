@@ -265,6 +265,10 @@ func orderedLimitReads(t *testing.T) map[string][]orderedLimitRead {
 		_, err := readers.ReadTeamWorkload(ctx, c, org, ids, tb)
 		return err
 	})
+	addBounded("ReadTeamCompletionForecastsWithRowLimit", "team_key, has_work_scope, work_scope_id", func(c *fakeClient, tb readers.TimeBound) error {
+		_, err := readers.ReadTeamCompletionForecastsWithRowLimit(ctx, c, org, ids, tb, 7)
+		return err
+	})
 	addBounded("ReadProjectWorkload", "p.id, p.provider, cf.work_scope_id, cf.has_team, cf.team_key", func(c *fakeClient, tb readers.TimeBound) error {
 		_, err := readers.ReadProjectWorkload(ctx, c, org, ids, tb)
 		return err

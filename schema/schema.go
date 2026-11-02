@@ -75,18 +75,30 @@ var ProductionColumns = map[string][]Column{
 		{Name: "error_message", Type: "String"},
 		{Name: "created_at", Type: "DateTime64(3)"},
 	},
+	// CHAOS-12584: simulation_count, p85/p95 days, the three dates and the
+	// fixed-scope distribution are declared from the ops baseline DDL
+	// (internal/chmigrate/baseline/head.json, ops 8dcc0377), in its column
+	// order; the two completion_days_* arrays are migration 101's.
 	"capacity_forecasts": {
 		{Name: "forecast_id", Type: "String"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "team_id", Type: "Nullable(String)"},
 		{Name: "work_scope_id", Type: "Nullable(String)"},
 		{Name: "backlog_size", Type: "UInt32"},
+		{Name: "simulation_count", Type: "UInt32"},
 		{Name: "p50_days", Type: "Nullable(UInt16)"},
+		{Name: "p85_days", Type: "Nullable(UInt16)"},
+		{Name: "p95_days", Type: "Nullable(UInt16)"},
+		{Name: "p50_date", Type: "Nullable(Date)"},
+		{Name: "p85_date", Type: "Nullable(Date)"},
+		{Name: "p95_date", Type: "Nullable(Date)"},
 		{Name: "throughput_mean", Type: "Float64"},
 		{Name: "throughput_stddev", Type: "Float64"},
 		{Name: "insufficient_history", Type: "UInt8"},
 		{Name: "high_variance", Type: "UInt8"},
 		{Name: "org_id", Type: "String"},
+		{Name: "completion_days_values", Type: "Array(UInt16)"},
+		{Name: "completion_days_counts", Type: "Array(UInt32)"},
 	},
 	"ci_pipeline_runs": {
 		{Name: "repo_id", Type: "UUID"},
