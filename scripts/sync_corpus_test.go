@@ -21,9 +21,11 @@ const (
 	accessTokenTest = "authverify/accesstoken_test.go"
 	workloadTest    = "authverify/workload_token_test.go"
 	pepTest         = "pep/corpus_test.go"
+	saTest          = "authverify/service_account_token_test.go"
 	accessConst     = "corpusOpsCommit"
 	workloadConst   = "workloadCorpusOpsCommit"
 	pepConst        = "pepCorpusOpsCommit"
+	saConst         = "serviceAccountCorpusOpsCommit"
 )
 
 var pepExampleSets = []string{"authorization_request", "authorization_batch_request", "authorization_decision", "authorization_batch_response"}
@@ -87,6 +89,8 @@ func (f opsFixture) commit(t *testing.T, tag string) string {
 	write(t, filepath.Join(golden, "access-token/vectors/valid.json"), `{"v":"`+tag+`"}`)
 	write(t, filepath.Join(golden, "workload-token/manifest.json"), `{"set":"workload-token","tag":"`+tag+`"}`)
 	write(t, filepath.Join(golden, "workload-token/vectors/valid.json"), `{"w":"`+tag+`"}`)
+	write(t, filepath.Join(golden, "service-account-token/manifest.json"), `{"set":"service-account-token","tag":"`+tag+`"}`)
+	write(t, filepath.Join(golden, "service-account-token/vectors/valid.json"), `{"s":"`+tag+`"}`)
 	write(t, filepath.Join(examples, "discovery/valid.json"), `{"d":"`+tag+`"}`)
 	write(t, filepath.Join(examples, "jwks/valid.json"), `{"j":"`+tag+`"}`)
 	for _, set := range pepExampleSets {
@@ -108,7 +112,7 @@ func (f opsFixture) commit(t *testing.T, tag string) string {
 func newTarget(t *testing.T, base string) string {
 	t.Helper()
 	target := filepath.Join(base, "go")
-	for _, rel := range []string{"scripts/sync-corpus.sh", accessTokenTest, workloadTest, pepTest} {
+	for _, rel := range []string{"scripts/sync-corpus.sh", accessTokenTest, workloadTest, pepTest, saTest} {
 		write(t, filepath.Join(target, rel), read(t, filepath.Join("..", rel)))
 	}
 	write(t, filepath.Join(target, "authverify/testdata/jwks/stale.json"), "stale")
@@ -135,7 +139,7 @@ func sumRow(t *testing.T, root, name string) string {
 	return hex.EncodeToString(sum[:]) + "  " + name
 }
 
-func checkPins(t *testing.T, target, sha string, originalAccess, originalWorkload, originalPep string) {
+func checkPins(t *testing.T, target, sha string, originalAccess, originalWorkload, originalPep, originalSA string) {
 	t.Helper()
 	if got, want := read(t, filepath.Join(target, accessTokenTest)), withConstant(originalAccess, accessConst, sha); got != want {
 		t.Errorf("%s: only the %s line may change, to %s", accessTokenTest, accessConst, sha)
@@ -145,6 +149,9 @@ func checkPins(t *testing.T, target, sha string, originalAccess, originalWorkloa
 	}
 	if got, want := read(t, filepath.Join(target, pepTest)), withConstant(originalPep, pepConst, sha); got != want {
 		t.Errorf("%s: only the %s line may change, to %s", pepTest, pepConst, sha)
+	}
+	if got, want := read(t, filepath.Join(target, saTest)), withConstant(originalSA, saConst, sha); got != want {
+		t.Errorf("%s: only the %s line may change, to %s", saTest, saConst, sha)
 	}
 	checkPepSource(t, target, sha)
 	data := filepath.Join(target, "authverify/testdata")
@@ -170,6 +177,16 @@ func checkPins(t *testing.T, target, sha string, originalAccess, originalWorkloa
 	} {
 		if !strings.Contains(workload, want) {
 			t.Errorf("workload-token.SOURCE lacks %q:\n%s", want, workload)
+		}
+	}
+	sa := read(t, filepath.Join(data, "service-account-token.SOURCE"))
+	for _, want := range []string{
+		"ops_commit " + sha + "\nops_path contracts/auth/v1/golden/service-account-token\n",
+		sumRow(t, data, "service-account-token/manifest.json") + "\n",
+		sumRow(t, data, "service-account-token/vectors/valid.json") + "\n",
+	} {
+		if !strings.Contains(sa, want) {
+			t.Errorf("service-account-token.SOURCE lacks %q:\n%s", want, sa)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(data, "jwks/stale.json")); err == nil {
@@ -221,23 +238,24 @@ func TestSyncCorpusMovesEveryPinTogether(t *testing.T) {
 	originalAccess := read(t, filepath.Join(target, accessTokenTest))
 	originalWorkload := read(t, filepath.Join(target, workloadTest))
 	originalPep := read(t, filepath.Join(target, pepTest))
+	originalSA := read(t, filepath.Join(target, saTest))
 
 	first := run(t, ops.src, "git", "rev-parse", "HEAD")
 	if out, err := syncScript(target, ops.clone).CombinedOutput(); err != nil {
 		t.Fatalf("first sync: %v\n%s", err, out)
 	}
-	checkPins(t, target, first, originalAccess, originalWorkload, originalPep)
+	checkPins(t, target, first, originalAccess, originalWorkload, originalPep, originalSA)
 
 	second := ops.commit(t, "two")
 	if out, err := syncScript(target, ops.clone).CombinedOutput(); err != nil {
 		t.Fatalf("second sync: %v\n%s", err, out)
 	}
-	checkPins(t, target, second, originalAccess, originalWorkload, originalPep)
+	checkPins(t, target, second, originalAccess, originalWorkload, originalPep, originalSA)
 
 	if out, err := syncScript(target, ops.clone).CombinedOutput(); err != nil {
 		t.Fatalf("repeat sync: %v\n%s", err, out)
 	}
-	checkPins(t, target, second, originalAccess, originalWorkload, originalPep)
+	checkPins(t, target, second, originalAccess, originalWorkload, originalPep, originalSA)
 }
 
 func TestSyncCorpusRefusesBeforeWritingWhenAPinConstantIsMissing(t *testing.T) {
@@ -245,6 +263,7 @@ func TestSyncCorpusRefusesBeforeWritingWhenAPinConstantIsMissing(t *testing.T) {
 		{"access-token", accessTokenTest, accessConst},
 		{"workload", workloadTest, workloadConst},
 		{"pep", pepTest, pepConst},
+		{"service-account-token", saTest, saConst},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := t.TempDir()
@@ -260,7 +279,7 @@ func TestSyncCorpusRefusesBeforeWritingWhenAPinConstantIsMissing(t *testing.T) {
 				t.Errorf("the refusal does not name %s:\n%s", tc.constant, out)
 			}
 			data := filepath.Join(target, "authverify/testdata")
-			for _, name := range []string{"SOURCE", "workload-token.SOURCE", "access-token", "workload-token"} {
+			for _, name := range []string{"SOURCE", "workload-token.SOURCE", "service-account-token.SOURCE", "access-token", "workload-token", "service-account-token"} {
 				if _, statErr := os.Stat(filepath.Join(data, name)); statErr == nil {
 					t.Errorf("%s was written before the refusal", name)
 				}
