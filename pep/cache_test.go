@@ -640,6 +640,9 @@ func TestCacheCloseStopsCaching(t *testing.T) {
 	wantAllow(t, c.Decide(context.Background(), baseRequest()))
 	wantAllow(t, c.Decide(context.Background(), baseRequest()))
 	wantCalls(t, p, 3)
+	if c.Len() != 0 || stored(c, baseRequest()) {
+		t.Fatalf("an allow was stored after Close (Len %d)", c.Len())
+	}
 	if err := c.Invalidate(context.Background(), "grant", "grt_1", 1); !errors.Is(err, ErrCacheClosed) {
 		t.Fatalf("Invalidate after Close: %v", err)
 	}
