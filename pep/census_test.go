@@ -99,8 +99,10 @@ func typeString(e ast.Expr) string {
 func TestExportedAPICensus(t *testing.T) {
 	names, returns := exportedAPI(t, ".")
 	want := []string{
+		"CacheConfig", "CachedClient", "CachedClient.Close", "CachedClient.Decide", "CachedClient.DecideBatch",
+		"CachedClient.Invalidate", "CachedClient.InvalidateAll", "CachedClient.Len",
 		"Client.DecideBatch", "Client.Decide", "Config", "Decider", "Error", "Error.Error", "Error.Reason",
-		"LocalReasons", "New", "Request", "WireReasons",
+		"LocalReasons", "New", "NewCachedClient", "Request", "WireReasons",
 	}
 	var api, values []string
 	for _, n := range names {
@@ -117,9 +119,9 @@ func TestExportedAPICensus(t *testing.T) {
 	if got := sortedStrings(want); !reflect.DeepEqual(api, got) {
 		t.Fatalf("the exported API changed; a new exported name needs review that it cannot build an allow:\n got %v\nwant %v", api, got)
 	}
-	// Only the client's two decision calls return a Decision: no exported way to
-	// build an allow.
-	if want := []string{"Client.Decide", "Client.DecideBatch"}; !reflect.DeepEqual(returns, want) {
+	// Only the two clients' decision calls return a Decision: no exported way to
+	// build an allow or to put one into the cache.
+	if want := []string{"CachedClient.Decide", "CachedClient.DecideBatch", "Client.Decide", "Client.DecideBatch"}; !reflect.DeepEqual(returns, want) {
 		t.Fatalf("exported functions returning a Decision: %v, want %v", returns, want)
 	}
 	for _, v := range values {
@@ -171,4 +173,5 @@ func TestDecisionHasNoExportedFieldsAndAClosedMethodSet(t *testing.T) {
 
 func TestClientsSatisfyDecider(t *testing.T) {
 	var _ Decider = (*Client)(nil)
+	var _ Decider = (*CachedClient)(nil)
 }
