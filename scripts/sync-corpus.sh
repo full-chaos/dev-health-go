@@ -6,7 +6,8 @@
 #   authverify/testdata/service-account-token.SOURCE   service-account-token
 #   pep/testdata/SOURCE                         the authorization request, batch
 #       request, decision and batch response examples, the jsonschema directory,
-#       vocabulary/reason-codes.json and endpoint-profile.schema.json
+#       vocabulary/reason-codes.json, endpoint-profile.schema.json and the
+#       action catalog vocabulary/actions.v1.json (as catalog/actions.v1.json)
 # It also writes the same ops commit into the four pin constants the corpus pin
 # tests compare SOURCE against (corpusOpsCommit in accesstoken_test.go,
 # workloadCorpusOpsCommit in workload_token_test.go,
@@ -59,7 +60,7 @@ sync_group service-account-token.SOURCE "service-account-token:contracts/auth/v1
 
 root="$repo/pep/testdata"
 ex=contracts/auth/v1/examples
-sync_group SOURCE "authorization_request:$ex/authorization_request:5" "authorization_batch_request:$ex/authorization_batch_request:5" "authorization_decision:$ex/authorization_decision:5" "authorization_batch_response:$ex/authorization_batch_response:5" "jsonschema:contracts/auth/v1/jsonschema:4" "vocabulary:contracts/auth/v1/vocabulary/reason-codes.json:4" "endpoint:contracts/auth/v1/endpoint-profile.schema.json:3"
+sync_group SOURCE "authorization_request:$ex/authorization_request:5" "authorization_batch_request:$ex/authorization_batch_request:5" "authorization_decision:$ex/authorization_decision:5" "authorization_batch_response:$ex/authorization_batch_response:5" "jsonschema:contracts/auth/v1/jsonschema:4" "vocabulary:contracts/auth/v1/vocabulary/reason-codes.json:4" "endpoint:contracts/auth/v1/endpoint-profile.schema.json:3" "catalog:contracts/auth/v1/vocabulary/actions.v1.json:4"
 
 for entry in "${constants[@]}"; do
   file="${entry%%:*}"; name="${entry##*:}"

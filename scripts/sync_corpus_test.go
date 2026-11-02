@@ -202,7 +202,7 @@ func checkPepSource(t *testing.T, target, sha string) {
 	for _, set := range pepExampleSets {
 		head += "ops_path contracts/auth/v1/examples/" + set + "\n"
 	}
-	head += "ops_path contracts/auth/v1/jsonschema\nops_path contracts/auth/v1/vocabulary/reason-codes.json\nops_path contracts/auth/v1/endpoint-profile.schema.json\n"
+	head += "ops_path contracts/auth/v1/jsonschema\nops_path contracts/auth/v1/vocabulary/reason-codes.json\nops_path contracts/auth/v1/endpoint-profile.schema.json\nops_path contracts/auth/v1/vocabulary/actions.v1.json\n"
 	if !strings.HasPrefix(source, head) {
 		t.Errorf("pep SOURCE head is not %q:\n%s", head, source)
 	}
@@ -211,6 +211,7 @@ func checkPepSource(t *testing.T, target, sha string) {
 		sumRow(t, data, "jsonschema/unrelated.json") + "\n",
 		sumRow(t, data, "vocabulary/reason-codes.json") + "\n",
 		sumRow(t, data, "endpoint/endpoint-profile.schema.json") + "\n",
+		sumRow(t, data, "catalog/actions.v1.json") + "\n",
 	}
 	for _, set := range pepExampleSets {
 		wants = append(wants, sumRow(t, data, set+"/valid.json")+"\n")
@@ -220,7 +221,7 @@ func checkPepSource(t *testing.T, target, sha string) {
 			t.Errorf("pep SOURCE lacks %q:\n%s", want, source)
 		}
 	}
-	if strings.Contains(source, "actions.v1.json") || strings.Contains(source, "stale.json") || strings.Contains(source, "access-token") {
+	if strings.Contains(source, "  vocabulary/actions.v1.json") || strings.Contains(source, "stale.json") || strings.Contains(source, "access-token") {
 		t.Errorf("pep SOURCE names a file outside its sets:\n%s", source)
 	}
 	if _, err := os.Stat(filepath.Join(data, "authorization_decision/stale.json")); err == nil {

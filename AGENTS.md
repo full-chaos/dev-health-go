@@ -16,7 +16,7 @@ Store/contract layer ONLY:
   verification MECHANISMS. No principal/claim shape — each consumer defines
   its own on top.
 - `workloadtoken/` — the client half of the workload-token exchange (one subject per deployment, cache, early re-exchange, fail closed, explicit transport); no audience or scope vocabulary.
-- `pep/` — the policy enforcement point client for the auth service's `POST /v1/authorize` and `:batch` (typed deny on every failure, strict decision parsing, closed obligations, no cache yet) and `pep/pepfake`, a test double that denies by default. No principal, claim or token logic: the caller's `http.Client` carries the workload token.
+- `pep/` — the policy enforcement point client for the auth service's `POST /v1/authorize` and `:batch` (typed deny on every failure, strict decision parsing, closed obligations, an opt-in bounded allow-only cache `CachedClient`) and `pep/pepfake`, a test double that denies by default. No principal, claim or token logic: the caller's `http.Client` carries the workload token.
 
 One amendment to "store/contract layer only" (chris, 2026-10-16, CHAOS-8719:
 "ACR will need it too, unless we plan to duplicate the llm provider code"):

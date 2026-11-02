@@ -115,6 +115,7 @@ func TestReadTeamCompletionForecasts(t *testing.T) {
 		client := &fakeClient{tables: []fakeTable{
 			{match: "FROM capacity_forecasts", rows: [][]any{
 				{"CHAOS", uint8(0), "", "2026-10-30 04:00:00.000", uint32(10000), int64(42),
+					uint8(1), int64(40),
 					uint8(1), int64(12), uint8(1), int64(20), uint8(0), int64(0),
 					"2026-11-11", "2026-11-19", "", uint8(0), uint8(1),
 					uint64(3), uint64(3), []uint16{5, 12, 365}, []uint32{100, 9000, 900}},
@@ -126,7 +127,7 @@ func TestReadTeamCompletionForecasts(t *testing.T) {
 		}
 		want := []readers.CompletionForecastRow{{
 			TeamID: "CHAOS", HasWorkScope: 0, WorkScopeID: "", ComputedAt: "2026-10-30 04:00:00.000",
-			SimulationCount: 10000, BacklogSize: 42,
+			SimulationCount: 10000, BacklogSize: 42, HasTargetItems: 1, TargetItems: 40,
 			HasP50Days: 1, P50Days: 12, HasP85Days: 1, P85Days: 20, HasP95Days: 0, P95Days: 0,
 			P50Date: "2026-11-11", P85Date: "2026-11-19", P95Date: "", InsufficientHistory: 0, HighVariance: 1,
 			CompletionDayBins: 3, CompletionCountBins: 3,
@@ -146,6 +147,8 @@ func TestReadTeamCompletionForecasts(t *testing.T) {
 			// The latest row per (team, scope), with scope partitioned as stored.
 			"PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC",
 			"toUInt8(isNotNull(work_scope_id)) AS has_work_scope",
+			// CHAOS-12634: a NULL target is kept apart from a target of 0.
+			"toUInt8(isNotNull(target_items)), toInt64(ifNull(target_items, 0))",
 			// One entry past the limit is read from each array, and both stored lengths.
 			"arraySlice(completion_days_values, 1, 367)",
 			"arraySlice(completion_days_counts, 1, 367)",
