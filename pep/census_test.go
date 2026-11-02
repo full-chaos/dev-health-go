@@ -157,7 +157,7 @@ func TestDecisionHasNoExportedFieldsAndAClosedMethodSet(t *testing.T) {
 	for i := 0; i < typ.NumMethod(); i++ {
 		methods = append(methods, typ.Method(i).Name)
 	}
-	want := []string{"Allowed", "DecisionID", "Err", "ExpiresAt", "Local", "Obligations", "OrganizationID", "PolicyRevision", "PrincipalID", "Reason"}
+	want := []string{"Allowed", "Cacheable", "DecisionID", "Err", "ExpiresAt", "Local", "Obligations", "OrganizationID", "PolicyRevision", "PrincipalID", "Reason"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("Decision methods %v, want %v", methods, want)
 	}

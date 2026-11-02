@@ -45,7 +45,6 @@ const (
 	Malformed         Reason = "pdp_malformed"
 	TooLarge          Reason = "pdp_too_large"
 	Mismatch          Reason = "pdp_mismatch"
-	Expired           Reason = "pdp_expired"
 	UnknownObligation Reason = "pdp_unknown_obligation"
 	LocalInvalid      Reason = "pdp_invalid_request"
 	NotConfigured     Reason = "pdp_not_configured"
@@ -186,6 +185,7 @@ type Decision struct {
 	hasOrg         bool
 	policyRevision uint64
 	expiresAt      time.Time
+	cacheable      bool
 	obligations    Obligations
 }
 
@@ -199,7 +199,9 @@ type Wire struct {
 	HasOrg         bool
 	PolicyRevision uint64
 	ExpiresAt      time.Time
-	Obligations    Obligations
+	// Cacheable is true when ExpiresAt is after the time the decision was read.
+	Cacheable   bool
+	Obligations Obligations
 }
 
 // FromWire builds the decision of a checked document. An allow needs an allow
@@ -209,7 +211,7 @@ func FromWire(w Wire) Decision {
 	if w.Allowed != allowReason(w.Reason) {
 		return Local(Malformed, errInconsistent)
 	}
-	d := Decision{allowed: w.Allowed, reason: w.Reason, decisionID: w.DecisionID, principalID: w.PrincipalID, organization: w.Organization, hasOrg: w.HasOrg, policyRevision: w.PolicyRevision, expiresAt: w.ExpiresAt}
+	d := Decision{allowed: w.Allowed, reason: w.Reason, decisionID: w.DecisionID, principalID: w.PrincipalID, organization: w.Organization, hasOrg: w.HasOrg, policyRevision: w.PolicyRevision, expiresAt: w.ExpiresAt, cacheable: w.Cacheable}
 	if w.Allowed {
 		d.obligations = w.Obligations
 	}
@@ -258,6 +260,12 @@ func (d Decision) OrganizationID() (string, bool) { return d.organization, d.has
 
 // PolicyRevision is the policy revision the decision was made under.
 func (d Decision) PolicyRevision() uint64 { return d.policyRevision }
+
+// Cacheable reports that the decision may be reused until ExpiresAt. A decision
+// is always valid for the request it answers; expires_at bounds reuse only, so
+// one whose expiry is not after the time it was read is for this call alone and
+// a cache must skip it. False for a local deny.
+func (d Decision) Cacheable() bool { return d.cacheable }
 
 // ExpiresAt is when the decision stops being usable; zero for a local deny.
 func (d Decision) ExpiresAt() time.Time { return d.expiresAt }

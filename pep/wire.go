@@ -158,9 +158,7 @@ func decodeDecision(o object, req Request, now time.Time) Decision {
 	if w.HasOrg != (req.OrganizationID != "") || (w.HasOrg && w.Organization != req.OrganizationID) {
 		return deny(fail(ReasonMismatch))
 	}
-	if !w.ExpiresAt.After(now) {
-		return deny(fail(ReasonExpired))
-	}
+	w.Cacheable = w.ExpiresAt.After(now)
 	return decision.FromWire(w)
 }
 

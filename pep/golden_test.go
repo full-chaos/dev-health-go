@@ -55,7 +55,6 @@ func requestFor(doc wireDoc) Request {
 // rejectClass is the closed local reason a refused fixture must produce. A
 // file not listed is a malformed document.
 var rejectClass = map[string]Reason{
-	"decision-client-expired-allow.json":            ReasonExpired,
 	"decision-invalid-unknown-obligation-key.json":  ReasonUnknownObligation,
 	"decision-invalid-unknown-redaction-class.json": ReasonUnknownObligation,
 	"decision-invalid-unknown-assurance.json":       ReasonUnknownObligation,
@@ -100,6 +99,9 @@ func TestGoldenDecisionRefused(t *testing.T) {
 	m := readManifest(t, "authorization_decision")
 	rows := append(append([]manifestRow{}, m.Reject...), m.RejectByClient...)
 	for _, row := range rows {
+		if row.File == expiredAllowFixture {
+			continue
+		}
 		t.Run(row.File, func(t *testing.T) {
 			raw := readFile(t, "authorization_decision", row.File)
 			var doc wireDoc
@@ -165,7 +167,6 @@ var batchClientClass = map[string]Reason{
 	"batch-response-client-swapped-index.json":      ReasonMismatch,
 	"batch-response-client-duplicate-index.json":    ReasonMismatch,
 	"batch-response-client-skipped-index.json":      ReasonMismatch,
-	"batch-response-client-expired-item.json":       ReasonExpired,
 	"batch-response-client-decimal-form-index.json": ReasonMalformed,
 }
 
@@ -174,6 +175,9 @@ func TestGoldenBatchRefusedEntirely(t *testing.T) {
 	reqs := batchRequests(t, m)
 	rows := append(append([]manifestRow{}, m.Reject...), m.RejectByClient...)
 	for _, row := range rows {
+		if row.File == expiredItemFixture {
+			continue
+		}
 		t.Run(row.File, func(t *testing.T) {
 			pdp := newPDP(t, replyJSON(readFile(t, "authorization_batch_response", row.File)))
 			got := pdp.client(t).DecideBatch(context.Background(), reqs)
@@ -269,5 +273,40 @@ func TestEveryRefusedFixtureNamesItsPath(t *testing.T) {
 			}
 			readFile(t, set, row.File)
 		}
+	}
+}
+
+// expires_at bounds REUSE only: a decision is always valid for the request it
+// answers, so an expired one is used once and is not cacheable.
+const (
+	expiredAllowFixture = "decision-client-expired-allow.json"
+	expiredItemFixture  = "batch-response-client-expired-item.json"
+)
+
+func TestExpiredDecisionIsUsedOnceAndNotCacheable(t *testing.T) {
+	raw := readFile(t, "authorization_decision", expiredAllowFixture)
+	var doc wireDoc
+	_ = json.Unmarshal(raw, &doc)
+	d := decideBody(t, raw, requestFor(doc))
+	if !d.Allowed() || d.Local() || d.Cacheable() {
+		t.Fatalf("expired allow: allowed=%v local=%v cacheable=%v", d.Allowed(), d.Local(), d.Cacheable())
+	}
+	fresh := decideBody(t, goodAllow(t), baseRequest())
+	if !fresh.Allowed() || !fresh.Cacheable() {
+		t.Fatalf("fresh allow: allowed=%v cacheable=%v", fresh.Allowed(), fresh.Cacheable())
+	}
+	edge := decideBody(t, replaceOnce(t, goodAllow(t), `2026-09-03T05:00:30Z`, `2026-09-03T05:00:00Z`), baseRequest())
+	if !edge.Allowed() || edge.Cacheable() {
+		t.Fatalf("expiry equal to now: allowed=%v cacheable=%v", edge.Allowed(), edge.Cacheable())
+	}
+	var zero Decision
+	if zero.Cacheable() || deny(fail(ReasonRefused)).Cacheable() {
+		t.Fatal("a local deny is cacheable")
+	}
+	m := readManifest(t, "authorization_batch_response")
+	pdp := newPDP(t, replyJSON(readFile(t, "authorization_batch_response", expiredItemFixture)))
+	got := pdp.client(t).DecideBatch(context.Background(), batchRequests(t, m))
+	if len(got) != 2 || got[0].Local() || got[0].Cacheable() {
+		t.Fatalf("expired batch item: %+v", got)
 	}
 }

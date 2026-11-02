@@ -101,8 +101,8 @@ func FuzzParseDecision(f *testing.F) {
 		if err := rejectDuplicates(body); err != nil {
 			t.Fatalf("an allow came from a document with a duplicate member or trailing data: %q", body)
 		}
-		if !d.ExpiresAt().After(now) {
-			t.Fatalf("an expired allow escaped: %q", body)
+		if d.Cacheable() != d.ExpiresAt().After(now) {
+			t.Fatalf("cacheable disagrees with the expiry: %q", body)
 		}
 		if !allowReasons[d.Reason()] {
 			t.Fatalf("an allow with reason %q escaped: %q", d.Reason(), body)

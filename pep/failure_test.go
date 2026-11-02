@@ -73,7 +73,6 @@ func transportFailures(t *testing.T) []failure {
 		{"policy revision over int64", replyJSON(replaceOnce(t, good, `"policy_revision": 42`, `"policy_revision": 9223372036854775808`)), ReasonMalformed},
 		{"policy revision leading zero", replyJSON(replaceOnce(t, good, `"policy_revision": 42`, `"policy_revision": 042`)), ReasonMalformed},
 		{"expiry with 7 fractional digits", replyJSON(replaceOnce(t, good, `2026-09-03T05:00:30Z`, `2026-09-03T05:00:30.1234567Z`)), ReasonMalformed},
-		{"expired allow", replyJSON(replaceOnce(t, good, `2026-09-03T05:00:30Z`, `2026-09-03T05:00:00Z`)), ReasonExpired},
 		{"unknown obligation", replyJSON(replaceOnce(t, good, `"step_up": false,`, `"step_up": false, "export_ok": true,`)), ReasonUnknownObligation},
 		{"organization differs", replyJSON(replaceOnce(t, good, `"organization_id": "org_EXAMPLE0000000000000001",`, `"organization_id": "org_EXAMPLE0000000000000002",`)), ReasonMismatch},
 	}

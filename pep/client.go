@@ -64,7 +64,7 @@ type Config struct {
 	ClientService string
 	// Timeout bounds one call, on top of the caller's context. Default 2s.
 	Timeout time.Duration
-	// Now is the clock decision expiry is checked against. Default time.Now.
+	// Now is the clock that decides whether a decision is Cacheable. Default time.Now.
 	Now func() time.Time
 }
 

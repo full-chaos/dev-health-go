@@ -83,7 +83,6 @@ const (
 	ReasonMalformed         = decision.Malformed
 	ReasonTooLarge          = decision.TooLarge
 	ReasonMismatch          = decision.Mismatch
-	ReasonExpired           = decision.Expired
 	ReasonUnknownObligation = decision.UnknownObligation
 	ReasonInvalidRequest    = decision.LocalInvalid
 	ReasonNotConfigured     = decision.NotConfigured
@@ -101,7 +100,7 @@ var wireReasons = []Reason{
 
 var localReasons = []Reason{
 	ReasonUnreachable, ReasonTimeout, ReasonCanceled, ReasonUnavailable, ReasonRateLimited, ReasonRefused,
-	ReasonMalformed, ReasonTooLarge, ReasonMismatch, ReasonExpired, ReasonUnknownObligation,
+	ReasonMalformed, ReasonTooLarge, ReasonMismatch, ReasonUnknownObligation,
 	ReasonInvalidRequest, ReasonNotConfigured, ReasonNoDecision,
 }
 

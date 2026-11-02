@@ -82,7 +82,7 @@ func TestLocalReasonsAreDisjointFromTheWire(t *testing.T) {
 	for _, r := range WireReasons() {
 		wire[r] = true
 	}
-	if len(LocalReasons()) != 14 {
+	if len(LocalReasons()) != 13 {
 		t.Fatalf("%d local reasons", len(LocalReasons()))
 	}
 	for _, r := range LocalReasons() {
