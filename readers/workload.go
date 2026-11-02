@@ -173,12 +173,18 @@ const CompletionDayBinLimit = 366
 // CompletionCountBins are the stored lengths, so a caller can refuse a
 // distribution that is over the limit or whose arrays disagree in length.
 type CompletionForecastRow struct {
-	TeamID               string
-	HasWorkScope         uint8
-	WorkScopeID          string
-	ComputedAt           string
-	SimulationCount      uint32
-	BacklogSize          int64
+	TeamID          string
+	HasWorkScope    uint8
+	WorkScopeID     string
+	ComputedAt      string
+	SimulationCount uint32
+	BacklogSize     int64
+	// HasTargetItems and TargetItems (CHAOS-12634) are the item target the
+	// fixed-scope run forecast: the scope's own target, or its backlog as
+	// ops' worker falls back to it. A NULL target_items is HasTargetItems 0,
+	// never a target of 0.
+	HasTargetItems       uint8
+	TargetItems          int64
 	HasP50Days           uint8
 	P50Days              int64
 	HasP85Days           uint8
@@ -223,6 +229,7 @@ func ReadTeamCompletionForecastsWithRowLimit(ctx context.Context, client QueryCl
 	}
 	binProbe := strconv.Itoa(CompletionDayBinLimit + 1)
 	statement := WithRowLimit(`SELECT team_key, has_work_scope, ifNull(work_scope_id, ''), toString(computed_at), simulation_count, toInt64(backlog_size),
+	toUInt8(isNotNull(target_items)), toInt64(ifNull(target_items, 0)),
 	toUInt8(isNotNull(p50_days)), toInt64(ifNull(p50_days, 0)),
 	toUInt8(isNotNull(p85_days)), toInt64(ifNull(p85_days, 0)),
 	toUInt8(isNotNull(p95_days)), toInt64(ifNull(p95_days, 0)),
@@ -232,7 +239,7 @@ func ReadTeamCompletionForecastsWithRowLimit(ctx context.Context, client QueryCl
 	arraySlice(completion_days_values, 1, `+binProbe+`), arraySlice(completion_days_counts, 1, `+binProbe+`)
 FROM (
 	SELECT ifNull(team_id, '') AS team_key, toUInt8(isNotNull(work_scope_id)) AS has_work_scope, work_scope_id, computed_at, simulation_count, backlog_size,
-		p50_days, p85_days, p95_days, p50_date, p85_date, p95_date, insufficient_history, high_variance,
+		target_items, p50_days, p85_days, p95_days, p50_date, p85_date, p95_date, insufficient_history, high_variance,
 		completion_days_values, completion_days_counts,
 		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
 	FROM capacity_forecasts FINAL
@@ -244,6 +251,7 @@ ORDER BY team_key, has_work_scope, work_scope_id`, rowLimit)
 	err := QueryOrgScopedNamed(ctx, client, "ReadTeamCompletionForecasts", statement, orgID, ids, func(row RowScanner) error {
 		var r CompletionForecastRow
 		if err := row.Scan(&r.TeamID, &r.HasWorkScope, &r.WorkScopeID, &r.ComputedAt, &r.SimulationCount, &r.BacklogSize,
+			&r.HasTargetItems, &r.TargetItems,
 			&r.HasP50Days, &r.P50Days, &r.HasP85Days, &r.P85Days, &r.HasP95Days, &r.P95Days,
 			&r.P50Date, &r.P85Date, &r.P95Date, &r.InsufficientHistory, &r.HighVariance,
 			&r.CompletionDayBins, &r.CompletionCountBins, &r.CompletionDaysValues, &r.CompletionDaysCounts); err != nil {

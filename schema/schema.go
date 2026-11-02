@@ -78,13 +78,15 @@ var ProductionColumns = map[string][]Column{
 	// CHAOS-12584: simulation_count, p85/p95 days, the three dates and the
 	// fixed-scope distribution are declared from the ops baseline DDL
 	// (internal/chmigrate/baseline/head.json, ops 8dcc0377), in its column
-	// order; the two completion_days_* arrays are migration 101's.
+	// order; the two completion_days_* arrays are migration 101's. CHAOS-12634:
+	// target_items, from the same baseline, in its place after backlog_size.
 	"capacity_forecasts": {
 		{Name: "forecast_id", Type: "String"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "team_id", Type: "Nullable(String)"},
 		{Name: "work_scope_id", Type: "Nullable(String)"},
 		{Name: "backlog_size", Type: "UInt32"},
+		{Name: "target_items", Type: "Nullable(UInt32)"},
 		{Name: "simulation_count", Type: "UInt32"},
 		{Name: "p50_days", Type: "Nullable(UInt16)"},
 		{Name: "p85_days", Type: "Nullable(UInt16)"},

@@ -32,9 +32,10 @@ const (
 
 // cfInsert renders one forecast row. arrays is "" for a row written before
 // ops migration 101: the two array columns are left to their default, [].
-func cfInsert(org, forecastID, computedAt, teamID, workScopeID, percentiles, arrays string) string {
-	columns := "org_id, forecast_id, computed_at, team_id, work_scope_id, backlog_size, simulation_count, p50_days, p85_days, p95_days, p50_date, p85_date, p95_date, throughput_mean, throughput_stddev, insufficient_history, high_variance"
-	values := fmt.Sprintf("'%s', '%s', '%s', %s, %s, 40, 10000, %s, 2.5, 0.5, 0, 0", org, forecastID, computedAt, teamID, workScopeID, percentiles)
+// targetItems is the stored target_items, "NULL" for none (CHAOS-12634).
+func cfInsert(org, forecastID, computedAt, teamID, workScopeID, targetItems, percentiles, arrays string) string {
+	columns := "org_id, forecast_id, computed_at, team_id, work_scope_id, backlog_size, target_items, simulation_count, p50_days, p85_days, p95_days, p50_date, p85_date, p95_date, throughput_mean, throughput_stddev, insufficient_history, high_variance"
+	values := fmt.Sprintf("'%s', '%s', '%s', %s, %s, 40, %s, 10000, %s, 2.5, 0.5, 0, 0", org, forecastID, computedAt, teamID, workScopeID, targetItems, percentiles)
 	if arrays != "" {
 		columns += ", completion_days_values, completion_days_counts"
 		values += ", " + arrays
@@ -56,30 +57,30 @@ func cfSeed() []string {
 	const full = "12, 30, 40, '2026-11-01', '2026-11-19', '2026-11-29'"
 	return []string{
 		// S1: an older and a newer forecast; the newer is served.
-		cfInsert(cfOrg, "f-s1-old", "2026-10-01 00:00:00", "'T1'", "'S1'", "10, 25, 35, '2026-10-11', '2026-10-26', '2026-11-05'", "[10, 25], [6000, 4000]"),
-		cfInsert(cfOrg, "f-s1-new", "2026-10-20 00:00:00", "'T1'", "'S1'", full, "[12, 30, 40], [5000, 3500, 1500]"),
+		cfInsert(cfOrg, "f-s1-old", "2026-10-01 00:00:00", "'T1'", "'S1'", "40", "10, 25, 35, '2026-10-11', '2026-10-26', '2026-11-05'", "[10, 25], [6000, 4000]"),
+		cfInsert(cfOrg, "f-s1-new", "2026-10-20 00:00:00", "'T1'", "'S1'", "40", full, "[12, 30, 40], [5000, 3500, 1500]"),
 		// A NULL scope and an empty scope are two forecasts.
-		cfInsert(cfOrg, "f-null", "2026-10-15 00:00:00", "'T1'", "NULL", full, "[7], [10000]"),
-		cfInsert(cfOrg, "f-empty", "2026-10-15 00:00:00", "'T1'", "''", full, "[8], [10000]"),
+		cfInsert(cfOrg, "f-null", "2026-10-15 00:00:00", "'T1'", "NULL", "40", full, "[7], [10000]"),
+		cfInsert(cfOrg, "f-empty", "2026-10-15 00:00:00", "'T1'", "''", "40", full, "[8], [10000]"),
 		// S2: written before migration 101, no p85/p95: empty arrays, NULLs kept.
-		cfInsert(cfOrg, "f-s2", "2026-10-10 00:00:00", "'T1'", "'S2'", "9, NULL, NULL, NULL, NULL, NULL", ""),
+		cfInsert(cfOrg, "f-s2", "2026-10-10 00:00:00", "'T1'", "'S2'", "NULL", "9, NULL, NULL, NULL, NULL, NULL", ""),
 		// S3: two forecasts at the same computed_at; forecast_id breaks the tie.
-		cfInsert(cfOrg, "f-s3-a", "2026-10-12 00:00:00", "'T1'", "'S3'", full, "[5], [10000]"),
-		cfInsert(cfOrg, "f-s3-b", "2026-10-12 00:00:00", "'T1'", "'S3'", full, "[6], [10000]"),
+		cfInsert(cfOrg, "f-s3-a", "2026-10-12 00:00:00", "'T1'", "'S3'", "40", full, "[5], [10000]"),
+		cfInsert(cfOrg, "f-s3-b", "2026-10-12 00:00:00", "'T1'", "'S3'", "40", full, "[6], [10000]"),
 		// MISMATCH: arrays of different lengths; each length is its own.
-		cfInsert(cfOrg, "f-mismatch", "2026-10-14 00:00:00", "'T1'", "'MISMATCH'", full, "[1, 2], [10000]"),
+		cfInsert(cfOrg, "f-mismatch", "2026-10-14 00:00:00", "'T1'", "'MISMATCH'", "0", full, "[1, 2], [10000]"),
 		// WIDE: more bins than CompletionDayBinLimit.
-		cfInsert(cfOrg, "f-wide", "2026-10-16 00:00:00", "'T1'", "'WIDE'", full, cfWideArrays()),
+		cfInsert(cfOrg, "f-wide", "2026-10-16 00:00:00", "'T1'", "'WIDE'", "40", full, cfWideArrays()),
 		// Not requested, and another organization's newer forecast for T1/S1.
-		cfInsert(cfOrg, "f-t2", "2026-10-20 00:00:00", "'T2'", "'S1'", full, "[3], [10000]"),
-		cfInsert(cfOtherOrg, "f-other", "2026-10-25 00:00:00", "'T1'", "'S1'", full, "[99], [10000]"),
+		cfInsert(cfOrg, "f-t2", "2026-10-20 00:00:00", "'T2'", "'S1'", "40", full, "[3], [10000]"),
+		cfInsert(cfOtherOrg, "f-other", "2026-10-25 00:00:00", "'T1'", "'S1'", "40", full, "[99], [10000]"),
 	}
 }
 
 func cfFull(hasScope uint8, scope, forecastAt string, values []uint16, counts []uint32) readers.CompletionForecastRow {
 	return readers.CompletionForecastRow{
 		TeamID: "T1", HasWorkScope: hasScope, WorkScopeID: scope, ComputedAt: forecastAt,
-		SimulationCount: 10000, BacklogSize: 40,
+		SimulationCount: 10000, BacklogSize: 40, HasTargetItems: 1, TargetItems: 40,
 		HasP50Days: 1, P50Days: 12, HasP85Days: 1, P85Days: 30, HasP95Days: 1, P95Days: 40,
 		P50Date: "2026-11-01", P85Date: "2026-11-19", P95Date: "2026-11-29",
 		CompletionDayBins: uint64(len(values)), CompletionCountBins: uint64(len(counts)),
@@ -94,14 +95,18 @@ func cfWant() []readers.CompletionForecastRow {
 		wide.CompletionDaysValues = append(wide.CompletionDaysValues, uint16(day))
 		wide.CompletionDaysCounts = append(wide.CompletionDaysCounts, 25)
 	}
+	// S2: a NULL target_items is no target, never a target of 0.
 	s2 := readers.CompletionForecastRow{
 		TeamID: "T1", HasWorkScope: 1, WorkScopeID: "S2", ComputedAt: "2026-10-10 00:00:00.000",
 		SimulationCount: 10000, BacklogSize: 40, HasP50Days: 1, P50Days: 9,
 	}
+	// MISMATCH stores target_items 0: present, and 0.
+	mismatch := cfFull(1, "MISMATCH", "2026-10-14 00:00:00.000", []uint16{1, 2}, []uint32{10000})
+	mismatch.TargetItems = 0
 	return []readers.CompletionForecastRow{
 		cfFull(0, "", "2026-10-15 00:00:00.000", []uint16{7}, []uint32{10000}),
 		cfFull(1, "", "2026-10-15 00:00:00.000", []uint16{8}, []uint32{10000}),
-		cfFull(1, "MISMATCH", "2026-10-14 00:00:00.000", []uint16{1, 2}, []uint32{10000}),
+		mismatch,
 		cfFull(1, "S1", "2026-10-20 00:00:00.000", []uint16{12, 30, 40}, []uint32{5000, 3500, 1500}),
 		s2,
 		cfFull(1, "S3", "2026-10-12 00:00:00.000", []uint16{6}, []uint32{10000}),
@@ -137,8 +142,8 @@ func cfCheck(client readers.QueryClient) []string {
 	describe := func(rows []readers.CompletionForecastRow) string {
 		parts := make([]string, 0, len(rows))
 		for _, row := range rows {
-			parts = append(parts, fmt.Sprintf("{team=%s has_scope=%d scope=%q at=%s p50=%d/%d p85=%d/%d p95=%d/%d dates=%q,%q,%q bins=%d/%d values=%d counts=%d}",
-				row.TeamID, row.HasWorkScope, row.WorkScopeID, row.ComputedAt, row.HasP50Days, row.P50Days, row.HasP85Days, row.P85Days, row.HasP95Days, row.P95Days,
+			parts = append(parts, fmt.Sprintf("{team=%s has_scope=%d scope=%q at=%s target=%d/%d p50=%d/%d p85=%d/%d p95=%d/%d dates=%q,%q,%q bins=%d/%d values=%d counts=%d}",
+				row.TeamID, row.HasWorkScope, row.WorkScopeID, row.ComputedAt, row.HasTargetItems, row.TargetItems, row.HasP50Days, row.P50Days, row.HasP85Days, row.P85Days, row.HasP95Days, row.P95Days,
 				row.P50Date, row.P85Date, row.P95Date, row.CompletionDayBins, row.CompletionCountBins, len(row.CompletionDaysValues), len(row.CompletionDaysCounts)))
 		}
 		return strings.Join(parts, "\n  ")
@@ -160,7 +165,7 @@ func cfCheck(client readers.QueryClient) []string {
 	}
 	older := readers.CompletionForecastRow{
 		TeamID: "T1", HasWorkScope: 1, WorkScopeID: "S1", ComputedAt: "2026-10-01 00:00:00.000",
-		SimulationCount: 10000, BacklogSize: 40,
+		SimulationCount: 10000, BacklogSize: 40, HasTargetItems: 1, TargetItems: 40,
 		HasP50Days: 1, P50Days: 10, HasP85Days: 1, P85Days: 25, HasP95Days: 1, P95Days: 35,
 		P50Date: "2026-10-11", P85Date: "2026-10-26", P95Date: "2026-11-05",
 		CompletionDayBins: 2, CompletionCountBins: 2,
