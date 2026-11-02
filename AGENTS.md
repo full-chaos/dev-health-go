@@ -12,7 +12,7 @@ Store/contract layer ONLY:
 - `readers/` — neutral, column-level ClickHouse row readers over `schema`
   types. Return plain structs. No GraphQL, no fact/resolver shapes.
 - `contracts/` — store-level validation/versioning primitives.
-- `authverify/` — JWKS, k8s TokenReview, and workload-token-exchange
+- `authverify/` — JWKS, k8s TokenReview, workload-token-exchange and service-account-token
   verification MECHANISMS. No principal/claim shape — each consumer defines
   its own on top.
 - `workloadtoken/` — the client half of the workload-token exchange (one subject per deployment, cache, early re-exchange, fail closed, explicit transport); no audience or scope vocabulary.
