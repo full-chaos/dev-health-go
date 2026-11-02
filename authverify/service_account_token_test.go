@@ -246,7 +246,6 @@ func TestServiceAccountVerifierConfigBounds(t *testing.T) {
 		"http issuer":       func(c *ServiceAccountVerifierConfig) { c.Issuer = "http://auth.example.test" },
 		"envelope audience": func(c *ServiceAccountVerifierConfig) { c.Audience = "query-api" },
 		"unknown audience":  func(c *ServiceAccountVerifierConfig) { c.Audience = "other" },
-		"empty audience":    func(c *ServiceAccountVerifierConfig) { c.Audience = "" },
 		"leeway over 30 s":  func(c *ServiceAccountVerifierConfig) { c.Leeway = MaxServiceAccountLeeway + time.Second },
 		"leeway 60 s":       func(c *ServiceAccountVerifierConfig) { c.Leeway = MaxLeeway },
 		"leeway frac":       func(c *ServiceAccountVerifierConfig) { c.Leeway = 500 * time.Millisecond },
@@ -493,6 +492,35 @@ func TestServiceAccountErrorsCarryNoTokenOrKeyBytes(t *testing.T) {
 			if secret != "" && strings.Contains(text, secret) {
 				t.Errorf("%s: error text carries token material", row.File)
 			}
+		}
+	}
+}
+
+func TestServiceAccountVerifierAudienceDefaultsToDevHealthAPI(t *testing.T) {
+	s := newSigner(t)
+	keys := StaticKeys{"sa-a": s.pub}
+	tok := s.token(saHeader("sa-a"), saPayload(1760000000, 1760000000, 1760000300))
+	now := time.Unix(1760000100, 0)
+	v, err := NewServiceAccountVerifier(ServiceAccountVerifierConfig{Issuer: rtIssuer, Keys: keys})
+	if err != nil {
+		t.Fatalf("empty audience refused: %v", err)
+	}
+	if claims, err := v.Verify(tok, now); err != nil || claims == nil {
+		t.Fatalf("default verifier refused a dev-health-api token: %v", ReasonOf(err))
+	}
+	other, err := NewServiceAccountVerifier(ServiceAccountVerifierConfig{Issuer: rtIssuer, Audience: "auth-service", Keys: keys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Verify(tok, now); ReasonOf(err) != ReasonAudience {
+		t.Fatalf("auth-service verifier gave %q", ReasonOf(err))
+	}
+}
+
+func TestServiceAccountVerifierRefusesUnknownAudience(t *testing.T) {
+	for _, audience := range []string{"query-api", "acr-api", "acr-mcp", "other", "Dev-Health-Api", "dev-health-api ", "auth-service,dev-health-api"} {
+		if _, err := NewServiceAccountVerifier(ServiceAccountVerifierConfig{Issuer: rtIssuer, Audience: audience, Keys: StaticKeys{}}); err == nil {
+			t.Errorf("audience %q accepted", audience)
 		}
 	}
 }
