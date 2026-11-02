@@ -51,9 +51,10 @@ type ServiceAccountClaims struct {
 type ServiceAccountVerifierConfig struct {
 	// Issuer must equal the token's iss exactly.
 	Issuer string
-	// Audience is the one service this verifier is. A token names
-	// dev-health-api only, so any other service refuses it with reason
-	// audience.
+	// Audience is the one service this verifier is: dev-health-api (the
+	// default when empty) or auth-service. A token names dev-health-api only,
+	// so auth-service refuses it with reason audience. Any other value is
+	// refused at construction.
 	Audience string
 	// Keys resolves kid to a public key.
 	Keys KeySource
@@ -79,6 +80,9 @@ type ServiceAccountVerifier struct {
 func NewServiceAccountVerifier(cfg ServiceAccountVerifierConfig) (*ServiceAccountVerifier, error) {
 	if cfg.Keys == nil || !issuerPattern.MatchString(cfg.Issuer) {
 		return nil, errors.New("authverify: service account verifier needs an https issuer and a key source")
+	}
+	if cfg.Audience == "" {
+		cfg.Audience = serviceAccountTokenAudience
 	}
 	if _, ok := serviceAccountVerifierAudiences[cfg.Audience]; !ok {
 		return nil, errors.New("authverify: service account verifier audience is not a service audience")
