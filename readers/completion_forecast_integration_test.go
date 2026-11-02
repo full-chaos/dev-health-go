@@ -66,6 +66,8 @@ func cfSeed() []string {
 		// S3: two forecasts at the same computed_at; forecast_id breaks the tie.
 		cfInsert(cfOrg, "f-s3-a", "2026-10-12 00:00:00", "'T1'", "'S3'", full, "[5], [10000]"),
 		cfInsert(cfOrg, "f-s3-b", "2026-10-12 00:00:00", "'T1'", "'S3'", full, "[6], [10000]"),
+		// MISMATCH: arrays of different lengths; each length is its own.
+		cfInsert(cfOrg, "f-mismatch", "2026-10-14 00:00:00", "'T1'", "'MISMATCH'", full, "[1, 2], [10000]"),
 		// WIDE: more bins than CompletionDayBinLimit.
 		cfInsert(cfOrg, "f-wide", "2026-10-16 00:00:00", "'T1'", "'WIDE'", full, cfWideArrays()),
 		// Not requested, and another organization's newer forecast for T1/S1.
@@ -99,6 +101,7 @@ func cfWant() []readers.CompletionForecastRow {
 	return []readers.CompletionForecastRow{
 		cfFull(0, "", "2026-10-15 00:00:00.000", []uint16{7}, []uint32{10000}),
 		cfFull(1, "", "2026-10-15 00:00:00.000", []uint16{8}, []uint32{10000}),
+		cfFull(1, "MISMATCH", "2026-10-14 00:00:00.000", []uint16{1, 2}, []uint32{10000}),
 		cfFull(1, "S1", "2026-10-20 00:00:00.000", []uint16{12, 30, 40}, []uint32{5000, 3500, 1500}),
 		s2,
 		cfFull(1, "S3", "2026-10-12 00:00:00.000", []uint16{6}, []uint32{10000}),
@@ -240,7 +243,8 @@ func cfDatabase(t *testing.T) *clickhouse.Client {
 // TestIntegrationReadTeamCompletionForecasts reads the latest forecast per
 // (team, work scope): the newest row wins, forecast_id breaks a computed_at
 // tie, a NULL and an empty scope stay two rows, a row from before migration
-// 101 reads empty arrays with its NULL percentiles kept, a distribution past
+// 101 reads empty arrays with its NULL percentiles kept, two arrays of
+// different lengths each report their own stored length, a distribution past
 // CompletionDayBinLimit is read to one entry past the limit with its stored
 // length, other teams and other organizations are not read, and the time
 // bound and the row bound apply.
