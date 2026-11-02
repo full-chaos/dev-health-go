@@ -221,3 +221,19 @@ func recv(e ast.Expr) string {
 	}
 	return ""
 }
+
+func TestRulesAreDeepCopiedOnNew(t *testing.T) {
+	r := rule()
+	r.RepositoryAllowlist = []string{"full-chaos/dev-health-ops"}
+	r.Redaction = []pep.RedactionClass{pep.RedactFreeText}
+	f := pepfake.New(r)
+	r.RepositoryAllowlist[0] = "evil/repo"
+	r.Redaction[0] = pep.RedactContactDetails
+	o := f.Decide(context.Background(), req()).Obligations()
+	if !o.RepositoryAllowed("full-chaos/dev-health-ops") || o.RepositoryAllowed("evil/repo") {
+		t.Fatal("the fake shares a rule's allowlist with the caller")
+	}
+	if !o.Redacts(pep.RedactFreeText) || o.Redacts(pep.RedactContactDetails) {
+		t.Fatal("the fake shares a rule's redaction list with the caller")
+	}
+}

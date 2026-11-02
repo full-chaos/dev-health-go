@@ -1,7 +1,9 @@
 package pep
 
 import (
+	"bytes"
 	"context"
+	"strconv"
 	"testing"
 )
 
@@ -155,5 +157,42 @@ func TestDenyCarriesNoObligations(t *testing.T) {
 	}
 	if o := d.Obligations(); o.TenantAllows(testOrg) || o.RepositoryAllowed("a/b") {
 		t.Fatal("a deny carries a grant")
+	}
+}
+
+// Parity with ops on main: authorize_request.go:142-147 (organization_id is any
+// non-empty string) and principal.v1 organization_id (type string, minLength 1,
+// no pattern), which authorization_decision.v1 organization_id and
+// obligations.tenant_scope reference.
+func TestOrganizationStringsMatchOpsAnyNonEmptyString(t *testing.T) {
+	for name, org := range map[string]string{
+		"unicode": "org_é世界",
+		"space":   "org with space",
+		"over256": "org_" + string(bytes.Repeat([]byte("a"), 300)),
+		"control": "org_\ttab",
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := replaceOnce(t, goodAllow(t), `"organization_id": "org_EXAMPLE0000000000000001"`, `"organization_id": `+strconv.Quote(org))
+			body = replaceOnce(t, body, `"tenant_scope": "org_EXAMPLE0000000000000001"`, `"tenant_scope": `+strconv.Quote(org))
+			pdp := newPDP(t, replyJSON(body))
+			req := baseRequest()
+			req.OrganizationID = org
+			d := pdp.client(t).Decide(context.Background(), req)
+			if !d.Allowed() || d.Local() || pdp.calls.Load() != 1 {
+				t.Fatalf("allowed=%v reason=%s calls=%d", d.Allowed(), d.Reason(), pdp.calls.Load())
+			}
+			if scope, ok := d.Obligations().TenantScope(); !ok || scope != org || !d.Obligations().TenantAllows(org) {
+				t.Fatalf("tenant scope %q %v", scope, ok)
+			}
+		})
+	}
+	for name, body := range map[string][]byte{
+		"empty decision organization": replaceOnce(t, goodAllow(t), `"organization_id": "org_EXAMPLE0000000000000001"`, `"organization_id": ""`),
+		"empty tenant scope":          replaceOnce(t, goodAllow(t), `"tenant_scope": "org_EXAMPLE0000000000000001"`, `"tenant_scope": ""`),
+	} {
+		d := decideBody(t, body, baseRequest())
+		if d.Allowed() || !d.Local() {
+			t.Errorf("%s: allowed=%v", name, d.Allowed())
+		}
 	}
 }
