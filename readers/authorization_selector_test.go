@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-go/readers"
+	"github.com/full-chaos/dev-health-go/repokey"
 )
 
 func TestWorkItemScopeSQLSelectorRendering(t *testing.T) {
@@ -17,7 +18,7 @@ func TestWorkItemScopeSQLSelectorRendering(t *testing.T) {
 		RequestedRepositoryIDs: []string{"repo-a", "repo-b"},
 		RepositorySelectors: &readers.RepositorySelectorScope{
 			Granted: readers.RepositorySelectorSet{
-				ExactSlugs: []string{" ACME/Widgets ", "malformed/too/many"},
+				ExactSlugs: []string{" ACME/Widgets ", "malformed/Not Real"},
 				Owners:     []string{" Acme ", "bad/owner"},
 			},
 			Requested: &requested,
@@ -156,7 +157,7 @@ func TestWorkItemScopeSQLNormalizesAndRejectsSelectorValues(t *testing.T) {
 	scope := readers.AuthorizationScope{
 		RepositorySelectors: &readers.RepositorySelectorScope{
 			Granted: readers.RepositorySelectorSet{
-				ExactSlugs: []string{" ACME/Repo ", "acme/repo", "acme/not/real", "bad"},
+				ExactSlugs: []string{" ACME/Repo ", "acme/repo", "acme/not real", "bad"},
 				Owners:     []string{" zeta ", " ACME/* ", "acme", "bad/owner", ""},
 			},
 		},
@@ -303,5 +304,55 @@ func TestWorkItemScopeSQLProvenanceNamesEveryPathInOrder(t *testing.T) {
 				t.Fatalf("JoinSQL reads %s without the org binding: %s", table, scoped)
 			}
 		}
+	}
+}
+
+func TestWorkItemScopeSQLAcceptsNestedRepositoryKeys(t *testing.T) {
+	t.Parallel()
+	twenty := strings.Repeat("g/", 19) + "r"
+	scope := readers.AuthorizationScope{
+		RepositorySelectors: &readers.RepositorySelectorScope{
+			Granted: readers.RepositorySelectorSet{
+				ExactSlugs: []string{" Acme/Team/Widgets ", twenty, strings.Repeat("g/", 20) + "r", "acme/.github", "acme/team./x", strings.Repeat("a", 90) + "/" + strings.Repeat("b", 90) + "/" + strings.Repeat("c", 90)},
+				Owners:     []string{"acme", "acme/team/*"},
+			},
+		},
+	}
+	rendered := readers.WorkItemScopeSQL(scope)
+	var slugs, owners []string
+	for _, b := range rendered.Bindings {
+		switch b.Name {
+		case "authorized_repo_slugs":
+			slugs = b.Value.([]string)
+		case "authorized_repo_owners":
+			owners = b.Value.([]string)
+		}
+	}
+	if want := []string{"acme/.github", "acme/team/widgets", twenty}; !reflect.DeepEqual(slugs, want) {
+		t.Fatalf("slugs = %#v, want %#v", slugs, want)
+	}
+	if want := []string{"acme"}; !reflect.DeepEqual(owners, want) {
+		t.Fatalf("owners = %#v, want only the first segment %#v", owners, want)
+	}
+}
+
+func TestWorkItemScopeSQLGrammarIsTheRepokeySlugPattern(t *testing.T) {
+	t.Parallel()
+	scope := readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{
+		Granted: readers.RepositorySelectorSet{All: true},
+	}}
+	rendered := readers.WorkItemScopeSQL(scope)
+	literal := ", '" + repokey.SlugPattern + "')"
+	for name, sql := range map[string]string{"link join": rendered.JoinSQL, "direct path": rendered.AuthorizationExpr} {
+		if !strings.Contains(sql, literal) {
+			t.Errorf("%s does not carry the repokey slug pattern", name)
+		}
+	}
+	// a/b/c is owned by owner a: the owner is the first segment.
+	if !strings.Contains(rendered.AuthorizationExpr, "arrayElement(splitByChar('/', ") || !strings.Contains(rendered.AuthorizationExpr, "), 1)") {
+		t.Error("owner is not the first segment of the slug")
+	}
+	if !strings.Contains(rendered.JoinSQL, "length(") {
+		t.Error("link join has no byte bound")
 	}
 }

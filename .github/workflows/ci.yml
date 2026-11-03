@@ -90,7 +90,7 @@ jobs:
             ('repo-b', 'reader-scope-fixture-org', 'acme/tools', 1),
             ('repo-c', 'reader-scope-fixture-org', 'other/three', 1),
             ('repo-empty', 'reader-scope-fixture-org', '', 1),
-            ('repo-malformed', 'reader-scope-fixture-org', 'acme/not/real', 1),
+            ('repo-malformed', 'reader-scope-fixture-org', 'acme/not real', 1),
             ('repo-cross-org', 'other-org', 'acme/cross', 1)"
           ch_query "CREATE TABLE $CH_DATABASE.work_items (
             org_id String,
