@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep/internal/decision"
+	"github.com/full-chaos/dev-health-go/repokey"
 )
 
 const (
@@ -189,7 +190,7 @@ func decodeObligations(raw json.RawMessage) (decision.Obligations, *Error) {
 		spec.Allowlist = []string{}
 		for _, item := range items {
 			s, ok := asString(item)
-			if !ok || !repositoryKeyRE.MatchString(s) || contains(spec.Allowlist, s) {
+			if !ok || !repokey.Valid(s) || contains(spec.Allowlist, s) {
 				return zero, fail(ReasonMalformed)
 			}
 			spec.Allowlist = append(spec.Allowlist, s)

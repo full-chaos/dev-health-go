@@ -16,6 +16,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
+	"github.com/full-chaos/dev-health-go/repokey"
 	"github.com/full-chaos/dev-health-go/schema"
 )
 
@@ -43,9 +44,14 @@ var (
 	// Owner-matched only after the shared trim and case fold.
 	authzRepoUpper = authzRepo{"11111111-1111-4111-8111-000000000004", " Acme/Upper ", authzOrg}
 	// Owner prefix matches, but the name is not a repository slug.
-	authzRepoMalformed = authzRepo{"11111111-1111-4111-8111-000000000005", "acme/not/real", authzOrg}
+	authzRepoMalformed = authzRepo{"11111111-1111-4111-8111-000000000005", "acme/not real", authzOrg}
 	// A metadata row stored under the zero UUID: never a real repository.
 	authzRepoZero = authzRepo{authzZeroRepo, "acme/zero-sentinel", authzOrg}
+	// Nested paths: a GitLab subgroup, the deepest allowed key (20
+	// segments) and one segment past it.
+	authzRepoNested   = authzRepo{"11111111-1111-4111-8111-000000000006", "acme/team/widgets", authzOrg}
+	authzRepoNested20 = authzRepo{"11111111-1111-4111-8111-000000000007", "acme/" + strings.Repeat("g/", 18) + "r", authzOrg}
+	authzRepoNested21 = authzRepo{"11111111-1111-4111-8111-000000000008", "acme/" + strings.Repeat("g/", 19) + "r", authzOrg}
 )
 
 // authzProject is one project and the repository its owning team owns in
@@ -125,13 +131,15 @@ var authzGrants = []authzGrant{
 	{"all", readers.RepositorySelectorSet{All: true}},
 	{"matching-exact", readers.RepositorySelectorSet{ExactSlugs: []string{"ACME/Granted"}}},
 	{"matching-owner", readers.RepositorySelectorSet{Owners: []string{"acme/*"}}},
+	{"matching-nested", readers.RepositorySelectorSet{ExactSlugs: []string{"Acme/Team/Widgets"}}},
+	{"matching-nested20", readers.RepositorySelectorSet{ExactSlugs: []string{"acme/" + strings.Repeat("g/", 18) + "r"}}},
 	{"non-matching", readers.RepositorySelectorSet{ExactSlugs: []string{"zzz/none"}}},
 	{"empty", readers.RepositorySelectorSet{}},
 }
 
 func authzGrantMatches(set readers.RepositorySelectorSet, repo authzRepo) bool {
 	slug := strings.ToLower(strings.TrimSpace(repo.slug))
-	if repo.org != authzOrg || repo.id == authzZeroRepo || strings.Count(slug, "/") != 1 {
+	if repo.org != authzOrg || repo.id == authzZeroRepo || !repokey.ValidSlug(slug) {
 		return false
 	}
 	for _, exact := range set.ExactSlugs {
@@ -294,6 +302,10 @@ func authzItems() []authzItem {
 		authzItem{id: "linear:norepo-orphan-link-zerorepo", provider: "linear", links: []authzLink{{authzRepoZero, "native", authzOrg}}},
 		authzItem{id: "linear:norepo-orphan-link-malformed", provider: "linear", links: []authzLink{{authzRepoMalformed, "native", authzOrg}}},
 		authzItem{id: "linear:norepo-orphan-link-upper", provider: "linear", links: []authzLink{{authzRepoUpper, "native", authzOrg}}},
+		authzItem{id: "linear:norepo-orphan-link-nested", provider: "linear", links: []authzLink{{authzRepoNested, "native", authzOrg}}},
+		authzItem{id: "linear:norepo-orphan-link-nested20", provider: "linear", links: []authzLink{{authzRepoNested20, "native", authzOrg}}},
+		authzItem{id: "linear:norepo-orphan-link-nested21", provider: "linear", links: []authzLink{{authzRepoNested21, "native", authzOrg}}},
+		authzItem{id: "linear:nested-direct", provider: "linear", repo: &authzRepoNested},
 		// Several links: the evidence is every granted repository, once each,
 		// sorted; a non-granted and a heuristic link add nothing.
 		authzItem{id: "linear:norepo-orphan-multilink", provider: "linear", links: []authzLink{
@@ -331,7 +343,7 @@ func authzItems() []authzItem {
 func authzSeedStatements(items []authzItem) []string {
 	const at = "'2026-01-01 00:00:00'"
 	var stmts []string
-	for _, repo := range []authzRepo{authzRepoGranted, authzRepoNonGranted, authzRepoOtherOrg, authzRepoUpper, authzRepoMalformed, authzRepoZero} {
+	for _, repo := range []authzRepo{authzRepoGranted, authzRepoNonGranted, authzRepoOtherOrg, authzRepoUpper, authzRepoMalformed, authzRepoZero, authzRepoNested, authzRepoNested20, authzRepoNested21} {
 		stmts = append(stmts, fmt.Sprintf("INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES ('%s', '%s', %s, %s, '%s', 'github')", repo.id, repo.slug, at, at, repo.org))
 	}
 	for _, project := range []authzProject{authzProjectOwned, authzProjectNonOwned, authzProjectKeyed, authzProjectKeyOnly, authzProjectExpired, authzProjectUnowned, authzProjectNullRepo, authzProjectOtherOrg,

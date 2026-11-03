@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"regexp"
+
+	"github.com/full-chaos/dev-health-go/repokey"
 )
 
 // MaxBatch is the contract's bound on a batch: 1 to 100 requests.
@@ -11,7 +13,6 @@ const MaxBatch = 100
 
 const (
 	principalReferencePattern = `^[A-Za-z0-9._~-]{16,1000}$`
-	repositoryKeyPattern      = `^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`
 	otherKeyPattern           = `^[a-z0-9][a-z0-9._:-]{0,255}$`
 	requestIDAlphabet         = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 )
@@ -20,7 +21,6 @@ var (
 	principalReferenceRE = regexp.MustCompile(principalReferencePattern)
 	actionPattern        = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 	requestIDPattern     = regexp.MustCompile(`^req_[A-Za-z0-9_-]{26}$`)
-	repositoryKeyRE      = regexp.MustCompile(repositoryKeyPattern)
 	otherKeyRE           = regexp.MustCompile(otherKeyPattern)
 
 	resourceTypes  = []string{"organization", "repository", "membership", "service_account", "grant", "credential", "session", "signing_key", "subscription", "platform"}
@@ -62,7 +62,7 @@ func (r Request) valid() bool {
 		return false
 	}
 	if r.ResourceType == "repository" {
-		if !repositoryKeyRE.MatchString(r.ResourceKey) {
+		if !repokey.Valid(r.ResourceKey) {
 			return false
 		}
 	} else if !otherKeyRE.MatchString(r.ResourceKey) {

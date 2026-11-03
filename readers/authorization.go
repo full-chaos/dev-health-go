@@ -3,7 +3,10 @@ package readers
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/full-chaos/dev-health-go/repokey"
 )
 
 // RepositorySelectorSet is one side of a repository authorization selector.
@@ -156,13 +159,8 @@ const (
 	// capital I) unchanged, while the producer's strings.ToLower maps them
 	// to ASCII k and i. Keep those two producer-accepted preimages aligned
 	// before the ASCII repository grammar is applied.
-	workItemRepoSlug = "replaceAll(replaceAll(lowerUTF8(replaceRegexpAll(trimBoth(ifNull(r.repo, '')), " + workItemRepositoryWhitespacePattern + ", '')), 'K', 'k'), 'İ', 'i')"
-	// This is the same repository-part grammar as acr/internal/auth. The
-	// match guard is needed before owner extraction: a malformed value such
-	// as owner/not-a-slug/extra must never match owner/* by its prefix.
-	workItemRepoSlugGrammar = ", '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$')"
-	workItemRepoSlugValid   = "match(" + workItemRepoSlug + workItemRepoSlugGrammar
-	workItemRepoNamed       = workItemRepoSlug + " != ''"
+	workItemRepoSlug  = "replaceAll(replaceAll(lowerUTF8(replaceRegexpAll(trimBoth(ifNull(r.repo, '')), " + workItemRepositoryWhitespacePattern + ", '')), 'K', 'k'), 'İ', 'i')"
+	workItemRepoNamed = workItemRepoSlug + " != ''"
 
 	zeroUUID = "00000000-0000-0000-0000-000000000000"
 )
@@ -213,7 +211,7 @@ func repositorySlugSQL(column string) string {
 // name column: grammar first, then exact slug or owner membership.
 func grantedRepositoryMatchSQL(prefix, column string) string {
 	slug := repositorySlugSQL(column)
-	return "match(" + slug + workItemRepoSlugGrammar + " = 1 AND " + repositorySelectorMatchOver(prefix, slug)
+	return slugValidSQL(slug) + " AND " + repositorySelectorMatchOver(prefix, slug)
 }
 
 // workItemAuthorizingLinkProvenance is the one link provenance that
@@ -281,7 +279,18 @@ func workItemPullRequestLinkJoinSQL(prefix string, candidates WorkItemCandidates
 // emptyRepositories is the typed empty evidence array.
 const emptyRepositories = "CAST([], 'Array(String)')"
 
-var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
+var repositoryOwnerPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
+
+// slugValidSQL is the repository key grammar over a normalized slug
+// expression: repokey.SlugPattern (2-20 segments) within repokey.MaxBytes
+// bytes, the one rule the ops and acr key checks share. The guard is needed
+// before owner extraction: a malformed value such as owner/not a slug must
+// never match owner/* by its prefix.
+func slugValidSQL(slug string) string {
+	return "(length(" + slug + ") <= " + strconv.Itoa(repokey.MaxBytes) + " AND match(" + slug + ", '" + repokey.SlugPattern + "') = 1)"
+}
+
+var workItemRepoSlugValid = slugValidSQL(workItemRepoSlug)
 
 // WorkItemScopeSQL renders the fixed work-item authorization relation and
 // expression. It is intentionally a function over AuthorizationScope, with
@@ -372,7 +381,7 @@ func renderRepositorySelectorSet(set RepositorySelectorSet, prefix string) (stri
 	// real repository never takes either further path: its own repository
 	// decides.
 	organization := "{" + prefix + "_repo_all:UInt8} = 1"
-	direct := "(" + workItemRepoPresent + " AND " + workItemRepoSlugValid + " = 1 AND " + repositorySelectorMatch(prefix) + ")"
+	direct := "(" + workItemRepoPresent + " AND " + workItemRepoSlugValid + " AND " + repositorySelectorMatch(prefix) + ")"
 	repoLess := "NOT (" + workItemRepoPresent + ")"
 	project := "(" + repoLess + " AND " + keyPresentSQL("w.project_id", stringKey) + " AND notEmpty(wia_project_auth.wia_project_repositories))"
 	link := "(" + repoLess + " AND notEmpty(wia_link_auth.wia_link_repositories))"
@@ -401,7 +410,7 @@ func renderRequestedRepositorySelectorSet(set RepositorySelectorSet) (string, []
 	// therefore does not add a new slug-validity policy. Exact and owner
 	// selectors still require the normalized repository-name grammar before
 	// comparing either the full slug or its owner.
-	validMatch := "(" + workItemRepoSlugValid + " = 1 AND " + repositorySelectorMatch("requested") + ")"
+	validMatch := "(" + workItemRepoSlugValid + " AND " + repositorySelectorMatch("requested") + ")"
 	match := "(" + workItemRepoPresent + " AND " + workItemRepoNamed + " AND ({requested_repo_all:UInt8} = 1 OR " + validMatch + "))"
 	return match, bindings
 }
@@ -426,8 +435,7 @@ func normalizeRepositorySlugs(values []string) []string {
 	result := make([]string, 0, len(values))
 	for _, raw := range values {
 		normalized := strings.ToLower(strings.TrimSpace(raw))
-		parts := strings.Split(normalized, "/")
-		if len(parts) != 2 || !repositoryPartPattern.MatchString(parts[0]) || !repositoryPartPattern.MatchString(parts[1]) {
+		if !repokey.ValidSlug(normalized) {
 			continue
 		}
 		if _, exists := seen[normalized]; exists {
@@ -448,7 +456,7 @@ func normalizeRepositoryOwners(values []string) []string {
 		if strings.HasSuffix(normalized, "/*") {
 			normalized = strings.TrimSuffix(normalized, "/*")
 		}
-		if normalized == "" || strings.Contains(normalized, "/") || !repositoryPartPattern.MatchString(normalized) {
+		if normalized == "" || strings.Contains(normalized, "/") || !repositoryOwnerPattern.MatchString(normalized) {
 			continue
 		}
 		if _, exists := seen[normalized]; exists {
