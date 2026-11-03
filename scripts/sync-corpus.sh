@@ -3,14 +3,16 @@
 # dev-health-ops and records the source sha and a sha256 per file:
 #   authverify/testdata/SOURCE                  access-token, discovery and jwks
 #   authverify/testdata/workload-token.SOURCE   workload-token
+#   authverify/testdata/service-account-token.SOURCE   service-account-token
 #   pep/testdata/SOURCE                         the authorization request, batch
 #       request, decision and batch response examples, the jsonschema directory,
 #       vocabulary/reason-codes.json, endpoint-profile.schema.json and the
 #       action catalog vocabulary/actions.v1.json (as catalog/actions.v1.json)
-# It also writes the same ops commit into the three pin constants the corpus pin
+# It also writes the same ops commit into the four pin constants the corpus pin
 # tests compare SOURCE against (corpusOpsCommit in accesstoken_test.go,
-# workloadCorpusOpsCommit in workload_token_test.go, pepCorpusOpsCommit in
-# pep/corpus_test.go), so one run moves every pin.
+# workloadCorpusOpsCommit in workload_token_test.go,
+# serviceAccountCorpusOpsCommit in service_account_token_test.go,
+# pepCorpusOpsCommit in pep/corpus_test.go), so one run moves every pin.
 # All constants are checked before anything is written; a missing one stops the
 # script with the corpus untouched.
 # Usage: scripts/sync-corpus.sh /path/to/dev-health-ops-clone
@@ -18,7 +20,7 @@ set -euo pipefail
 ops="${1:?ops clone path}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 root="$repo/authverify/testdata"
-constants=("authverify/accesstoken_test.go:corpusOpsCommit" "authverify/workload_token_test.go:workloadCorpusOpsCommit" "pep/corpus_test.go:pepCorpusOpsCommit")
+constants=("authverify/accesstoken_test.go:corpusOpsCommit" "authverify/workload_token_test.go:workloadCorpusOpsCommit" "authverify/service_account_token_test.go:serviceAccountCorpusOpsCommit" "pep/corpus_test.go:pepCorpusOpsCommit")
 for entry in "${constants[@]}"; do
   file="${entry%%:*}"; name="${entry##*:}"
   grep -Eq "^const ${name} = \"[0-9a-f]{40}\"\$" "$repo/$file" || {
@@ -54,6 +56,7 @@ sync_group() {
 
 sync_group SOURCE "access-token:contracts/auth/v1/golden/access-token:5" "discovery:contracts/auth/v1/examples/discovery:5" "jwks:contracts/auth/v1/examples/jwks:5"
 sync_group workload-token.SOURCE "workload-token:contracts/auth/v1/golden/workload-token:5"
+sync_group service-account-token.SOURCE "service-account-token:contracts/auth/v1/golden/service-account-token:5"
 
 root="$repo/pep/testdata"
 ex=contracts/auth/v1/examples

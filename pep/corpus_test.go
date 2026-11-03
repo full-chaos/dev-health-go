@@ -14,7 +14,7 @@ import (
 // pepCorpusOpsCommit is the dev-health-ops commit the authorization corpora in
 // testdata were copied from. scripts/sync-corpus.sh rewrites testdata/SOURCE and
 // the corpus files; the same run rewrites this constant, so they move together.
-const pepCorpusOpsCommit = "4193af6c7bb0d3e9def1ce46aced9368ca76e4b5"
+const pepCorpusOpsCommit = "cc3c7a1695fc3cb8d12ccc4e678cb7826976c064"
 
 func TestCorpusSourceIsPinned(t *testing.T) {
 	file, err := os.Open("testdata/SOURCE")

@@ -1,4 +1,4 @@
-ops_commit 4193af6c7bb0d3e9def1ce46aced9368ca76e4b5
+ops_commit cc3c7a1695fc3cb8d12ccc4e678cb7826976c064
 ops_path contracts/auth/v1/golden/access-token
 ops_path contracts/auth/v1/examples/discovery
 ops_path contracts/auth/v1/examples/jwks
