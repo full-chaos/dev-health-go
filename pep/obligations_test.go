@@ -58,14 +58,18 @@ func TestObligationAccessors(t *testing.T) {
 	}
 }
 
-func TestObligationAbsentMembersAreUnrestrictedButTheZeroValueIsStrict(t *testing.T) {
+func TestObligationAbsentMembersAreUnrestrictedExceptRepositoriesAndTheZeroValueIsStrict(t *testing.T) {
 	d := decideAllow(t, `"obligations": {}`)
 	if !d.Allowed() {
 		t.Fatalf("not allowed: %v", d.Err())
 	}
 	o := d.Obligations()
-	if _, ok := o.TenantScope(); ok || o.RepositoryRestricted() || !o.RepositoryAllowed("a/b") || o.Redacts(RedactFreeText) || o.StepUpRequired() {
+	if _, ok := o.TenantScope(); ok || o.RepositoryRestricted() || o.Redacts(RedactFreeText) || o.StepUpRequired() {
 		t.Fatal("an empty obligation set must be unrestricted")
+	}
+	// An absent repository member never means every repository.
+	if o.RepositoryAllowed("a/b") {
+		t.Fatal("an empty obligation set granted a repository")
 	}
 	if _, ok := o.MinimumAssurance(); ok || !o.AssuranceSatisfiedBy(AssuranceAAL1) {
 		t.Fatal("no minimum assurance")
@@ -87,7 +91,7 @@ func TestObligationEmptyAllowlistMeansNone(t *testing.T) {
 
 func TestObligationStarAllowsEveryRepository(t *testing.T) {
 	o := decideAllow(t, `"obligations": {"repository_allowlist": ["*"]}`).Obligations()
-	if !o.RepositoryAllowed("a/b") || !o.RepositoryAllowed("x/y") || o.RepositoryAllowed("") {
+	if !o.RepositoryAllowed("a/b") || !o.RepositoryAllowed("x/y") || o.RepositoryAllowed("") || o.RepositoryAllowed("*") {
 		t.Fatal("star allowlist")
 	}
 }

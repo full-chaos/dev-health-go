@@ -200,7 +200,7 @@ func TestExportedAPICensus(t *testing.T) {
 	if len(fields["Fake"]) != 0 {
 		t.Errorf("Fake has exported fields %v: a caller could set an allow-all flag", fields["Fake"])
 	}
-	wantRule := []string{"Action", "MinimumAssurance", "OrganizationID", "PrincipalReference", "Redaction", "RepositoryAllowlist", "ResourceKey", "ResourceType", "StepUp", "TenantScope"}
+	wantRule := []string{"Action", "MinimumAssurance", "OrganizationID", "PrincipalReference", "Redaction", "RepositoryAllowlist", "RepositoryScope", "ResourceKey", "ResourceType", "StepUp", "TenantScope"}
 	sort.Strings(fields["Rule"])
 	if !reflect.DeepEqual(fields["Rule"], wantRule) {
 		t.Errorf("Rule fields %v, want %v", fields["Rule"], wantRule)
@@ -235,5 +235,39 @@ func TestRulesAreDeepCopiedOnNew(t *testing.T) {
 	}
 	if !o.Redacts(pep.RedactFreeText) || o.Redacts(pep.RedactContactDetails) {
 		t.Fatal("the fake shares a rule's redaction list with the caller")
+	}
+}
+
+func setRepositoryScope(t *testing.T, r *pepfake.Rule, scope string) {
+	t.Helper()
+	f := reflect.ValueOf(r).Elem().FieldByName("RepositoryScope")
+	if !f.IsValid() || f.Kind() != reflect.String {
+		t.Fatal("Rule has no string field RepositoryScope")
+	}
+	f.SetString(scope)
+}
+
+type repositoryScoped interface{ RepositoryScopeOrganization() bool }
+
+func TestRuleRepositoryScope(t *testing.T) {
+	r := rule()
+	if o := pepfake.New(r).Decide(context.Background(), req()).Obligations(); o.RepositoryAllowed("full-chaos/dev-health-ops") {
+		t.Fatal("a rule with neither repository member granted a repository")
+	}
+	setRepositoryScope(t, &r, "organization")
+	d := pepfake.New(r).Decide(context.Background(), req())
+	o := d.Obligations()
+	s, ok := any(o).(repositoryScoped)
+	if !d.Allowed() || !ok || !s.RepositoryScopeOrganization() || !o.RepositoryAllowed("a/b") || o.RepositoryAllowed("*") || o.RepositoryRestricted() {
+		t.Fatalf("organization scope lost: allowed=%v reason=%s", d.Allowed(), d.Reason())
+	}
+	r.RepositoryAllowlist = []string{"a/b"}
+	if d := pepfake.New(r).Decide(context.Background(), req()); d.Allowed() || !d.Local() {
+		t.Fatal("a rule with both repository members was allowed")
+	}
+	r.RepositoryAllowlist = nil
+	setRepositoryScope(t, &r, "everything")
+	if d := pepfake.New(r).Decide(context.Background(), req()); d.Allowed() || !d.Local() {
+		t.Fatal("a rule with an unknown repository scope was allowed")
 	}
 }

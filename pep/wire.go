@@ -13,13 +13,16 @@ import (
 const (
 	decisionSchema = "authorization_decision.v1"
 	batchSchema    = "authorization_batch_response.v1"
+
+	// maxRepositoryAllowlist is the contract's repository_allowlist maxItems.
+	maxRepositoryAllowlist = 256
 )
 
 var (
 	decisionIDPattern  = regexp.MustCompile(`^dec_[A-Za-z0-9_-]{26}$`)
 	principalIDPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]+$`)
 
-	obligationNames  = []string{"tenant_scope", "repository_allowlist", "redaction", "minimum_assurance", "step_up"}
+	obligationNames  = []string{"tenant_scope", "repository_allowlist", "repository_scope", "redaction", "minimum_assurance", "step_up"}
 	redactionClasses = []string{"personal_identifiers", "contact_details", "free_text"}
 	assuranceLevels  = []string{"aal1", "aal2", "aal3"}
 )
@@ -182,9 +185,23 @@ func decodeObligations(raw json.RawMessage) (decision.Obligations, *Error) {
 		}
 		spec.Tenant = s
 	}
+	_, hasScope := o["repository_scope"]
+	if _, hasList := o["repository_allowlist"]; hasScope && hasList {
+		return zero, fail(ReasonMalformed)
+	}
+	if hasScope {
+		s, ok := asString(o["repository_scope"])
+		if !ok {
+			return zero, fail(ReasonMalformed)
+		}
+		if decision.RepositoryScope(s) != decision.ScopeOrganization {
+			return zero, fail(ReasonUnknownObligation)
+		}
+		spec.Scope = decision.ScopeOrganization
+	}
 	if v, present := o["repository_allowlist"]; present {
 		items, ok := asArray(v)
-		if !ok {
+		if !ok || len(items) > maxRepositoryAllowlist {
 			return zero, fail(ReasonMalformed)
 		}
 		spec.Allowlist = []string{}

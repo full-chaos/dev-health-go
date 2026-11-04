@@ -46,30 +46,31 @@ const (
 
 // Wire reasons: the closed authorization_decision.v1 reason_code set.
 const (
-	ReasonAllowedByMembershipDefault = decision.AllowedByMembershipDefault
-	ReasonAllowedByRepositoryGrant   = decision.AllowedByRepositoryGrant
-	ReasonAllowedByRole              = decision.AllowedByRole
-	ReasonDelegationInvalid          = decision.DelegationInvalid
-	ReasonGrantAbsent                = decision.GrantAbsent
-	ReasonGrantExpired               = decision.GrantExpired
-	ReasonGrantRevoked               = decision.GrantRevoked
-	ReasonImpersonationDenied        = decision.ImpersonationDenied
-	ReasonWireInvalidRequest         = decision.InvalidRequest
-	ReasonMembershipInactive         = decision.MembershipInactive
-	ReasonNoMembership               = decision.NoMembership
-	ReasonOrgMismatch                = decision.OrgMismatch
-	ReasonOrganizationInactive       = decision.OrganizationInactive
-	ReasonPlatformRoleAbsent         = decision.PlatformRoleAbsent
-	ReasonPrincipalInactive          = decision.PrincipalInactive
-	ReasonRepositoryNotGranted       = decision.RepositoryNotGranted
-	ReasonResourceMismatch           = decision.ResourceMismatch
-	ReasonRoleLacksAction            = decision.RoleLacksAction
-	ReasonRoleScopeMismatch          = decision.RoleScopeMismatch
-	ReasonRoleUnknown                = decision.RoleUnknown
-	ReasonServiceAccountInactive     = decision.ServiceAccountInactive
-	ReasonUnknownAction              = decision.UnknownAction
-	ReasonWorkloadActionDenied       = decision.WorkloadActionDenied
-	ReasonWorkloadAudienceDenied     = decision.WorkloadAudienceDenied
+	ReasonAllowedByMembershipDefault  = decision.AllowedByMembershipDefault
+	ReasonAllowedByRepositoryGrant    = decision.AllowedByRepositoryGrant
+	ReasonAllowedByRole               = decision.AllowedByRole
+	ReasonDelegationInvalid           = decision.DelegationInvalid
+	ReasonGrantAbsent                 = decision.GrantAbsent
+	ReasonGrantExpired                = decision.GrantExpired
+	ReasonGrantRevoked                = decision.GrantRevoked
+	ReasonImpersonationDenied         = decision.ImpersonationDenied
+	ReasonWireInvalidRequest          = decision.InvalidRequest
+	ReasonMembershipInactive          = decision.MembershipInactive
+	ReasonNoMembership                = decision.NoMembership
+	ReasonOrgMismatch                 = decision.OrgMismatch
+	ReasonOrganizationInactive        = decision.OrganizationInactive
+	ReasonPlatformRoleAbsent          = decision.PlatformRoleAbsent
+	ReasonPrincipalInactive           = decision.PrincipalInactive
+	ReasonRepositoryAllowlistTooLarge = decision.RepositoryAllowlistTooLarge
+	ReasonRepositoryNotGranted        = decision.RepositoryNotGranted
+	ReasonResourceMismatch            = decision.ResourceMismatch
+	ReasonRoleLacksAction             = decision.RoleLacksAction
+	ReasonRoleScopeMismatch           = decision.RoleScopeMismatch
+	ReasonRoleUnknown                 = decision.RoleUnknown
+	ReasonServiceAccountInactive      = decision.ServiceAccountInactive
+	ReasonUnknownAction               = decision.UnknownAction
+	ReasonWorkloadActionDenied        = decision.WorkloadActionDenied
+	ReasonWorkloadAudienceDenied      = decision.WorkloadAudienceDenied
 )
 
 // Local reasons: why the client denied without a PDP verdict.
@@ -93,7 +94,7 @@ var wireReasons = []Reason{
 	ReasonAllowedByMembershipDefault, ReasonAllowedByRepositoryGrant, ReasonAllowedByRole,
 	ReasonDelegationInvalid, ReasonGrantAbsent, ReasonGrantExpired, ReasonGrantRevoked, ReasonImpersonationDenied,
 	ReasonWireInvalidRequest, ReasonMembershipInactive, ReasonNoMembership, ReasonOrgMismatch, ReasonOrganizationInactive,
-	ReasonPlatformRoleAbsent, ReasonPrincipalInactive, ReasonRepositoryNotGranted, ReasonResourceMismatch,
+	ReasonPlatformRoleAbsent, ReasonPrincipalInactive, ReasonRepositoryAllowlistTooLarge, ReasonRepositoryNotGranted, ReasonResourceMismatch,
 	ReasonRoleLacksAction, ReasonRoleScopeMismatch, ReasonRoleUnknown, ReasonServiceAccountInactive,
 	ReasonUnknownAction, ReasonWorkloadActionDenied, ReasonWorkloadAudienceDenied,
 }

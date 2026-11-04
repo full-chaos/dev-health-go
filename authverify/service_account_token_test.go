@@ -21,7 +21,7 @@ const saCorpusDir = "testdata/service-account-token"
 // serviceAccountCorpusOpsCommit is the dev-health-ops commit the service
 // account corpus was copied from. A corpus refresh updates this constant and
 // testdata/service-account-token.SOURCE together.
-const serviceAccountCorpusOpsCommit = "cc3c7a1695fc3cb8d12ccc4e678cb7826976c064"
+const serviceAccountCorpusOpsCommit = "f85ada30f72e3af2a39e52ecca5ef0f0b7d22377"
 
 const saKid = "auth-example-2026-10"
 
