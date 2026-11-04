@@ -98,7 +98,7 @@ func New(cfg Config) (*Client, error) {
 		c.backoffCeiling = DefaultBackoffCeiling
 	}
 	errBackoff := errors.New("workloadtoken: the backoff bounds are out of bounds")
-	if c.backoffFloor < 0 {
+	if c.backoffFloor < 0 || c.backoffFloor > maxBackoff {
 		return nil, &ConfigFieldError{FieldBackoffFloor, errBackoff}
 	}
 	if c.backoffCeiling < c.backoffFloor || c.backoffCeiling > maxBackoff {
