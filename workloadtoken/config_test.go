@@ -1,6 +1,7 @@
 package workloadtoken
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -135,5 +136,67 @@ func TestNewRefusesAReplacedDefaultTransport(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = previous })
 	if _, err := New(Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(writeSubject(t, testSubject)), Transport: replaced}); err == nil {
 		t.Fatal("New accepted the replaced http.DefaultTransport")
+	}
+}
+
+// Every config field New refuses comes back as a *ConfigFieldError that names the Config field, so a caller can
+// tell its own setting that is wrong without parsing text. The text of the cause stays as it was.
+func TestNewNamesTheRejectedConfigField(t *testing.T) {
+	path := writeSubject(t, testSubject)
+	base := func() Config {
+		return Config{ExchangeURL: testBase, Issuer: testIssuerURL, Subject: KubernetesTokenFile(path), Transport: &fakeExchange{}}
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*Config)
+		field  ConfigField
+	}{
+		"no subject":          {func(c *Config) { c.Subject = Subject{} }, FieldSubject},
+		"empty subject path":  {func(c *Config) { c.Subject = KubernetesTokenFile("") }, FieldSubject},
+		"nil transport":       {func(c *Config) { c.Transport = nil }, FieldTransport},
+		"default transport":   {func(c *Config) { c.Transport = http.DefaultTransport }, FieldTransport},
+		"proxied transport":   {func(c *Config) { c.Transport = &http.Transport{Proxy: http.ProxyFromEnvironment} }, FieldTransport},
+		"no issuer":           {func(c *Config) { c.Issuer = "" }, FieldIssuer},
+		"issuer http":         {func(c *Config) { c.Issuer = "http://auth-service.test" }, FieldIssuer},
+		"issuer user info":    {func(c *Config) { c.Issuer = "https://u:p@auth-service.test" }, FieldIssuer},
+		"issuer query":        {func(c *Config) { c.Issuer = testIssuerURL + "?x" }, FieldIssuer},
+		"issuer fragment":     {func(c *Config) { c.Issuer = testIssuerURL + "#x" }, FieldIssuer},
+		"issuer upper case":   {func(c *Config) { c.Issuer = "https://Auth-Service.test" }, FieldIssuer},
+		"no URL":              {func(c *Config) { c.ExchangeURL = "" }, FieldExchangeURL},
+		"URL user info":       {func(c *Config) { c.ExchangeURL = "https://u:p@auth-service" }, FieldExchangeURL},
+		"URL path":            {func(c *Config) { c.ExchangeURL = "https://auth-service/internal" }, FieldExchangeURL},
+		"http without opt-in": {func(c *Config) { c.ExchangeURL = "http://auth-service:8095" }, FieldExchangeURL},
+		"timeout too short":   {func(c *Config) { c.Timeout = time.Millisecond }, FieldTimeout},
+		"timeout too long":    {func(c *Config) { c.Timeout = MaxTimeout + time.Second }, FieldTimeout},
+		"fraction 1":          {func(c *Config) { c.RefreshFraction = 1 }, FieldRefreshFraction},
+		"fraction negative":   {func(c *Config) { c.RefreshFraction = -0.1 }, FieldRefreshFraction},
+		"margin negative":     {func(c *Config) { c.SafetyMargin = -time.Second }, FieldSafetyMargin},
+		"margin too large":    {func(c *Config) { c.SafetyMargin = MaxSafetyMargin + time.Second }, FieldSafetyMargin},
+		"floor negative":      {func(c *Config) { c.BackoffFloor = -time.Second }, FieldBackoffFloor},
+		"ceiling below floor": {func(c *Config) { c.BackoffFloor, c.BackoffCeiling = 10*time.Second, time.Second }, FieldBackoffCeiling},
+		"ceiling too long":    {func(c *Config) { c.BackoffCeiling = time.Hour }, FieldBackoffCeiling},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := base()
+			tc.mutate(&cfg)
+			_, err := New(cfg)
+			var field *ConfigFieldError
+			if !errors.As(err, &field) {
+				t.Fatalf("New returned %T %v, want a *ConfigFieldError", err, err)
+			}
+			if field.Field != tc.field {
+				t.Fatalf("Field %q, want %q", field.Field, tc.field)
+			}
+			if field.Err == nil || !errors.Is(err, field.Err) || err.Error() != field.Err.Error() {
+				t.Fatalf("Err %v: want the cause, unwrapped by errors.Is and used as the text, got text %q", field.Err, err)
+			}
+			for _, leak := range []string{"u:p", "Auth-Service"} {
+				if strings.Contains(err.Error(), leak) {
+					t.Fatalf("error text holds a config value %q: %v", leak, err)
+				}
+			}
+		})
+	}
+	if _, err := New(base()); err != nil {
+		t.Fatalf("a good config: %v", err)
 	}
 }

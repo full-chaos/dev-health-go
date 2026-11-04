@@ -52,20 +52,21 @@ type slot struct {
 	lastErr  error
 }
 
-// New validates cfg and returns a Client.
+// New validates cfg and returns a Client. A refused cfg comes back as a
+// *ConfigFieldError naming the Config field.
 func New(cfg Config) (*Client, error) {
 	if cfg.Subject.kind == subjectNone || cfg.Subject.path == "" {
-		return nil, errors.New("workloadtoken: a subject is required")
+		return nil, &ConfigFieldError{FieldSubject, errors.New("workloadtoken: a subject is required")}
 	}
 	if err := CheckTransport(cfg.Transport); err != nil {
-		return nil, err
+		return nil, &ConfigFieldError{FieldTransport, err}
 	}
 	if !issuerShape.MatchString(cfg.Issuer) {
-		return nil, errors.New("workloadtoken: the issuer must be the https token issuer URL")
+		return nil, &ConfigFieldError{FieldIssuer, errors.New("workloadtoken: the issuer must be the https token issuer URL")}
 	}
 	endpoint, err := endpointFor(cfg.ExchangeURL, cfg.AllowPlainHTTP)
 	if err != nil {
-		return nil, err
+		return nil, &ConfigFieldError{FieldExchangeURL, err}
 	}
 	c := &Client{
 		endpoint: endpoint.String(), issuer: cfg.Issuer, allowPlainHTTP: cfg.AllowPlainHTTP, subject: cfg.Subject, timeout: cfg.Timeout, refreshFraction: cfg.RefreshFraction,
@@ -76,19 +77,19 @@ func New(cfg Config) (*Client, error) {
 		c.timeout = DefaultTimeout
 	}
 	if c.timeout < minTimeout || c.timeout > MaxTimeout {
-		return nil, errors.New("workloadtoken: the timeout is out of bounds")
+		return nil, &ConfigFieldError{FieldTimeout, errors.New("workloadtoken: the timeout is out of bounds")}
 	}
 	if c.refreshFraction == 0 {
 		c.refreshFraction = DefaultRefreshFraction
 	}
 	if !(c.refreshFraction > 0 && c.refreshFraction < 1) {
-		return nil, errors.New("workloadtoken: the refresh fraction must be in (0, 1)")
+		return nil, &ConfigFieldError{FieldRefreshFraction, errors.New("workloadtoken: the refresh fraction must be in (0, 1)")}
 	}
 	if c.margin == 0 {
 		c.margin = DefaultSafetyMargin
 	}
 	if c.margin < 0 || c.margin > MaxSafetyMargin {
-		return nil, errors.New("workloadtoken: the safety margin is out of bounds")
+		return nil, &ConfigFieldError{FieldSafetyMargin, errors.New("workloadtoken: the safety margin is out of bounds")}
 	}
 	if c.backoffFloor == 0 {
 		c.backoffFloor = DefaultBackoffFloor
@@ -96,8 +97,12 @@ func New(cfg Config) (*Client, error) {
 	if c.backoffCeiling == 0 {
 		c.backoffCeiling = DefaultBackoffCeiling
 	}
-	if c.backoffFloor < 0 || c.backoffCeiling < c.backoffFloor || c.backoffCeiling > maxBackoff {
-		return nil, errors.New("workloadtoken: the backoff bounds are out of bounds")
+	errBackoff := errors.New("workloadtoken: the backoff bounds are out of bounds")
+	if c.backoffFloor < 0 {
+		return nil, &ConfigFieldError{FieldBackoffFloor, errBackoff}
+	}
+	if c.backoffCeiling < c.backoffFloor || c.backoffCeiling > maxBackoff {
+		return nil, &ConfigFieldError{FieldBackoffCeiling, errBackoff}
 	}
 	if c.now == nil {
 		c.now = time.Now
