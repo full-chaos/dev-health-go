@@ -31,6 +31,11 @@ done
 git -C "$ops" fetch -q origin main
 sha="$(git -C "$ops" rev-parse origin/main)"
 
+# sha256_of <file>: "<hash>  <file>" with GNU coreutils or BSD/macOS shasum.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi
+}
+
 # sync_group <SOURCE file name> <name:ops path:strip>...
 sync_group() {
   local out="$1"; shift
@@ -49,7 +54,7 @@ sync_group() {
   done
   {
     cat "$root/$out.head"
-    (cd "$root" && find "${names[@]}" -type f | LC_ALL=C sort | while read -r f; do echo "$(sha256sum "$f" | cut -d' ' -f1)  $f"; done)
+    (cd "$root" && find "${names[@]}" -type f | LC_ALL=C sort | while read -r f; do echo "$(sha256_of "$f" | cut -d' ' -f1)  $f"; done)
   } > "$root/$out"
   rm "$root/$out.head"
 }
@@ -64,5 +69,6 @@ sync_group SOURCE "authorization_request:$ex/authorization_request:5" "authoriza
 
 for entry in "${constants[@]}"; do
   file="${entry%%:*}"; name="${entry##*:}"
-  sed -i -E "s/^(const ${name} = \")[0-9a-f]{40}(\")\$/\1${sha}\2/" "$repo/$file"
+  # attached -i suffix: valid for BSD (macOS) and GNU sed; the backup is removed on success
+  sed -i.bak -E "s/^(const ${name} = \")[0-9a-f]{40}(\")\$/\1${sha}\2/" "$repo/$file" && rm -f "${repo:?}/${file:?}.bak"
 done
