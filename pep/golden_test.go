@@ -56,9 +56,10 @@ func requestFor(doc wireDoc) Request {
 // rejectClass is the closed local reason a refused fixture must produce. A
 // file not listed is a malformed document.
 var rejectClass = map[string]Reason{
-	"decision-invalid-unknown-obligation-key.json":  ReasonUnknownObligation,
-	"decision-invalid-unknown-redaction-class.json": ReasonUnknownObligation,
-	"decision-invalid-unknown-assurance.json":       ReasonUnknownObligation,
+	"decision-invalid-unknown-obligation-key.json":         ReasonUnknownObligation,
+	"decision-invalid-unknown-redaction-class.json":        ReasonUnknownObligation,
+	"decision-invalid-unknown-assurance.json":              ReasonUnknownObligation,
+	"decision-invalid-repository-scope-unknown-value.json": ReasonUnknownObligation,
 }
 
 func decideBody(t *testing.T, body []byte, req Request) Decision {
@@ -150,13 +151,29 @@ func TestGoldenBatchAccept(t *testing.T) {
 	for _, row := range m.Accept {
 		pdp := newPDP(t, replyJSON(readFile(t, "authorization_batch_response", row.File)))
 		got := pdp.client(t).DecideBatch(context.Background(), reqs)
-		if len(got) != 2 || !got[0].Allowed() || got[1].Allowed() || got[1].Local() {
+		if len(got) != 2 || got[0].Local() || got[1].Local() {
+			t.Fatalf("%s: two PDP verdicts expected, got %+v", row.File, got)
+		}
+		if want, ok := batchAcceptBothAllow[row.File]; ok {
+			if !got[0].Allowed() || !got[1].Allowed() || !want(got[0].Obligations(), got[1].Obligations()) {
+				t.Fatalf("%s: two allows with their own obligations expected, got %+v", row.File, got)
+			}
+		} else if !got[0].Allowed() || got[1].Allowed() {
 			t.Fatalf("%s: item 0 allow and item 1 wire deny expected, got %+v", row.File, got)
 		}
 		if path := <-pdp.paths; path != "POST /v1/authorize:batch" {
 			t.Fatalf("path %s", path)
 		}
 	}
+}
+
+// batchAcceptBothAllow lists the accepted batch fixtures whose two items both
+// allow, each with the check that every item kept its own obligations.
+var batchAcceptBothAllow = map[string]func(first, second Obligations) bool{
+	"batch-response-valid-items-carry-own-obligations.json": func(first, second Obligations) bool {
+		return first.RepositoryAllowed("full-chaos/dev-health-ops") && !first.RepositoryAllowed("*") &&
+			second.RepositoryRestricted() && !second.RepositoryAllowed("full-chaos/dev-health-web")
+	},
 }
 
 var batchClientClass = map[string]Reason{
