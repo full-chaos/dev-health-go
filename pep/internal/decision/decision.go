@@ -3,7 +3,11 @@
 // importer gets the zero value, which denies, or a Decision from a Client.
 package decision
 
-import "time"
+import (
+	"time"
+
+	"github.com/full-chaos/dev-health-go/repokey"
+)
 
 // Reason is a decision reason: a wire reason_code of authorization_decision.v1
 // or a closed local reason the client gives a deny it made itself.
@@ -14,27 +18,28 @@ const (
 	AllowedByRepositoryGrant   Reason = "allowed_by_repository_grant"
 	AllowedByRole              Reason = "allowed_by_role"
 
-	DelegationInvalid      Reason = "delegation_invalid"
-	GrantAbsent            Reason = "grant_absent"
-	GrantExpired           Reason = "grant_expired"
-	GrantRevoked           Reason = "grant_revoked"
-	ImpersonationDenied    Reason = "impersonation_denied"
-	InvalidRequest         Reason = "invalid_request"
-	MembershipInactive     Reason = "membership_inactive"
-	NoMembership           Reason = "no_membership"
-	OrgMismatch            Reason = "org_mismatch"
-	OrganizationInactive   Reason = "organization_inactive"
-	PlatformRoleAbsent     Reason = "platform_role_absent"
-	PrincipalInactive      Reason = "principal_inactive"
-	RepositoryNotGranted   Reason = "repository_not_granted"
-	ResourceMismatch       Reason = "resource_mismatch"
-	RoleLacksAction        Reason = "role_lacks_action"
-	RoleScopeMismatch      Reason = "role_scope_mismatch"
-	RoleUnknown            Reason = "role_unknown"
-	ServiceAccountInactive Reason = "service_account_inactive"
-	UnknownAction          Reason = "unknown_action"
-	WorkloadActionDenied   Reason = "workload_action_denied"
-	WorkloadAudienceDenied Reason = "workload_audience_denied"
+	DelegationInvalid           Reason = "delegation_invalid"
+	GrantAbsent                 Reason = "grant_absent"
+	GrantExpired                Reason = "grant_expired"
+	GrantRevoked                Reason = "grant_revoked"
+	ImpersonationDenied         Reason = "impersonation_denied"
+	InvalidRequest              Reason = "invalid_request"
+	MembershipInactive          Reason = "membership_inactive"
+	NoMembership                Reason = "no_membership"
+	OrgMismatch                 Reason = "org_mismatch"
+	OrganizationInactive        Reason = "organization_inactive"
+	PlatformRoleAbsent          Reason = "platform_role_absent"
+	PrincipalInactive           Reason = "principal_inactive"
+	RepositoryAllowlistTooLarge Reason = "repository_allowlist_too_large"
+	RepositoryNotGranted        Reason = "repository_not_granted"
+	ResourceMismatch            Reason = "resource_mismatch"
+	RoleLacksAction             Reason = "role_lacks_action"
+	RoleScopeMismatch           Reason = "role_scope_mismatch"
+	RoleUnknown                 Reason = "role_unknown"
+	ServiceAccountInactive      Reason = "service_account_inactive"
+	UnknownAction               Reason = "unknown_action"
+	WorkloadActionDenied        Reason = "workload_action_denied"
+	WorkloadAudienceDenied      Reason = "workload_audience_denied"
 
 	Unreachable       Reason = "pdp_unreachable"
 	Timeout           Reason = "pdp_timeout"
@@ -59,7 +64,12 @@ type (
 	RedactionClass string
 	// Assurance is an authenticator assurance level.
 	Assurance string
+	// RepositoryScope is the repository_scope obligation value.
+	RepositoryScope string
 )
+
+// ScopeOrganization: the principal may read every repository of the tenant.
+const ScopeOrganization RepositoryScope = "organization"
 
 // Obligations are the enforceable obligations of an allow. Each member is
 // optional on the wire; the zero value (what a deny carries) grants nothing.
@@ -69,16 +79,19 @@ type Obligations struct {
 	hasTenant    bool
 	allowlist    []string
 	hasAllowlist bool
+	scope        RepositoryScope
 	redaction    []RedactionClass
 	assurance    Assurance
 	hasAssurance bool
 	stepUp       bool
 }
 
-// ObligationSpec builds Obligations. A nil Allowlist is the absent member
-// (unrestricted); a non-nil empty one means no repository at all.
+// ObligationSpec builds Obligations. A nil Allowlist is the absent member; a
+// non-nil empty one means no repository at all. With neither Scope nor an
+// Allowlist the obligations allow no repository.
 type ObligationSpec struct {
 	Tenant    string
+	Scope     RepositoryScope
 	Allowlist []string
 	Redaction []RedactionClass
 	Assurance Assurance
@@ -87,7 +100,7 @@ type ObligationSpec struct {
 
 // NewObligations is the obligation set of an allow.
 func NewObligations(s ObligationSpec) Obligations {
-	o := Obligations{granted: true, tenant: s.Tenant, hasTenant: s.Tenant != "", redaction: append([]RedactionClass(nil), s.Redaction...), assurance: s.Assurance, hasAssurance: s.Assurance != "", stepUp: s.StepUp}
+	o := Obligations{granted: true, tenant: s.Tenant, hasTenant: s.Tenant != "", scope: s.Scope, redaction: append([]RedactionClass(nil), s.Redaction...), assurance: s.Assurance, hasAssurance: s.Assurance != "", stepUp: s.StepUp}
 	if s.Allowlist != nil {
 		o.hasAllowlist = true
 		o.allowlist = append([]string{}, s.Allowlist...)
@@ -121,18 +134,29 @@ func (o Obligations) TenantAllows(org string) bool {
 }
 
 // RepositoryRestricted reports an allowlist member (an empty one included).
+// False does not mean unrestricted: see RepositoryAllowed.
 func (o Obligations) RepositoryRestricted() bool { return o.hasAllowlist }
+
+// RepositoryScopeOrganization reports repository_scope "organization": the
+// principal may read every repository of the tenant.
+func (o Obligations) RepositoryScopeOrganization() bool {
+	return o.granted && o.scope == ScopeOrganization
+}
 
 // RepositoryAllowlist is a copy of the allowlist; empty when none.
 func (o Obligations) RepositoryAllowlist() []string { return append([]string(nil), o.allowlist...) }
 
 // RepositoryAllowed reports whether the service may touch the repository key.
-// An empty allowlist allows none; "*" allows every key.
+// The key must be a canonical repository key; "*" is never a repository.
+// repository_scope "organization" allows every key; an allowlist allows its
+// keys, and its "*" entry every key; an empty allowlist allows none. An allow
+// with NEITHER member allows no repository: an absent member never means
+// unrestricted, so an action that filters by repository denies.
 func (o Obligations) RepositoryAllowed(key string) bool {
-	if !o.granted || key == "" {
+	if !o.granted || !repokey.ValidSlug(key) {
 		return false
 	}
-	if !o.hasAllowlist {
+	if o.scope == ScopeOrganization {
 		return true
 	}
 	for _, k := range o.allowlist {

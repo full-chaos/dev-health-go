@@ -27,9 +27,12 @@ type Rule struct {
 	// names none, not any organization.
 	OrganizationID string
 
-	// The obligations the allow carries. A nil RepositoryAllowlist is the
-	// absent member; a non-nil empty one allows no repository.
+	// The obligations the allow carries. RepositoryScope "organization" allows
+	// every repository; a nil RepositoryAllowlist is the absent member and a
+	// non-nil empty one allows no repository. With neither, the allow grants no
+	// repository. Both, or an unknown scope, make the rule deny.
 	TenantScope         string
+	RepositoryScope     string
 	RepositoryAllowlist []string
 	Redaction           []pep.RedactionClass
 	MinimumAssurance    pep.Assurance
@@ -75,6 +78,10 @@ func (r Rule) allow(q pep.Request) pep.Decision {
 	if r.MinimumAssurance != "" && !validAssurance(r.MinimumAssurance) {
 		return decision.Local(decision.Malformed, errBadRule)
 	}
+	scope := decision.RepositoryScope(r.RepositoryScope)
+	if scope != "" && (scope != decision.ScopeOrganization || r.RepositoryAllowlist != nil) {
+		return decision.Local(decision.Malformed, errBadRule)
+	}
 	return decision.FromWire(decision.Wire{
 		Allowed:      true,
 		Reason:       decision.AllowedByRole,
@@ -84,6 +91,7 @@ func (r Rule) allow(q pep.Request) pep.Decision {
 		HasOrg:       q.OrganizationID != "",
 		Obligations: decision.NewObligations(decision.ObligationSpec{
 			Tenant:    r.TenantScope,
+			Scope:     scope,
 			Allowlist: r.RepositoryAllowlist,
 			Redaction: r.Redaction,
 			Assurance: r.MinimumAssurance,
@@ -98,7 +106,9 @@ func validAssurance(a pep.Assurance) bool {
 
 type badRule struct{}
 
-func (badRule) Error() string { return "pepfake: the rule names an unknown assurance level" }
+func (badRule) Error() string {
+	return "pepfake: the rule names an unknown assurance level or repository scope, or both repository members"
+}
 
 var errBadRule error = badRule{}
 
