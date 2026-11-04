@@ -32,3 +32,33 @@ var (
 	// regular file, empty, too large or not a compact JWS.
 	ErrSubjectUnreadable = errors.New("workloadtoken: the subject token could not be read")
 )
+
+// ConfigField names a field of Config.
+type ConfigField string
+
+// The Config fields New can refuse.
+const (
+	FieldSubject         ConfigField = "Subject"
+	FieldTransport       ConfigField = "Transport"
+	FieldIssuer          ConfigField = "Issuer"
+	FieldExchangeURL     ConfigField = "ExchangeURL"
+	FieldTimeout         ConfigField = "Timeout"
+	FieldRefreshFraction ConfigField = "RefreshFraction"
+	FieldSafetyMargin    ConfigField = "SafetyMargin"
+	FieldBackoffFloor    ConfigField = "BackoffFloor"
+	FieldBackoffCeiling  ConfigField = "BackoffCeiling"
+)
+
+// ConfigFieldError is the error New returns for a Config it refuses. Field
+// names the setting that is wrong, so a caller can point at its own variable
+// or flag without parsing text; Err is the cause. Both are fixed: neither
+// carries a value from the Config, so an issuer or URL with credentials in it
+// never reaches a log through this error.
+type ConfigFieldError struct {
+	Field ConfigField
+	Err   error
+}
+
+func (e *ConfigFieldError) Error() string { return e.Err.Error() }
+
+func (e *ConfigFieldError) Unwrap() error { return e.Err }
