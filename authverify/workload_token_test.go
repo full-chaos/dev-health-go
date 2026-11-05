@@ -25,7 +25,7 @@ const workloadCorpusDir = "testdata/workload-token"
 // copied from. A corpus refresh updates this constant and
 // testdata/workload-token.SOURCE together, so the SOURCE file cannot name a
 // commit the corpus was not taken from.
-const workloadCorpusOpsCommit = "f85ada30f72e3af2a39e52ecca5ef0f0b7d22377"
+const workloadCorpusOpsCommit = "3f62abd006d532a466d71504661d73d37985ae1e"
 
 func loadWorkloadManifest(t testing.TB) corpusManifest {
 	t.Helper()
