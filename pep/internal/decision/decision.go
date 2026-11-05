@@ -24,7 +24,6 @@ const (
 	GrantRevoked                Reason = "grant_revoked"
 	ImpersonationDenied         Reason = "impersonation_denied"
 	InvalidRequest              Reason = "invalid_request"
-	MembershipInactive          Reason = "membership_inactive"
 	NoMembership                Reason = "no_membership"
 	OrgMismatch                 Reason = "org_mismatch"
 	OrganizationInactive        Reason = "organization_inactive"
