@@ -17,8 +17,11 @@
 // data after it, no member in another case, none the contract lacks); allowed
 // is a JSON boolean and agrees with a reason_code from the closed set; the
 // policy revision and the batch index are integer tokens (42.0 is refused);
-// expires_at is in the contract's range and after now, for an allow and a deny
-// alike; obligations are closed (an obligation or redaction class or assurance
+// expires_at is present and a valid timestamp in the contract's range, for an
+// allow and a deny alike; it bounds reuse only, so a decision whose expires_at
+// is not after now (past, or equal to it) is accepted for its own request and
+// is not cacheable (Decision.Cacheable is false, a deny stays a PDP deny);
+// obligations are closed (an obligation or redaction class or assurance
 // level this client does not know denies the whole decision); the decision's
 // organization is the request's. The response carries no request id (the
 // contract never echoes it), so correlation is the organization for a single
