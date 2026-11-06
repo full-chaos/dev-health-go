@@ -7,10 +7,11 @@ import (
 
 func TestFromWireRefusesAVerdictThatDisagreesWithItsReason(t *testing.T) {
 	for name, w := range map[string]Wire{
-		"allow with a deny reason":  {Allowed: true, Reason: GrantAbsent},
-		"deny with an allow reason": {Allowed: false, Reason: AllowedByRole},
-		"allow with a local reason": {Allowed: true, Reason: Timeout},
-		"allow with no reason":      {Allowed: true},
+		"allow with a deny reason":                {Allowed: true, Reason: GrantAbsent},
+		"deny with an allow reason":               {Allowed: false, Reason: AllowedByRole},
+		"deny with the accept-ahead allow reason": {Allowed: false, Reason: AllowedByPlatformAdmin},
+		"allow with a local reason":               {Allowed: true, Reason: Timeout},
+		"allow with no reason":                    {Allowed: true},
 	} {
 		d := FromWire(w)
 		if d.Allowed() || !d.Local() || d.Reason() != Malformed || d.Err() == nil {
@@ -20,6 +21,10 @@ func TestFromWireRefusesAVerdictThatDisagreesWithItsReason(t *testing.T) {
 	d := FromWire(Wire{Allowed: true, Reason: AllowedByRole, ExpiresAt: time.Unix(1, 0), Obligations: NewObligations(ObligationSpec{})})
 	if !d.Allowed() || d.Local() {
 		t.Fatal("a consistent allow was refused")
+	}
+	d = FromWire(Wire{Allowed: true, Reason: AllowedByPlatformAdmin, ExpiresAt: time.Unix(1, 0), Obligations: NewObligations(ObligationSpec{})})
+	if !d.Allowed() || d.Local() || d.Reason() != AllowedByPlatformAdmin {
+		t.Fatal("a consistent allow with the accept-ahead reason was refused")
 	}
 }
 
