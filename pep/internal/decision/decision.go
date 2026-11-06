@@ -17,6 +17,8 @@ const (
 	AllowedByMembershipDefault Reason = "allowed_by_membership_default"
 	AllowedByRepositoryGrant   Reason = "allowed_by_repository_grant"
 	AllowedByRole              Reason = "allowed_by_role"
+	// AllowedByPlatformAdmin is accepted ahead of the contract (see pep acceptAheadReasons).
+	AllowedByPlatformAdmin Reason = "allowed_by_platform_admin"
 
 	DelegationInvalid           Reason = "delegation_invalid"
 	GrantAbsent                 Reason = "grant_absent"
@@ -243,7 +245,7 @@ func FromWire(w Wire) Decision {
 }
 
 func allowReason(r Reason) bool {
-	return r == AllowedByMembershipDefault || r == AllowedByRepositoryGrant || r == AllowedByRole
+	return r == AllowedByMembershipDefault || r == AllowedByRepositoryGrant || r == AllowedByRole || r == AllowedByPlatformAdmin
 }
 
 // Local is a deny the client made itself.

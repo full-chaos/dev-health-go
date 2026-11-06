@@ -49,6 +49,7 @@ const (
 	ReasonAllowedByMembershipDefault  = decision.AllowedByMembershipDefault
 	ReasonAllowedByRepositoryGrant    = decision.AllowedByRepositoryGrant
 	ReasonAllowedByRole               = decision.AllowedByRole
+	ReasonAllowedByPlatformAdmin      = decision.AllowedByPlatformAdmin
 	ReasonDelegationInvalid           = decision.DelegationInvalid
 	ReasonGrantAbsent                 = decision.GrantAbsent
 	ReasonGrantExpired                = decision.GrantExpired
@@ -105,10 +106,17 @@ var localReasons = []Reason{
 	ReasonInvalidRequest, ReasonNotConfigured, ReasonNoDecision,
 }
 
+// acceptAheadReasons are allow reasons the client accepts before the contract names them (expand/contract,
+// CHAOS-13201): a PDP may send one only after every PEP runs a release that accepts it, or an older PEP reads the
+// decision as malformed. They are not in WireReasons. The corpus re-sync to the ops commit that adds a code to the
+// contract moves it into wireReasons and removes it here in the same change.
+var acceptAheadReasons = []Reason{ReasonAllowedByPlatformAdmin}
+
 var allowReasons = map[Reason]bool{
 	ReasonAllowedByMembershipDefault: true,
 	ReasonAllowedByRepositoryGrant:   true,
 	ReasonAllowedByRole:              true,
+	ReasonAllowedByPlatformAdmin:     true,
 }
 
 // WireReasons is a copy of the closed set of PDP reason codes. A reason
@@ -121,6 +129,11 @@ func LocalReasons() []Reason { return append([]Reason(nil), localReasons...) }
 func wireReason(s string) (Reason, bool) {
 	r := Reason(s)
 	for _, w := range wireReasons {
+		if w == r {
+			return r, true
+		}
+	}
+	for _, w := range acceptAheadReasons {
 		if w == r {
 			return r, true
 		}
