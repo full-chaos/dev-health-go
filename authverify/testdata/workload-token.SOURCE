@@ -1,4 +1,4 @@
-ops_commit f85ada30f72e3af2a39e52ecca5ef0f0b7d22377
+ops_commit 3f62abd006d532a466d71504661d73d37985ae1e
 ops_path contracts/auth/v1/golden/workload-token
 67c8c152e679d8898f77a94d892b1d56ab47f8f9b2940a65ccc45060bacd012a  workload-token/README.md
 af9d2a122f7c68ae43d3fbfe1faaacdc66dafa01b1dde1aaaf6eb7983d9174c2  workload-token/jwks.json
