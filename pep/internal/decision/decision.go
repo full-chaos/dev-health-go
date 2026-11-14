@@ -33,6 +33,7 @@ const (
 	PrincipalInactive           Reason = "principal_inactive"
 	RepositoryAllowlistTooLarge Reason = "repository_allowlist_too_large"
 	RepositoryNotGranted        Reason = "repository_not_granted"
+	RepositoryUnresolved        Reason = "repository_unresolved"
 	ResourceMismatch            Reason = "resource_mismatch"
 	RoleLacksAction             Reason = "role_lacks_action"
 	RoleScopeMismatch           Reason = "role_scope_mismatch"
