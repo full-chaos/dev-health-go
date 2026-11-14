@@ -63,6 +63,7 @@ const (
 	ReasonPrincipalInactive           = decision.PrincipalInactive
 	ReasonRepositoryAllowlistTooLarge = decision.RepositoryAllowlistTooLarge
 	ReasonRepositoryNotGranted        = decision.RepositoryNotGranted
+	ReasonRepositoryUnresolved        = decision.RepositoryUnresolved
 	ReasonResourceMismatch            = decision.ResourceMismatch
 	ReasonRoleLacksAction             = decision.RoleLacksAction
 	ReasonRoleScopeMismatch           = decision.RoleScopeMismatch
@@ -94,7 +95,7 @@ var wireReasons = []Reason{
 	ReasonAllowedByMembershipDefault, ReasonAllowedByRepositoryGrant, ReasonAllowedByRole,
 	ReasonDelegationInvalid, ReasonGrantAbsent, ReasonGrantExpired, ReasonGrantRevoked, ReasonImpersonationDenied,
 	ReasonWireInvalidRequest, ReasonNoMembership, ReasonOrgMismatch, ReasonOrganizationInactive,
-	ReasonPlatformRoleAbsent, ReasonPrincipalInactive, ReasonRepositoryAllowlistTooLarge, ReasonRepositoryNotGranted, ReasonResourceMismatch,
+	ReasonPlatformRoleAbsent, ReasonPrincipalInactive, ReasonRepositoryAllowlistTooLarge, ReasonRepositoryNotGranted, ReasonRepositoryUnresolved, ReasonResourceMismatch,
 	ReasonRoleLacksAction, ReasonRoleScopeMismatch, ReasonRoleUnknown, ReasonServiceAccountInactive,
 	ReasonUnknownAction, ReasonWorkloadActionDenied, ReasonWorkloadAudienceDenied,
 }
