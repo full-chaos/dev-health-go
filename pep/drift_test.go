@@ -3,6 +3,7 @@ package pep
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -72,8 +73,34 @@ func TestEveryWireReasonIsAnAllowOrADenyReason(t *testing.T) {
 			allows++
 		}
 	}
-	if allows != len(allowReasons) || allows != 3 {
-		t.Fatalf("allow reasons: %d listed, %d in the wire set, want 3", len(allowReasons), allows)
+	if allows != 3 || len(allowReasons) != allows+len(acceptAheadReasons) {
+		t.Fatalf("allow reasons: %d listed, %d in the wire set, %d accepted ahead; want 3 in the wire set and every other one accepted ahead", len(allowReasons), allows, len(acceptAheadReasons))
+	}
+}
+
+// The accept-ahead set is pinned, holds allow reasons only, and stays outside the contract: a code the contract names is
+// in wireReasons and must leave this set in the same corpus re-sync.
+func TestAcceptAheadReasonsArePinnedAllowsOutsideTheContract(t *testing.T) {
+	if got := sortedReasons(acceptAheadReasons); !reflect.DeepEqual(got, []string{"allowed_by_platform_admin"}) {
+		t.Fatalf("accept-ahead reasons %v, want [allowed_by_platform_admin]", got)
+	}
+	contract := enumOf(t, schemaProp(t, "authorization_decision.v1.schema.json", "properties", "reason_code"))
+	var vocab struct {
+		Decision struct {
+			Values []string `json:"values"`
+		} `json:"decision_reason_code"`
+	}
+	readJSON(t, &vocab, "vocabulary", "reason-codes.json")
+	for _, r := range acceptAheadReasons {
+		if slices.Contains(contract, string(r)) || slices.Contains(vocab.Decision.Values, string(r)) || slices.Contains(WireReasons(), r) {
+			t.Errorf("%s is in the contract: move it to wireReasons and out of acceptAheadReasons", r)
+		}
+		if !allowReasons[r] || r.Local() {
+			t.Errorf("%s: an accept-ahead reason must be a PDP allow reason", r)
+		}
+		if got, ok := wireReason(string(r)); !ok || got != r {
+			t.Errorf("wireReason(%s) = %q, %v; want it accepted", r, got, ok)
+		}
 	}
 }
 
