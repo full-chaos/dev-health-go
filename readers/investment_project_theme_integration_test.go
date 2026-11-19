@@ -456,8 +456,8 @@ func TestIntegrationReadProjectThemeMixOrgScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadProjectThemeMix() error = %v", err)
 	}
-	if len(rows) != 1 || rows[0].ProjectSubjectKey != "linear:proj-a" || rows[0].WorkUnits != 1 || !ptmClose(rows[0].Risk, 500) {
-		t.Fatalf("rows = %#v, want the other organization's own single unit only", rows)
+	if len(rows) != 1 || rows[0].ProjectSubjectKey != "linear:proj-a" || rows[0].WorkUnits != 1 || !ptmClose(rows[0].Risk, 1) {
+		t.Fatalf("rows = %#v, want the other organization's own single unit counted once", rows)
 	}
 	// The other organization's item shares this organization's project id and
 	// must add nothing to it.
