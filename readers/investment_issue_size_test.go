@@ -106,17 +106,19 @@ func (s scanner) Scan(dest ...any) error {
 	return nil
 }
 
-// The statements are byte-equal to ops' analytics.IssueSizedSource and
-// LatestWorkUnitIssueSizeSource at the time they moved here (ops main
-// 2dc9f47c03); a change to either must change these pins on purpose.
-func TestIssueSizeSourceIsByteEqualToTheOpsSourceItMovedFrom(t *testing.T) {
+// The statements moved here from ops' analytics.IssueSizedSource and
+// LatestWorkUnitIssueSizeSource (ops main 2dc9f47c03). The pins are the text
+// after the version pick took the latestrow key (the issue-size tie
+// cell holds its behavior); a change to either must change these pins on
+// purpose.
+func TestIssueSizeSourceTextIsPinned(t *testing.T) {
 	sized, err := readers.IssueSizedSource("(SELECT 1) AS wui", "wui")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, c := range map[string]struct{ got, want string }{
-		"IssueSizedSource":              {sized, "e5f4ba96ea9971b173642d5045b12f5aa86bd52413f424872612d7b64e6da9a2"},
-		"LatestWorkUnitIssueSizeSource": {readers.LatestWorkUnitIssueSizeSource(), "d566882b1b38d74b0cec0efec07c7a1fd5389448c4704858c4277751f2535cc1"},
+		"IssueSizedSource":              {sized, "804f16d63e7fc1eaeb6ade2d130808f9801d1f1d8177fd3c8360d15a082c1ab2"},
+		"LatestWorkUnitIssueSizeSource": {readers.LatestWorkUnitIssueSizeSource(), "4ce80b56acbc52e3b92cf16b4ca58de2f44346d0428e5e74aea7bcc60a3dba96"},
 	} {
 		sum := sha256.Sum256([]byte(c.got))
 		if hex.EncodeToString(sum[:]) != c.want {

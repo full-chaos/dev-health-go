@@ -26,19 +26,25 @@ import (
 // related table (work_unit_investments_rollup) is not a match.
 var workUnitTableToken = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])work_unit_investments(?:$|[^a-z0-9_])`)
 
-// workUnitRegisteredDecls are the declarations allowed to name the table: the
-// 2 builders of the 10 version picks, the key itself and the declared column
+// issueSizeTableToken is the same for work_unit_issue_size, the second table
+// whose version pick takes the latestrow key (latestrow.OrderKeyFor).
+var issueSizeTableToken = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])work_unit_issue_size(?:$|[^a-z0-9_])`)
+
+// workUnitRegisteredDecls are the declarations allowed to name the tables: the
+// 2 builders of the 10 work_unit_investments version picks, the builder of the
+// 1 work_unit_issue_size version pick, the key itself and the declared column
 // and engine contracts.
 var workUnitRegisteredDecls = []string{
 	"readers/investment_theme.go:ReadTeamThemeMix",
 	"readers/investment_project_theme.go:ReadProjectThemeMixWithRowLimit",
+	"readers/investment_issue_size.go:LatestWorkUnitIssueSizeSource",
 	"latestrow/latestrow.go:OrderKey",
 	"schema/schema.go:ProductionColumns",
 	"schema/schema.go:EngineFull",
 }
 
 func namesWorkUnitTable(s string) bool {
-	return workUnitTableToken.MatchString(s)
+	return workUnitTableToken.MatchString(s) || issueSizeTableToken.MatchString(s)
 }
 
 func TestWorkUnitTableTokenMatch(t *testing.T) {
@@ -51,6 +57,10 @@ func TestWorkUnitTableTokenMatch(t *testing.T) {
 		"work_unit_investments.computed_at":                                    true,
 		"SELECT x FROM work_unit_investments_rollup":                           false,
 		"SELECT x FROM my_work_unit_investments":                               false,
+		"SELECT x FROM work_unit_issue_size":                                   true,
+		"FROM `default`.`work_unit_issue_size` FINAL":                          true,
+		"SELECT x FROM work_unit_issue_size_rollup":                            false,
+		"SELECT x FROM my_work_unit_issue_size":                                false,
 		"SELECT work_unit_investments2 FROM t":                                 false,
 		"SELECT argMax(team_id, computed_at) FROM work_item_team_attributions": false,
 	}
@@ -156,12 +166,12 @@ func TestWorkUnitVersionKeyCensus(t *testing.T) {
 	sort.Strings(sites)
 	for _, site := range sites {
 		if !registered[site] {
-			t.Errorf("%s names work_unit_investments outside the registered declarations: register it", site)
+			t.Errorf("%s names work_unit_investments or work_unit_issue_size outside the registered declarations: register it", site)
 		}
 	}
 	for _, decl := range workUnitRegisteredDecls {
 		if found[decl] == 0 {
-			t.Errorf("registered %s no longer names work_unit_investments: drop or fix the registration", decl)
+			t.Errorf("registered %s no longer names work_unit_investments or work_unit_issue_size: drop or fix the registration", decl)
 		}
 	}
 }

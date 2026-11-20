@@ -3,6 +3,8 @@ package readers
 import (
 	"fmt"
 	"strings"
+
+	"github.com/full-chaos/dev-health-go/latestrow"
 )
 
 // UnitSizeWeightColumn is the column IssueSizedSource adds: what a work unit
@@ -30,15 +32,16 @@ func UnitIssueSizeExpr(alias string) string {
 }
 
 // LatestWorkUnitIssueSizeSource is the newest issue size of each work unit of
-// the organization (work_unit_issue_size, ops migration 130): argMax over
-// computed_at per (org_id, work_unit_id). It binds {org_id:String}.
+// the organization (work_unit_issue_size, ops migration 130): the row of the
+// latest version key (latestrow.OrderKeyFor: computed_at, then insert order)
+// per (org_id, work_unit_id). It binds {org_id:String}.
 //
 // The size is materialised per unit by the investment materializer as the sum
 // of the unit's issues' positive story points (D6027); this package never
 // computes it, it only reads the stored value.
 func LatestWorkUnitIssueSizeSource() string {
 	return `(
-                SELECT org_id, work_unit_id, argMax(issue_size, computed_at) AS issue_size
+                SELECT org_id, work_unit_id, ` + latestrow.ArgMaxFor("work_unit_issue_size", "issue_size") + ` AS issue_size
                 FROM work_unit_issue_size
                 WHERE org_id = {org_id:String}
                 GROUP BY org_id, work_unit_id

@@ -25,6 +25,18 @@ package latestrow
 // see that alias inside the next aggregate (ILLEGAL_AGGREGATION, code 184).
 const OrderKey = "(work_unit_investments.computed_at, toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3]), work_unit_investments._part_offset)"
 
+// OrderKeyFor is the same key over another ReplacingMergeTree(computed_at)
+// table that is read by argMax per unit (work_unit_issue_size). The table
+// must have a computed_at column. For work_unit_investments it is OrderKey.
+func OrderKeyFor(table string) string {
+	return "(" + table + ".computed_at, toUInt64OrZero(splitByChar('_', " + table + "._part)[3]), " + table + "._part_offset)"
+}
+
+// ArgMaxFor returns argMax(column, OrderKeyFor(table)).
+func ArgMaxFor(table, column string) string {
+	return "argMax(" + column + ", " + OrderKeyFor(table) + ")"
+}
+
 // ArgMax returns argMax(column, OrderKey).
 func ArgMax(column string) string {
 	return "argMax(" + column + ", " + OrderKey + ")"
