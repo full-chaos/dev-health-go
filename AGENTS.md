@@ -16,6 +16,7 @@ Store/contract layer ONLY:
   verification MECHANISMS. No principal/claim shape — each consumer defines
   its own on top.
 - `workloadtoken/` — the client half of the workload-token exchange (one subject per deployment, cache, early re-exchange, fail closed, explicit transport); no audience or scope vocabulary.
+- `latestrow/` — the ONE order of the latest work_unit_investments row (`OrderKey`: computed_at, then insert order, the row a ReplacingMergeTree merge keeps). `readers/`, dev-health-ops and acr read it; none keeps its own copy. A key change = a minor tag + a bump in both consumers.
 - `repokey/` — the one repository-key grammar (2-20 segments, <= 255 bytes) that `readers/` and `pep/` share; a copy of dev-health-ops `internal/auth/repokey`, pinned against it by a drift cell.
 - `pep/` — the policy enforcement point client for the auth service's `POST /v1/authorize` and `:batch` (typed deny on every failure, strict decision parsing, closed obligations, an opt-in bounded allow-only cache `CachedClient`) and `pep/pepfake`, a test double that denies by default. No principal, claim or token logic: the caller's `http.Client` carries the workload token.
 

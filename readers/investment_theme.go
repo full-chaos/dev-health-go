@@ -1,6 +1,10 @@
 package readers
 
-import "context"
+import (
+	"context"
+
+	"github.com/full-chaos/dev-health-go/latestrow"
+)
 
 // TeamThemeMixRow is one (team, canonical-theme-or-tracked-subcategory)
 // work-unit count, scanned off ReadTeamThemeMix's query.
@@ -84,11 +88,11 @@ SELECT team_id, team_name, kind, key, work_units FROM (
 WITH latest AS (
     SELECT
         work_unit_id,
-        argMax(from_ts, computed_at) AS from_ts,
-        argMax(to_ts, computed_at) AS to_ts,
-        argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
-        argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
-        argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
+        `+latestrow.ArgMax("from_ts")+` AS from_ts,
+        `+latestrow.ArgMax("to_ts")+` AS to_ts,
+        `+latestrow.ArgMax("theme_distribution_json")+` AS theme_distribution_json,
+        `+latestrow.ArgMax("subcategory_distribution_json")+` AS subcategory_distribution_json,
+        `+latestrow.ArgMax("structural_evidence_json")+` AS structural_evidence_json,
         org_id
     FROM work_unit_investments
     WHERE org_id = {org_id:String}
