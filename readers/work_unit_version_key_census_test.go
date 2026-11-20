@@ -35,16 +35,29 @@ var issueSizeTableToken = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])work_unit_issu
 // 1 work_unit_issue_size version pick, the key itself and the declared column
 // and engine contracts.
 var workUnitRegisteredDecls = []string{
-	"readers/investment_theme.go:ReadTeamThemeMix",
-	"readers/investment_project_theme.go:ReadProjectThemeMixWithRowLimit",
-	"readers/investment_issue_size.go:LatestWorkUnitIssueSizeSource",
-	"latestrow/latestrow.go:OrderKey",
-	"schema/schema.go:ProductionColumns",
-	"schema/schema.go:EngineFull",
+	"work_unit_investments|readers/investment_theme.go:ReadTeamThemeMix",
+	"work_unit_investments|readers/investment_project_theme.go:ReadProjectThemeMixWithRowLimit",
+	"work_unit_issue_size|readers/investment_issue_size.go:LatestWorkUnitIssueSizeSource",
+	"work_unit_investments|latestrow/latestrow.go:OrderKey",
+	"work_unit_investments|schema/schema.go:ProductionColumns",
+	"work_unit_investments|schema/schema.go:EngineFull",
 }
 
 func namesWorkUnitTable(s string) bool {
-	return workUnitTableToken.MatchString(s) || issueSizeTableToken.MatchString(s)
+	return len(workUnitTablesNamed(s)) > 0
+}
+
+// workUnitTablesNamed returns the tables a literal names, each matched on its
+// own, so a literal that names both is registered once per table.
+func workUnitTablesNamed(s string) []string {
+	var tables []string
+	if workUnitTableToken.MatchString(s) {
+		tables = append(tables, "work_unit_investments")
+	}
+	if issueSizeTableToken.MatchString(s) {
+		tables = append(tables, "work_unit_issue_size")
+	}
+	return tables
 }
 
 func TestWorkUnitTableTokenMatch(t *testing.T) {
@@ -71,7 +84,7 @@ func TestWorkUnitTableTokenMatch(t *testing.T) {
 	}
 }
 
-// workUnitTableLiterals returns "file:declaration" for every string literal
+// workUnitTableLiterals returns "table|file:declaration" for every string literal
 // in the module's non-test Go files that names the table.
 func workUnitTableLiterals(t *testing.T, root string) map[string]int {
 	t.Helper()
@@ -105,10 +118,12 @@ func workUnitTableLiterals(t *testing.T, root string) map[string]int {
 					return true
 				}
 				value, err := strconv.Unquote(lit.Value)
-				if err != nil || !namesWorkUnitTable(value) {
+				if err != nil {
 					return true
 				}
-				found[filepath.ToSlash(rel)+":"+declName(decl, lit)]++
+				for _, table := range workUnitTablesNamed(value) {
+					found[table+"|"+filepath.ToSlash(rel)+":"+declName(decl, lit)]++
+				}
 				return true
 			})
 		}
