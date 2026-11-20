@@ -26,19 +26,38 @@ import (
 // related table (work_unit_investments_rollup) is not a match.
 var workUnitTableToken = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])work_unit_investments(?:$|[^a-z0-9_])`)
 
-// workUnitRegisteredDecls are the declarations allowed to name the table: the
-// 2 builders of the 10 version picks, the key itself and the declared column
+// issueSizeTableToken is the same for work_unit_issue_size, the second table
+// whose version pick takes the latestrow key (latestrow.OrderKeyFor).
+var issueSizeTableToken = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])work_unit_issue_size(?:$|[^a-z0-9_])`)
+
+// workUnitRegisteredDecls are the declarations allowed to name the tables: the
+// 2 builders of the 10 work_unit_investments version picks, the builder of the
+// 1 work_unit_issue_size version pick, the key itself and the declared column
 // and engine contracts.
 var workUnitRegisteredDecls = []string{
-	"readers/investment_theme.go:ReadTeamThemeMix",
-	"readers/investment_project_theme.go:ReadProjectThemeMixWithRowLimit",
-	"latestrow/latestrow.go:OrderKey",
-	"schema/schema.go:ProductionColumns",
-	"schema/schema.go:EngineFull",
+	"work_unit_investments|readers/investment_theme.go:ReadTeamThemeMix",
+	"work_unit_investments|readers/investment_project_theme.go:ReadProjectThemeMixWithRowLimit",
+	"work_unit_issue_size|readers/investment_issue_size.go:LatestWorkUnitIssueSizeSource",
+	"work_unit_investments|latestrow/latestrow.go:OrderKey",
+	"work_unit_investments|schema/schema.go:ProductionColumns",
+	"work_unit_investments|schema/schema.go:EngineFull",
 }
 
 func namesWorkUnitTable(s string) bool {
-	return workUnitTableToken.MatchString(s)
+	return len(workUnitTablesNamed(s)) > 0
+}
+
+// workUnitTablesNamed returns the tables a literal names, each matched on its
+// own, so a literal that names both is registered once per table.
+func workUnitTablesNamed(s string) []string {
+	var tables []string
+	if workUnitTableToken.MatchString(s) {
+		tables = append(tables, "work_unit_investments")
+	}
+	if issueSizeTableToken.MatchString(s) {
+		tables = append(tables, "work_unit_issue_size")
+	}
+	return tables
 }
 
 func TestWorkUnitTableTokenMatch(t *testing.T) {
@@ -51,6 +70,10 @@ func TestWorkUnitTableTokenMatch(t *testing.T) {
 		"work_unit_investments.computed_at":                                    true,
 		"SELECT x FROM work_unit_investments_rollup":                           false,
 		"SELECT x FROM my_work_unit_investments":                               false,
+		"SELECT x FROM work_unit_issue_size":                                   true,
+		"FROM `default`.`work_unit_issue_size` FINAL":                          true,
+		"SELECT x FROM work_unit_issue_size_rollup":                            false,
+		"SELECT x FROM my_work_unit_issue_size":                                false,
 		"SELECT work_unit_investments2 FROM t":                                 false,
 		"SELECT argMax(team_id, computed_at) FROM work_item_team_attributions": false,
 	}
@@ -61,7 +84,7 @@ func TestWorkUnitTableTokenMatch(t *testing.T) {
 	}
 }
 
-// workUnitTableLiterals returns "file:declaration" for every string literal
+// workUnitTableLiterals returns "table|file:declaration" for every string literal
 // in the module's non-test Go files that names the table.
 func workUnitTableLiterals(t *testing.T, root string) map[string]int {
 	t.Helper()
@@ -95,10 +118,12 @@ func workUnitTableLiterals(t *testing.T, root string) map[string]int {
 					return true
 				}
 				value, err := strconv.Unquote(lit.Value)
-				if err != nil || !namesWorkUnitTable(value) {
+				if err != nil {
 					return true
 				}
-				found[filepath.ToSlash(rel)+":"+declName(decl, lit)]++
+				for _, table := range workUnitTablesNamed(value) {
+					found[table+"|"+filepath.ToSlash(rel)+":"+declName(decl, lit)]++
+				}
 				return true
 			})
 		}
@@ -156,12 +181,12 @@ func TestWorkUnitVersionKeyCensus(t *testing.T) {
 	sort.Strings(sites)
 	for _, site := range sites {
 		if !registered[site] {
-			t.Errorf("%s names work_unit_investments outside the registered declarations: register it", site)
+			t.Errorf("%s names work_unit_investments or work_unit_issue_size outside the registered declarations: register it", site)
 		}
 	}
 	for _, decl := range workUnitRegisteredDecls {
 		if found[decl] == 0 {
-			t.Errorf("registered %s no longer names work_unit_investments: drop or fix the registration", decl)
+			t.Errorf("registered %s no longer names work_unit_investments or work_unit_issue_size: drop or fix the registration", decl)
 		}
 	}
 }

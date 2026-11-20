@@ -18,6 +18,25 @@ func TestOrderKeyIsPinned(t *testing.T) {
 	}
 }
 
+func TestOrderKeyForWorkUnitInvestmentsIsOrderKey(t *testing.T) {
+	if got := latestrow.OrderKeyFor("work_unit_investments"); got != latestrow.OrderKey {
+		t.Errorf("OrderKeyFor(work_unit_investments) = %q, want OrderKey %q", got, latestrow.OrderKey)
+	}
+	if got, want := latestrow.ArgMaxFor("work_unit_investments", "from_ts"), latestrow.ArgMax("from_ts"); got != want {
+		t.Errorf("ArgMaxFor(work_unit_investments, from_ts) = %q, want ArgMax %q", got, want)
+	}
+}
+
+func TestOrderKeyForIssueSizeIsPinned(t *testing.T) {
+	const want = "(work_unit_issue_size.computed_at, toUInt64OrZero(splitByChar('_', work_unit_issue_size._part)[3]), work_unit_issue_size._part_offset)"
+	if got := latestrow.OrderKeyFor("work_unit_issue_size"); got != want {
+		t.Errorf("OrderKeyFor(work_unit_issue_size) = %q, want %q", got, want)
+	}
+	if got := latestrow.ArgMaxFor("work_unit_issue_size", "issue_size"); got != "argMax(issue_size, "+want+")" {
+		t.Errorf("ArgMaxFor = %q", got)
+	}
+}
+
 func TestRenderers(t *testing.T) {
 	cases := []struct {
 		name, got, want string
