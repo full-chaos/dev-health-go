@@ -17,10 +17,10 @@ import (
 // every non-test Go file of the module with go/ast and finds each string
 // literal that names the table as a whole identifier. Each one must sit inside
 // a registered declaration, so a new reader of the table fails until it is
-// registered. It does not read the SQL a registered builder renders: the key a
-// builder uses is held by the tie cell
-// (TestIntegrationWorkUnitVersionSameMillisecondTiePicksTheLaterInsert), and
-// SQL assembled from non-literal parts is outside a static inventory.
+// registered. The SQL a registered builder renders is read by the read-scope
+// census (work_unit_version_read_scope_census_test.go); what ClickHouse does
+// with it is held by the tie cell
+// (TestIntegrationWorkUnitVersionSameMillisecondTiePicksTheLaterInsert).
 
 // workUnitTableToken matches the table name as a whole identifier, so a
 // related table (work_unit_investments_rollup) is not a match.
